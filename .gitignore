@@ -4,6 +4,8 @@ cmake-build
 # Saturn cross-build artifacts
 BuildDrop/
 src/*.o
+src/**/*.o
+build_new.log
 cd/data/0.bin
 cd/data/ABS.TXT
 cd/data/BIB.TXT

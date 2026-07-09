@@ -1,0 +1,10 @@
+# Compiled host test binaries
+*.exe
+*.out
+test_console
+test_keyboard
+test_term
+test_term_fixture
+test_transport_iface
+test_mock_transport
+smoke_tcp
