@@ -234,7 +234,9 @@ static void menu_wait(void) {
 // gamepad (D-pad + A/C/Start, B cancels) or keyboard (number keys pick directly,
 // Enter picks the highlighted item, Backspace cancels).
 static int menu_select(const char *title, const char *const *items, int count) {
+    const int VIS = 20;         // max list rows shown at once; longer lists scroll
     int sel = 0;
+    int top = 0;                // index of the first visible row
     SRL::Core::Synchronize();   // consume any stale button/key edge
     for (;;) {
         if (g_pad->WasPressed(Button::Up))    sel = (sel - 1 + count) % count;
@@ -253,11 +255,18 @@ static int menu_select(const char *title, const char *const *items, int count) {
         if (cancel) return -1;
         if (pick)   return sel;
 
+        // scroll the window so the selection stays visible
+        if (sel < top)             top = sel;
+        else if (sel >= top + VIS) top = sel - VIS + 1;
+        int last = top + VIS; if (last > count) last = count;
+
         menu_clear();
         SRL::Debug::Print(2, 2, "%s", title);
-        for (int i = 0; i < count; i++)
-            SRL::Debug::Print(4, 4 + i, "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
-        SRL::Debug::Print(2, 6 + count, "pad/num pick   C/Ent=ok   Esc/B=back");
+        if (top > 0)       SRL::Debug::Print(4, 3, "^ more");
+        for (int i = top; i < last; i++)
+            SRL::Debug::Print(4, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
+        if (last < count)  SRL::Debug::Print(4, 4 + VIS, "v more");
+        SRL::Debug::Print(2, 6 + VIS, "pad/num pick   C/Ent=ok   Esc/B=back");
         SRL::Core::Synchronize();
     }
 }
@@ -562,9 +571,10 @@ static int scan_z3_folder(char out[][16], int max) {
 }
 
 const char* game_select() {
-    static char names[18][16];      // static so the returned pointer stays valid
-    const char *items[18];
-    int count = scan_z3_folder(names, 18);
+    const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
+    static char names[MAX_GAMES][16];   // static so the returned pointer stays valid
+    const char *items[MAX_GAMES];
+    int count = scan_z3_folder(names, MAX_GAMES);
 
     int sel = 0;
     SRL::Core::Synchronize();   // consume any stale button/key edge

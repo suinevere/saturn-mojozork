@@ -151,9 +151,23 @@ finds there. To add a game:
 2. Rebuild: `cd saturn && ./compile.bat debug`.
 3. The new game appears in the **Play Local** story menu.
 
-Only v3 files are supported (Zork 1–3 and many other early Infocom titles);
-later (v4+) games will not run. `ZORK1.Z3`, `ZORK2.Z3`, `ZORK3.Z3`, and
-`SORCERER.z3` ship on the disc already.
+Only v3 files are supported (later, v4+, games will not run). The disc already
+ships **every known Infocom v3 title** (25 games) — Zork 1–3, the Enchanter
+trilogy, Planetfall/Stationfall, The Hitchhiker's Guide to the Galaxy, and the
+mystery/adventure lines — sourced from Andrew Plotkin's [Obsessively Complete
+Infocom Catalog](https://eblong.com/infocom/).
+
+> **Update, November 2025:** Microsoft has declared that Zork 1, Zork 2, and Zork 3
+> are open source. I have added the MIT License document to those source packages.
+> We devoutly hope that declarations for the rest of the games will follow in due
+> course. — *eblong.com/infocom*
+
+Since then Microsoft has open-sourced **many more** Infocom titles (Sorcerer, and
+others) under the same MIT License, via the
+[historicalsource](https://github.com/historicalsource) collection (Copyright ©
+2025 Microsoft). That license text and the per-game details are in
+[`saturn/game-licenses/`](saturn/game-licenses/); it applies to every bundled game
+Microsoft has open-sourced, while the rest are included as-is from the catalog.
 
 ---
 
