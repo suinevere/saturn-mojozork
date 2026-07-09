@@ -6,7 +6,7 @@ Z-Machine. It boots on real hardware or an emulator and offers two modes:
 - **Play Local** — a full Z-Machine (v3) running on the Saturn, playing Zork and
   other v3 story files bundled on the disc.
 - **Play Online** — a NetLink telnet terminal that dials into a multizork server
-  (e.g. `multizork.icculus.org`) for networked multiplayer.
+  (our self-hosted `suinevere.duckdns.org`) for networked multiplayer.
 
 ## Repository layout
 
@@ -20,9 +20,11 @@ saturn-mojozork/
 │   ├── tests/                host-side unit tests (gcc)
 │   ├── cd/                   Saturn CD assets (story files under cd/data/Z3/)
 │   ├── mojozork.c            the Z-Machine engine
+│   ├── multizorkd.c          the multiplayer telnet server
 │   ├── makefile
 │   ├── compile.bat           build   (debug | release)
 │   └── clean.bat
+├── docker/                   self-contained Docker host for the multizork server
 └── docs/                     design specs and notes
 ```
 
@@ -175,7 +177,7 @@ Microsoft has open-sourced, while the rest are included as-is from the catalog.
 
 **Play Online** dials a NetLink modem into a **DreamPi** running the Netlink
 tunnel, which relays the dialed code to a multizork telnet server
-(e.g. `multizork.icculus.org`) over TCP.
+(our self-hosted `suinevere.duckdns.org`) over TCP.
 
 The tunnel isn't part of this repo. To route dial code `199403` to multizork you
 edit your **existing DreamPi** (the one already running the Netlink tunnel image) —
@@ -190,13 +192,36 @@ after which DreamPi auto-update distributes it:
 ```ini
 [server:199403]
 name = MultiZork
-host = multizork.icculus.org
+host = suinevere.duckdns.org
 port = 23
 handler = transparent
 ```
 
 `handler = transparent` is required — multizork does no AUTH handshake. The Saturn
 client design is documented under `docs/`.
+
+> Point the dial code at any multizork host by changing `host`. Ryan Gordon's
+> original public server is `multizork.icculus.org`; ours is
+> `suinevere.duckdns.org` (see below).
+
+---
+
+## 7. Hosting the multizork server yourself
+
+The **[`docker/`](docker/)** directory is a self-contained Docker setup for the
+`multizorkd` telnet server that **Play Online** connects to. The image clones and
+builds the server from source at build time, so a host needs only Docker — no
+checkout:
+
+```bash
+cd docker
+docker compose up -d --build      # serves telnet on host ports 23 and 2323
+```
+
+Our live instance runs this on an **Oracle Cloud Free Tier** VM, published via
+**DuckDNS** at **`suinevere.duckdns.org`**. The full production walkthrough —
+Oracle firewall + Security List rules, DuckDNS setup, persistence, and pointing
+the DreamPi dial code at it — is in **[`docker/README.md`](docker/README.md)**.
 
 ---
 
