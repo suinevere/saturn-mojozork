@@ -1455,8 +1455,66 @@ static void opcode_restart(void)
 static void opcode_save(void)
 {
 #if defined(MOJOZORK_SATURN)
-    doBranch(0);   /* saving not supported yet on Saturn */
-    return;
+    {
+        extern int saturn_read_story_file(uint8 *buf, uint32 len);
+        extern int saturn_save_blob(const uint8 *data, uint32 len);
+
+        const uint32 dynlen   = (uint32) GState->header.staticmem_addr;  /* dynamic-memory size */
+        const uint32 storylen = (uint32) GState->story_len;
+        const uint32 spoff    = (uint32) (GState->sp - GState->stack);   /* used stack entries */
+        const uint32 pcoff    = (uint32) (GState->pc - GState->story);
+
+        uint8 *orig = (uint8 *) malloc(storylen);
+        uint8 *blob = (uint8 *) malloc(32 + dynlen * 2 + spoff * 2);
+        if ((orig == NULL) || (blob == NULL) || !saturn_read_story_file(orig, storylen)) {
+            if (orig) free(orig);
+            if (blob) free(blob);
+            doBranch(0);
+            return;
+        }
+
+        /* header: magic + dynlen(2) + pc(4) + sp(4) + bp(2) + rle_len(4) */
+        uint8 *p = blob;
+        memcpy(p, "MZSV1", 5); p += 5;
+        *p++ = (uint8) (dynlen & 0xFF);        *p++ = (uint8) ((dynlen >> 8) & 0xFF);
+        *p++ = (uint8) (pcoff & 0xFF);         *p++ = (uint8) ((pcoff >> 8) & 0xFF);
+        *p++ = (uint8) ((pcoff >> 16) & 0xFF); *p++ = (uint8) ((pcoff >> 24) & 0xFF);
+        *p++ = (uint8) (spoff & 0xFF);         *p++ = (uint8) ((spoff >> 8) & 0xFF);
+        *p++ = (uint8) ((spoff >> 16) & 0xFF); *p++ = (uint8) ((spoff >> 24) & 0xFF);
+        *p++ = (uint8) (GState->bp & 0xFF);    *p++ = (uint8) ((GState->bp >> 8) & 0xFF);
+        uint8 *rle_len_ptr = p; p += 4;
+
+        /* Quetzal-style delta: run-length-encode (current dynamic memory XOR original).
+           Token 0,N = N zero bytes; any non-zero byte = one literal XOR byte. */
+        uint8 *rle_start = p;
+        uint32 i = 0;
+        while (i < dynlen) {
+            uint8 d = (uint8) (GState->story[i] ^ orig[i]);
+            if (d == 0) {
+                uint32 run = 0;
+                while ((i < dynlen) && ((GState->story[i] ^ orig[i]) == 0) && (run < 255)) { run++; i++; }
+                *p++ = 0; *p++ = (uint8) run;
+            } else {
+                *p++ = d; i++;
+            }
+        }
+        uint32 rle_len = (uint32) (p - rle_start);
+        rle_len_ptr[0] = (uint8) (rle_len & 0xFF);         rle_len_ptr[1] = (uint8) ((rle_len >> 8) & 0xFF);
+        rle_len_ptr[2] = (uint8) ((rle_len >> 16) & 0xFF); rle_len_ptr[3] = (uint8) ((rle_len >> 24) & 0xFF);
+
+        /* used stack entries follow the delta */
+        uint32 s;
+        for (s = 0; s < spoff; s++) {
+            *p++ = (uint8) (GState->stack[s] & 0xFF);
+            *p++ = (uint8) ((GState->stack[s] >> 8) & 0xFF);
+        }
+
+        int ok = saturn_save_blob(blob, (uint32) (p - blob));
+        free(orig);
+        free(blob);
+        doBranch(ok ? 1 : 0);
+        return;
+    }
 #endif
     FIXME("this should write Quetzal format; this is temporary.");
     const uint32 addr = (uint32) (GState->pc-GState->story);
@@ -1479,8 +1537,76 @@ static void opcode_save(void)
 static void opcode_restore(void)
 {
 #if defined(MOJOZORK_SATURN)
-    doBranch(0);   /* no save to restore on Saturn */
-    return;
+    {
+        extern int saturn_read_story_file(uint8 *buf, uint32 len);
+        extern int saturn_load_blob(uint8 *buf, uint32 maxlen);
+
+        const uint32 dyncap   = (uint32) GState->header.staticmem_addr;
+        const uint32 storylen = (uint32) GState->story_len;
+        const uint32 stackcap = (uint32) (sizeof(GState->stack) / sizeof(GState->stack[0]));
+        const uint32 maxblob  = 32 + dyncap * 2 + (uint32) sizeof(GState->stack);
+
+        uint8 *orig = (uint8 *) malloc(storylen);
+        uint8 *blob = (uint8 *) malloc(maxblob);
+        if ((orig == NULL) || (blob == NULL)) {
+            if (orig) free(orig);
+            if (blob) free(blob);
+            doBranch(0);
+            return;
+        }
+        if (!saturn_load_blob(blob, maxblob) || (memcmp(blob, "MZSV1", 5) != 0) ||
+            !saturn_read_story_file(orig, storylen)) {
+            free(orig);
+            free(blob);
+            doBranch(0);   /* cancelled, or no/invalid save */
+            return;
+        }
+
+        uint8 *p = blob + 5;
+        uint32 dynlen  = (uint32) (p[0] | (p[1] << 8)); p += 2;
+        uint32 pcoff   = (uint32) (p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32) p[3] << 24)); p += 4;
+        uint32 spoff   = (uint32) (p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32) p[3] << 24)); p += 4;
+        uint16 bpval   = (uint16) (p[0] | (p[1] << 8)); p += 2;
+        uint32 rle_len = (uint32) (p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32) p[3] << 24)); p += 4;
+        if (spoff > stackcap) spoff = stackcap;
+        (void) dynlen;
+
+        /* Reconstruct dynamic memory: story[i] = orig[i] XOR delta[i] (delta via RLE). */
+        uint8 *rle = p;
+        uint32 ri = 0, oi = 0;
+        while ((ri < rle_len) && (oi < dyncap)) {
+            uint8 b = rle[ri++];
+            if (b == 0) {
+                uint8 run = (ri < rle_len) ? rle[ri++] : 0;
+                while ((run > 0) && (oi < dyncap)) { GState->story[oi] = orig[oi]; oi++; run--; }
+            } else {
+                GState->story[oi] = (uint8) (orig[oi] ^ b); oi++;
+            }
+        }
+        p += rle_len;
+
+        /* used stack entries follow the delta */
+        uint32 s;
+        for (s = 0; s < spoff; s++) {
+            GState->stack[s] = (uint16) (p[0] | (p[1] << 8)); p += 2;
+        }
+        GState->sp = GState->stack + spoff;
+        GState->bp = bpval;
+        GState->logical_pc = pcoff;
+        GState->pc = GState->story + pcoff;
+
+        free(orig);
+        free(blob);
+
+        /* 8.6.1.3: collapse the upper window to size 0 following a restore. */
+        if (GState->split_window) {
+            const uint16 oldval = GState->upper_window_line_count;
+            GState->upper_window_line_count = 0;
+            GState->split_window(oldval, 0);
+        }
+        doBranch(1);
+        return;
+    }
 #endif
     FIXME("this should read Quetzal format; this is temporary.");
     FILE *io = fopen("save.dat", "rb");
@@ -2168,7 +2294,7 @@ static void writestr_stdio(const char *str, const uintptr slen)
 int main(int argc, char **argv)
 {
     static ZMachineState zmachine_state;
-    const char *fname = (argc >= 2) ? argv[1] : "zork1.dat";
+    const char *fname = (argc >= 2) ? argv[1] : "ZORK1.Z3";
 
     GState = &zmachine_state;
     GState->startup_script = (argc >= 3) ? argv[2] : NULL;
