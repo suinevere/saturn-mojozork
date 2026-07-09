@@ -24,7 +24,7 @@ CD_NAME = mojozork
 BUILD_DROP = ./BuildDrop
 
 # SRL installation directory
-SRL_INSTALL_ROOT ?= ../..
+SRL_INSTALL_ROOT ?= ../SaturnRingLib
 
 # Find all .c and .cxx files
 SOURCES = $(patsubst ./%,%,$(shell find src/ -name '*.c')) 
