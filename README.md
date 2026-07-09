@@ -225,6 +225,41 @@ the DreamPi dial code at it — is in **[`docker/README.md`](docker/README.md)**
 
 ---
 
+## 8. Releases (prebuilt disc)
+
+CI builds the bootable disc so you don't have to install the toolchain. The
+workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) checks
+out the SaturnRingLib submodule, fetches the SH-2 toolchain, builds the release
+image, and packages `mojozork.cue` + `mojozork.bin` (MODE1/2352 raw) inside a
+`Zork the Infocom Collection (Netlink Edition) (Suinevere) (<version>)` folder.
+
+It runs two ways:
+
+- **Manual test build** — trigger it by hand and download the disc as a workflow
+  artifact, without publishing anything. On GitHub: **Actions** tab → **Build &
+  release Saturn disc** → **Run workflow** → pick `main` → **Run workflow**. When
+  it finishes, open the run and download the zip under **Artifacts**.
+- **Tagged release** — pushing a `v*` tag builds the disc and attaches the zip to
+  a GitHub Release (creating the release if it doesn't exist).
+
+### Cutting a release from the GitHub UI
+
+1. Go to the repo → **Releases** (right sidebar) → **Draft a new release**.
+2. **Choose a tag** → type a new tag like `v1.0` → **Create new tag: v1.0 on
+   publish**. Leave the target as `main`.
+3. Add a title and notes, then click **Publish release**.
+4. Publishing creates and pushes the tag, which triggers the workflow. Watch it
+   under the **Actions** tab; when green, the disc zip appears as an asset on that
+   release automatically (the workflow uploads it to the matching tag).
+
+> Prefer the command line? `git tag v1.0 && git push origin v1.0` triggers the
+> exact same build and creates the release if one doesn't already exist.
+
+The zip name carries the version (`saturn-mojozork-v1.0.zip`); the folder inside
+it is named for the release so it drops cleanly into a disc library.
+
+---
+
 ## Credits & license
 
 - **MojoZork** and **multizorkd** by Ryan C. "Icculus" Gordon — zlib license
