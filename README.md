@@ -1,86 +1,198 @@
+# saturn-mojozork
 
-# MojoZork
+A Sega Saturn port of [icculus's MojoZork](https://github.com/icculus/mojozork)
+Z-Machine. It boots on real hardware or an emulator and offers two modes:
 
-```
->read leaflet
-```
+- **Play Local** — a full Z-Machine (v3) running on the Saturn, playing Zork and
+  other v3 story files bundled on the disc.
+- **Play Online** — a NetLink telnet terminal that dials into a multizork server
+  (e.g. `multizork.icculus.org`) for networked multiplayer.
 
-Hello sailor!
-
-This is an implementation of Infocom's Z-Machine. The Z-Machine is a virtual
-machine that's something like a high-level CPU. To keep their games portable
-and easier to write, Infocom's games all use this fake processor and ship
-with a platform-specific Z-Machine "emulator" ... so a game could run wherever
-someone had implemented the Z-Machine.
-
-This project is just for fun; everyone should write this at some point as an
-educational activity. If you want a serious Z-Machine implementation, there
-are certainly better ones out there (I personally recommend
-["Frotz"](http://frotz.sourceforge.net/) and there are many others, too).
-
-This program currently supports most of the Version 3 Z-Machine. This is
-enough to play the vast majority of Infocom's catalog. Later Infocom games
-used version 4, 5, and 6 of the Z-Machine, and those will currently not run
-here. Most modern Interactive Fiction is built with a tool called Inform and
-usually targets version 5 at the lowest; these games currently don't work
-with this project. Maybe later.
-
-Activision, who acquired Infocom in the 1990's, gives out Zork I, II, and III
-for free, so I've included Zork I's data files with this project. If you want
-to see Zork I run through from start to finish, you can run a pre-written
-script to complete the entire game from the command line, like this:
+## Repository layout
 
 ```
-./mojozork ./zork1.dat ./zork1-script.txt
+saturn-mojozork/
+├── README.md                 you are here
+├── .gitmodules
+├── SaturnRingLib/            → git submodule: ReyeMe/SaturnRingLib (Saturn SDK)
+├── saturn/                   the Saturn port
+│   ├── src/                  main.cxx, console, keyboard, term, net/ (modem+UART)
+│   ├── tests/                host-side unit tests (gcc)
+│   ├── cd/                   Saturn CD assets (story files under cd/data/Z3/)
+│   ├── mojozork.c            the Z-Machine engine
+│   ├── makefile
+│   ├── compile.bat           build   (debug | release)
+│   └── clean.bat
+└── docs/                     design specs and notes
 ```
 
-If you want to write your own Z-Machine, there is an "official" specification
-on how to implement it, written by people that spent significant time
-reverse engineering the originals from Infocom, and extending the ecosystem
-with new tools. You can find that specification
-[here](http://inform-fiction.org/zmachine/standards/).
+## Do I need git submodules? — Yes
 
-As usual, Wikipedia offers a wonderful rabbit hole to fall down, too, in
-their [Z-machine article](https://en.wikipedia.org/wiki/Z-machine).
+**SaturnRingLib** is a 1.3 GB third-party SDK with its own history. It is a
+**git submodule** (the only one), not vendored, so this repo stays small and the
+SDK version is pinned to the exact commit the port builds against. The DreamPi
+tunnel used for online play is **not** vendored here — it lives in a separate repo
+you clone only if you want to host the dial routing yourself (see *Playing online*,
+below).
 
-# MultiZork
+Two directories from earlier experiments were **removed** because they aren't
+required: `joengine/` (a different Saturn SDK, unused) and `coup-saturn/`
+(reference only).
 
-On top of the MojoZork code, there is a telnet server called `multizorkd` that
-lets several people connect _to the same game_ and play it as a multiplayer
-experience. Each player has their own inventory and can move independent of
-others. This probably only works on Linux/Unix systems, but the single-player
-mojozork program should work on just about anything.
+---
 
-You can play MultiZork right now by pointing a telnet client at
-multizork.icculus.org (or running `nc multizork.icculus.org 23`).
+## Prerequisites
 
-[A post on my Patreon](https://www.patreon.com/posts/54997062) explains the
-motivations and technical details of multizork. If you like this, please
-consider throwing in a dollar so I can keep doing wild things like this!
+Builds on Windows, Linux, or macOS:
+- Git for Windows (**Git Bash**) or a POSIX shell.
+- The SaturnRingLib SH-2 cross-compiler, fetched in Step 2 below (≈ needs `curl`/`unzip`).
+- An emulator for testing (e.g. **Mednafen** with Saturn BIOS), or real hardware.
 
-# libretro core
+---
 
-Ever want to play Z-Machine games under RetroArch? Now you can. The libretro
-core handles all the tapdancing to make text-based games run in a graphical
-window, and can be played with a keyboard (in RetroArch focus mode), or with
-a mouse or game controller on an included virtual keyboard.
+## 1. Clone (with submodules)
 
-# Standalone SDL3 app
+```bash
+git clone --recursive git@github.com:suinevere/saturn-mojozork.git
+cd saturn-mojozork
+```
 
-Want the graphical interface of the libretro core without RetroArch? There's a
-standalone app that uses SDL3 for the graphics. It's a no-frills sort of
-thing, but it could be useful in the right circumstances.
+Already cloned without `--recursive`? Pull the submodules in:
 
-# Play it on the web!
+```bash
+git submodule update --init --recursive
+```
 
-The standalone SDL3 app has been compiled with Emscripten and made available
-to the public. Just head [here](https://icculus.org/mojozork/in-browser/) and
-drag and drop a Z-machine program,
-[like this one](https://github.com/icculus/mojozork/raw/refs/heads/main/zork1.dat),
-onto the game window to start playing!
+## 2. Install the toolchain (compiler + iso2raw)
 
+The SH-2 toolchain and the `iso2raw` tool are **not** committed to the SDK (large,
+gitignored); fetch them once into the submodule. On Windows the SDK's setup script
+installs both:
 
-Enjoy!
+```bat
+cd SaturnRingLib
+setup_compiler.bat            REM installs the sh2eb-elf gcc AND iso2raw into SaturnRingLib/
+cd ..
+```
 
---ryan.
+On Linux/macOS fetch the two pieces directly:
 
+```bash
+cd SaturnRingLib
+./tools/scripts/getcompiler.sh 14.2.0   # sh2eb-elf gcc -> SaturnRingLib/Compiler
+./tools/scripts/getiso2raw.sh  v0.2.2   # iso2raw (ISO -> raw .bin) -> SaturnRingLib/tools/bin
+cd ..
+```
+
+> If `iso2raw` is missing, the compile still produces a bootable `.iso`, but the
+> final raw-conversion step errors and prints `Press any key to continue…` — which
+> **hangs a non-interactive build**. Installing it (above) avoids that.
+
+## 3. Build
+
+```bash
+cd saturn
+./compile.bat debug        # or: ./compile.bat release
+```
+
+This produces `saturn/BuildDrop/mojozork.iso` (bootable, ISO9660) and
+`mojozork.bin` (MODE1/2352 raw, for ODEs/burners), plus `mojozork.elf`/`.map`.
+`./clean.bat` removes build output.
+
+> **How the build finds the SDK:** unlike a stock SaturnRingLib project (which sits
+> at `SaturnRingLib/Projects/<name>` and locates the SDK via `../..`), this project
+> lives in `saturn/` and points at the sibling submodule via `../SaturnRingLib`.
+> `compile.bat`/`clean.bat` set `SRL_INSTALL_ROOT=../SaturnRingLib` and pass the
+> compiler dir explicitly — no edits to the submodule are needed.
+
+## 4. Run it
+
+- **Emulator:** run `saturn/run_with_mednafen.bat` (loads the built image in
+  Mednafen — needs the Saturn BIOS), or open `saturn/BuildDrop/mojozork.iso`.
+- **Hardware:** burn/serve `mojozork.bin` (raw MODE1/2352) via a USB/ODE loader.
+- **Host-side unit tests** (no Saturn needed) live in `saturn/tests/` and build
+  with plain `gcc` — they cover the console, keyboard, and terminal logic.
+
+### First-time Mednafen setup (Windows)
+
+`run_with_mednafen.bat` expects a portable Mednafen at
+`SaturnRingLib/emulators/mednafen/` plus the Saturn BIOS in its `firmware/`
+subfolder. Set both up once — run from the repo root, and **check
+<https://mednafen.github.io/releases/> for the current version** (the filename
+below changes with each release):
+
+```bash
+# 1. Mednafen itself -> SaturnRingLib/emulators/mednafen/mednafen.exe
+curl -L -o mednafen.zip https://mednafen.github.io/releases/files/mednafen-1.32.1-win64.zip
+unzip -o mednafen.zip -d SaturnRingLib/emulators/       # extracts a Mednafen/ folder
+
+# 2. Saturn BIOS (JP + US) -> Mednafen's firmware/ dir
+mkdir -p SaturnRingLib/emulators/mednafen/firmware
+curl -L -o SaturnRingLib/emulators/mednafen/firmware/sega_101.bin  "https://archive.org/download/mame-0.221-roms-merged/saturn.zip/saturnjp%2Fsega_101.bin"
+curl -L -o SaturnRingLib/emulators/mednafen/firmware/mpr-17933.bin "https://archive.org/download/mame-0.221-roms-merged/saturn.zip/mpr-17933.bin"
+```
+
+The zip extracts a `Mednafen/` folder — on Windows that's the same as `mednafen/`
+(case-insensitive); on Linux/macOS rename it to lowercase `mednafen`. `sega_101.bin`
+(Japanese) and `mpr-17933.bin` (US) are the two BIOS images; for the authoritative
+list and placement see Mednafen's
+[Saturn firmware/BIOS docs](https://mednafen.github.io/documentation/ss.html#Section_firmware_bios).
+They come from <https://archive.org/download/mame-0.221-roms-merged/saturn.zip>.
+
+---
+
+## 5. Adding a story file to the disc
+
+Local mode scans `saturn/cd/data/Z3/` at startup and lists every v3 story file it
+finds there. To add a game:
+
+1. Drop a Z-Machine **version 3** story file into `saturn/cd/data/Z3/`, e.g.
+   `saturn/cd/data/Z3/MYGAME.Z3`.
+2. Rebuild: `cd saturn && ./compile.bat debug`.
+3. The new game appears in the **Play Local** story menu.
+
+Only v3 files are supported (Zork 1–3 and many other early Infocom titles);
+later (v4+) games will not run. `ZORK1.Z3`, `ZORK2.Z3`, `ZORK3.Z3`, and
+`SORCERER.z3` ship on the disc already.
+
+---
+
+## 6. Playing online from a real Saturn
+
+**Play Online** dials a NetLink modem into a **DreamPi** running the Netlink
+tunnel, which relays the dialed code to a multizork telnet server
+(e.g. `multizork.icculus.org`) over TCP.
+
+The tunnel isn't part of this repo. To route dial code `199403` to multizork you
+edit your **existing DreamPi** (the one already running the Netlink tunnel image) —
+you do **not** clone anything. This is a temporary local change until the entry is
+merged upstream into [eaudunord/Netlink](https://github.com/eaudunord/Netlink),
+after which DreamPi auto-update distributes it:
+
+1. Delete `/boot/noautoupdates.txt` from the DreamPi's SD card.
+2. SSH in (or log in) as user `pi` (password `raspberry`).
+3. Add this block to `/dreampi/netlink_config.ini`, then restart the DreamPi:
+
+```ini
+[server:199403]
+name = MultiZork
+host = multizork.icculus.org
+port = 23
+handler = transparent
+```
+
+`handler = transparent` is required — multizork does no AUTH handshake. The Saturn
+client design is documented under `docs/`.
+
+---
+
+## Credits & license
+
+- **MojoZork** and **multizorkd** by Ryan C. "Icculus" Gordon — zlib license
+  (`saturn/LICENSE.txt`). This is a fork; the Z-Machine engine and the original
+  multiplayer server are his.
+- **SaturnRingLib** by ReyeMe et al.
+- **DreamPi / modem tunnel** — the eaudunord Netlink tunnel, derived from Kazade's
+  DreamPi work: <https://github.com/eaudunord/Netlink>.
+- Zork I/II/III data files are distributed for free by Activision.
+- Saturn port and tooling in this repo: Suinevere.
