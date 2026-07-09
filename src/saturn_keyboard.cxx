@@ -82,6 +82,7 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
 
     if (code == 90 || code == 25) { ev.kind = SATURN_KEY_ENTER; return ev; }
     if (code == 102)              { ev.kind = SATURN_KEY_BACKSPACE; return ev; }
+    if (code == 118)              { ev.kind = SATURN_KEY_ESCAPE; return ev; }  // Esc
     if (code < 128 && kbd_map[code] != 0) {
         ev.kind = SATURN_KEY_CHAR;
         ev.ch = kbd_map[code];
