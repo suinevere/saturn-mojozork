@@ -510,40 +510,77 @@ static int title_and_seed(void) {
     return frames | 1;   // avoid a zero seed
 }
 
-const char* game_select() {
-    const char* title="Please Select a game:";
-    const int count=3;
-   const char *items[count];
-   items[count-3] = "ZORK1.Z3";
-   items[count-2] = "ZORK2.Z3";
-   items[count-1] = "ZORK3.Z3";
+// ---- game selection: scan the CD "Z3" folder for *.Z3 story files ----------
 
-    int sel = 0;
-    SRL::Core::Synchronize();   // consume any stale button/key edge
-    for (;;) {
-        if (g_pad->WasPressed(Button::Up))    sel = (sel - 1 + count) % count;
-        if (g_pad->WasPressed(Button::Down))  sel = (sel + 1) % count;
-        bool pick = g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START);
-        bool cancel = g_pad->WasPressed(Button::B);
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        if (ke.kind == SATURN_KEY_ENTER) pick = true;
-        else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
-        else if (ke.kind == SATURN_KEY_CHAR && ke.ch >= '1' && ke.ch <= '9') {
-            int idx = (int) (ke.ch - '1');
-            if (idx < count) { sel = idx; pick = true; }
+// True if `s` ends in ".z3" / ".Z3".
+static int has_z3_ext(const char *s) {
+    int len = 0; while (s[len]) len++;
+    if (len < 3) return 0;
+    const char *e = s + len - 3;
+    return e[0] == '.' && (e[1] == 'z' || e[1] == 'Z') && e[2] == '3';
+}
+
+// Scan the CD "Z3" directory and collect up to `max` *.Z3 filenames into `out`.
+// Also makes Z3 the current CD directory so later SRL::Cd::File() opens resolve
+// there. Returns the number of matches (0 if none), or -1 if the Z3 folder is
+// absent. Saturn/ISO9660: names are uppercase 8.3 (GFS_FNAME_LEN = 12), possibly
+// with a ";1" version suffix, which is stripped. Directory records "." / ".."
+// carry non-".Z3" names and are naturally filtered out.
+static int scan_z3_folder(char out[][16], int max) {
+    static GfsDirName dirnames[SRL_MAX_CD_FILES];
+    static GfsDirTbl  tbl;
+
+    int32_t fid = GFS_NameToId((int8_t *) "Z3");
+    if (fid < 0) return -1;
+
+    GFS_DIRTBL_TYPE(&tbl)    = GFS_DIR_NAME;
+    GFS_DIRTBL_DIRNAME(&tbl) = dirnames;
+    GFS_DIRTBL_NDIR(&tbl)    = SRL_MAX_CD_FILES;
+
+    int32_t count = GFS_LoadDir(fid, &tbl);
+    if (count < 0) return -1;
+    GFS_SetDir(&tbl);   // subsequent File() opens resolve inside Z3
+
+    int n = 0;
+    for (int i = 0; i < count && n < max; i++) {
+        char nm[16];
+        int j = 0;
+        for (; j < GFS_FNAME_LEN && j < 15; j++) {
+            char c = (char) dirnames[i].fname[j];
+            if (c == '\0' || c == ';') break;   // stop at NUL or version suffix
+            nm[j] = c;
         }
-        else if (ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + count) % count;
-        else if (ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % count;
-        if (cancel) return "-1";
-        if (pick)   return items[sel];
-
-        menu_clear();
-        SRL::Debug::Print(2, 2, "%s", title);
-        for (int i = 0; i < count; i++)
-            SRL::Debug::Print(4, 4 + i, "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
-        SRL::Debug::Print(2, 6 + count, "pad/num pick   C/Ent=ok   Esc/B=back");
-        SRL::Core::Synchronize();
+        nm[j] = '\0';
+        if (has_z3_ext(nm)) {
+            int k = 0;
+            for (; nm[k] && k < 15; k++) out[n][k] = nm[k];
+            out[n][k] = '\0';
+            n++;
+        }
     }
+    return n;
+}
+
+const char* game_select() {
+    static char names[18][16];      // static so the returned pointer stays valid
+    const char *items[18];
+    int count = scan_z3_folder(names, 18);
+
+    if (count <= 0) {
+        menu_clear();
+        SRL::Debug::Print(2, 2, "%s", (count < 0)
+            ? "No Z3 folder found on the CD."
+            : "No .Z3 games found in the Z3 folder.");
+        SRL::Debug::Print(2, 4, "(cannot continue)");
+        for (;;) SRL::Core::Synchronize();
+    }
+
+    for (int i = 0; i < count; i++) items[i] = names[i];
+    if (count == 1) return items[0];    // only one game: skip the menu
+
+    int sel = menu_select("Please Select a game:", items, count);
+    if (sel < 0) return "-1";
+    return items[sel];
 }
 
 // ---- online mode (multizork telnet terminal) -------------------------------
