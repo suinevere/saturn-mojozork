@@ -33,7 +33,7 @@
 #define MULTIZORKD_DEFAULT_BACKLOG 64
 #define MULTIZORKD_DEFAULT_EGID 0
 #define MULTIZORKD_DEFAULT_EUID 0
-#define MULTIZORK_TRANSCRIPT_BASEURL "https://multizork.icculus.org"
+#define MULTIZORK_TRANSCRIPT_BASEURL "https://suinevere.duckdns.org"
 #define MULTIZORK_BLOCKED_TIMEOUT (60 * 60 * 24)  /* 24 hours in seconds */
 #define MULTIZORK_AUTOSAVE_EVERY_X_MOVES 30
 
