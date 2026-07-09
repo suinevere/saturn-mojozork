@@ -1,2 +1,7 @@
 buildbot
 cmake-build
+
+# Saturn cross-build artifacts
+BuildDrop/
+src/*.o
+cd/data/0.bin

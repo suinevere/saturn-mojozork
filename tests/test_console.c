@@ -34,6 +34,19 @@ int main(void) {
     assert(strcmp(console_get_line(0), "aaaaaaaaaa bbbbbbbbbb cccccccccc") == 0);
     assert(strcmp(console_get_line(1), "dddddddddd eeee") == 0);
 
+    /* ring-buffer eviction: write more than CONSOLE_MAX_LINES */
+    console_init();
+    {
+        char buf[20];
+        for (int i = 0; i < 200; i++) {
+            snprintf(buf, sizeof(buf), "line%d\n", i);
+            write_str(buf);
+        }
+    }
+    assert(console_line_count() == CONSOLE_MAX_LINES);
+    assert(strcmp(console_get_line(0), "line72") == 0);      /* oldest: 200 - 128 */
+    assert(strcmp(console_get_line(127), "line199") == 0);   /* newest */
+
     printf("test_console: OK\n");
     return 0;
 }

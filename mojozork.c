@@ -123,6 +123,7 @@ typedef struct ZMachineState
     void (*set_window)(const uint16 oldval, const uint16 newval);
 
     void (*writestr)(const char *str, const uintptr slen);
+    void (*readline)(char *buf, int maxlen);
     #if defined(__GNUC__) || defined(__clang__)
     void (*die)(const char *fmt, ...) __attribute__((noreturn));
     #else
@@ -1110,7 +1111,11 @@ static uint16 doRandom(const sint16 range)
 {
     uint16 result = 0;
     if (range == 0) {  // reseed in "most random way"
+#if defined(MOJOZORK_SATURN)
+        random_seed = 0x2A6D;   /* entropy comes from the title-screen frame count */
+#else
         random_seed = (int) time(NULL);
+#endif
     } else if (range < 0) {  // reseed with specific value
         random_seed = -range;
     } else {
@@ -1300,10 +1305,14 @@ static void opcode_read(void)
         GState->startup_script = NULL;
         printf("%s", (const char *) input);
     } else if (script == NULL) {
+#if defined(MOJOZORK_SATURN)
+        GState->readline((char *) input, (int) inputlen);
+#else
         FIXME("fgets isn't really the right solution here.");
         if (!fgets((char *) input, inputlen, stdin)) {
             GState->die("EOF or error on stdin during read");
         }
+#endif
     } else {
         uint8 i;
         char *scriptptr = script;
@@ -1422,6 +1431,10 @@ static void opcode_restart(void)
 
 static void opcode_save(void)
 {
+#if defined(MOJOZORK_SATURN)
+    doBranch(0);   /* saving not supported yet on Saturn */
+    return;
+#endif
     FIXME("this should write Quetzal format; this is temporary.");
     const uint32 addr = (uint32) (GState->pc-GState->story);
     const uint32 sp = (uint32) (GState->sp-GState->stack);
@@ -1442,6 +1455,10 @@ static void opcode_save(void)
 
 static void opcode_restore(void)
 {
+#if defined(MOJOZORK_SATURN)
+    doBranch(0);   /* no save to restore on Saturn */
+    return;
+#endif
     FIXME("this should read Quetzal format; this is temporary.");
     FILE *io = fopen("save.dat", "rb");
     int okay = 1;
@@ -2091,7 +2108,7 @@ static void loadStory(const char *fname)
 }
 
 
-#if !defined(MULTIZORK) && !defined(MOJOZORK_LIBRETRO)
+#if !defined(MULTIZORK) && !defined(MOJOZORK_LIBRETRO) && !defined(MOJOZORK_SATURN)
 
 #if defined(__GNUC__) || defined(__clang__)
 static void die(const char *fmt, ...) __attribute__((noreturn));
