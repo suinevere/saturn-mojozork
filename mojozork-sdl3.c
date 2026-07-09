@@ -232,7 +232,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     SDL_zero(sysinfo);
     retro_get_system_info(&sysinfo);  // strictly speaking, this is called in the wrong sequence verses how libretro normally does it.
 
-    SDL_SetAppMetadata("MojoZork SDL3", sysinfo.library_version ? sysinfo.library_version : "0.1", "org.icculus.mojozork");
+    SDL_SetAppMetadata("MojoZork SDL3", sysinfo.library_version ? sysinfo.library_version : "0.1", "org.duckdns.suinevere");
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         return panic("SDL_Init failed!", SDL_GetError());
@@ -270,7 +270,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
         style = visual_styles[0];
     }
 
-    prefpath = SDL_GetPrefPath("icculus.org", "MojoZork");
+    prefpath = SDL_GetPrefPath("duckdns.org", "Suinevere");
 
     #ifdef SDL_PLATFORM_EMSCRIPTEN
     MAIN_THREAD_EM_ASM({

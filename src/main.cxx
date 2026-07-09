@@ -6,7 +6,11 @@ extern "C" {
 #include "saturn_keyboard.h"
 #include "saturn_backup.h"
 #include "saturn_glue.h"
+#include "term.h"
+#include "net/net_connect.h"
 }
+
+#define MOJOZORK_DIAL_NUMBER "199403"
 
 // snprintf links from newlib; the SRL dummy <stdio.h> omits its declaration.
 extern "C" int snprintf(char *str, size_t size, const char *fmt, ...);
@@ -16,8 +20,31 @@ extern "C" int snprintf(char *str, size_t size, const char *fmt, ...);
 using namespace SRL::Types;
 using Button = SRL::Input::Digital::Button;
 
-// One shared gamepad on port 0, used by the readline hook.
-static SRL::Input::Digital *g_pad = nullptr;
+// Aggregates both hardware controller ports and both pad families (digital and
+// analog / 3D control pad) so a controller in port 1 OR port 2 works in any
+// configuration. Keeps the WasPressed/IsHeld interface so every call site is
+// unchanged. The keyboard is polled separately (saturn_keyboard_poll already
+// scans all ports), so a controller in one port + keyboard in the other works.
+struct MultiPad {
+    SRL::Input::Digital d0, d1;
+    SRL::Input::Analog  a0, a1;
+    MultiPad() : d0(0), d1(1), a0(0), a1(1) {}
+    bool WasPressed(Button b) const {
+        return (d0.IsConnected() && d0.WasPressed(b)) ||
+               (d1.IsConnected() && d1.WasPressed(b)) ||
+               (a0.IsConnected() && a0.WasPressed(b)) ||
+               (a1.IsConnected() && a1.WasPressed(b));
+    }
+    bool IsHeld(Button b) const {
+        return (d0.IsConnected() && d0.IsHeld(b)) ||
+               (d1.IsConnected() && d1.IsHeld(b)) ||
+               (a0.IsConnected() && a0.IsHeld(b)) ||
+               (a1.IsConnected() && a1.IsHeld(b));
+    }
+};
+
+// One shared multi-port gamepad, used everywhere input is read.
+static MultiPad *g_pad = nullptr;
 
 // The story file currently loaded from CD (set in main after game selection).
 // saturn_read_story_file re-reads this for save/restart, so it must track the
@@ -57,30 +84,49 @@ static void render_keyboard(const KeyboardState &k) {
     SRL::Debug::Print(0, 27, "A=enter B=delete C=type X=space");
 }
 
-// ---- hooks (extern "C" so the C core can call them) ------------------------
+// ---- global reboot command -------------------------------------------------
 
-// Search a writestr chunk for a literal substring (no libc dependency).
-static bool chunk_contains(const char *s, size_t n, const char *needle) {
-    size_t nl = 0; while (needle[nl]) nl++;
-    if (nl == 0 || n < nl) return false;
-    for (size_t i = 0; i + nl <= n; i++) {
-        size_t j = 0;
-        while (j < nl && s[i + j] == needle[j]) j++;
-        if (j == nl) return true;
+// True if `line` is exactly "reboot" (case-insensitive). The reboot command is
+// global -- available from both the local game prompt and the online terminal.
+static int is_reboot_command(const char *line) {
+    static const char cmd[] = "reboot";
+    int i;
+    for (i = 0; cmd[i]; i++) {
+        char c = line[i];
+        if (c >= 'A' && c <= 'Z') c = (char) (c - 'A' + 'a');
+        if (c != cmd[i]) return 0;
     }
-    return false;
+    return line[i] == '\0';
 }
+
+// Modal Y/N confirm. On Yes, hard-resets the Saturn (never returns) so the game
+// reboots to its title screen. On No, returns false so the caller resumes.
+static bool reboot_confirm_and_maybe_reset(void) {
+    SRL::Core::Synchronize();   // drop the submit edge that triggered this
+    for (;;) {
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        bool yes = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'y' || ke.ch == 'Y'))
+                 || g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)
+                 || g_pad->WasPressed(Button::C);
+        bool no  = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'n' || ke.ch == 'N'))
+                 || ke.kind == SATURN_KEY_ESCAPE || g_pad->WasPressed(Button::B);
+        if (yes) { slSystemReset(); while (1) {} }   // reboot; never returns
+        if (no)  return false;
+
+        SRL::Debug::Print(2, 22, "reboot back to the title screen?");
+        SRL::Debug::PrintClearLine(23);
+        SRL::Debug::Print(1, 24, "Y (A) (C) (start) is affirmative");
+        SRL::Debug::PrintClearLine(25);
+        SRL::Debug::Print(1, 26, "N (Escape) (B) is cancel");
+        for (int r = 27; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+        SRL::Core::Synchronize();
+    }
+}
+
+// ---- hooks (extern "C" so the C core can call them) ------------------------
 
 extern "C" void saturn_writestr(const char *str, size_t slen) {
     console_write(str, (unsigned int) slen);
-    // After Zork prints its banner (the "Release 88 / Serial number ..." line),
-    // append the Saturn port credit, once.
-    static int credit_shown = 0;
-    if (!credit_shown && chunk_contains(str, slen, "All rights reserved.")) {
-        credit_shown = 1;
-        static const char credit[] = "\nSaturn port (c) 2026 by Suinevere.\n";
-        console_write(credit, (unsigned int) (sizeof(credit) - 1));
-    }
 }
 
 extern "C" void saturn_readline(char *buf, int maxlen) {
@@ -99,7 +145,8 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
     // read as a fresh press here and instantly submit/type. Refresh once to turn
     // any held button into "held", not "just pressed", before we poll.
     SRL::Core::Synchronize();
-    while (!k.submitted) {
+    for (;;) {
+      while (!k.submitted) {
         // Prefer the keyboard: only read the gamepad on frames with no keyboard
         // event, so a keyboard keypress (which also bleeds into pad button bits)
         // doesn't double-trigger. The gamepad still works whenever the keyboard is
@@ -119,9 +166,21 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
+        else if (ke.kind == SATURN_KEY_LEFT)      keyboard_move(&k, -1, 0);
+        else if (ke.kind == SATURN_KEY_RIGHT)     keyboard_move(&k,  1, 0);
+        else if (ke.kind == SATURN_KEY_UP)        keyboard_move(&k,  0, -1);
+        else if (ke.kind == SATURN_KEY_DOWN)      keyboard_move(&k,  0,  1);
         render_console();
         render_keyboard(k);
         SRL::Core::Synchronize();
+      }
+      if (is_reboot_command(k.input)) {
+          reboot_confirm_and_maybe_reset();   // hard-resets on Yes; returns on No
+          k.input_len = 0; k.input[0] = '\0'; k.submitted = 0;
+          SRL::Core::Synchronize();
+          continue;   // declined reboot is not passed to the game
+      }
+      break;
     }
     int n = k.input_len;
     if (n > maxlen - 2) n = maxlen - 2;
@@ -189,6 +248,8 @@ static int menu_select(const char *title, const char *const *items, int count) {
             int idx = (int) (ke.ch - '1');
             if (idx < count) { sel = idx; pick = true; }
         }
+        else if (ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + count) % count;
+        else if (ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % count;
         if (cancel) return -1;
         if (pick)   return sel;
 
@@ -440,8 +501,9 @@ static int title_and_seed(void) {
             g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START) ||
             (saturn_keyboard_poll().kind != SATURN_KEY_NONE);
         if (advance) break;
-        SRL::Debug::Print(6, 12, "M O J O Z O R K   ---   Z O R K   I");
-        SRL::Debug::Print(9, 15, "Press any button to begin");
+        SRL::Debug::Print(12, 12, "M O J O Z O R K");
+        SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
+        SRL::Debug::Print(8, 18, "Press any button to begin");
         SRL::Core::Synchronize();
         frames++;
     }
@@ -518,6 +580,8 @@ const char* game_select() {
             int idx = (int) (ke.ch - '1');
             if (idx < count) { sel = idx; pick = true; }
         }
+        else if (ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + count) % count;
+        else if (ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % count;
         if (cancel) return "-1";
         if (pick)   return items[sel];
 
@@ -537,15 +601,227 @@ const char* game_select() {
     return items[sel];
 }
 
+// ---- online mode (multizork telnet terminal) -------------------------------
+
+// Edit the dial code with the on-screen keyboard, pre-filled with the default.
+// Returns false if cancelled.
+static bool online_dial_entry(char *out, int maxlen) {
+    KeyboardState k;
+    keyboard_reset(&k);
+    const char *def = MOJOZORK_DIAL_NUMBER;
+    for (int i = 0; def[i] && k.input_len < KB_INPUT_MAX - 1; i++)
+        keyboard_type_char(&k, def[i]);
+
+    SRL::Core::Synchronize();   // consume the menu-pick edge
+    for (;;) {
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
+        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
+        else if (ke.kind == SATURN_KEY_ENTER)     break;
+        else if (ke.kind == SATURN_KEY_ESCAPE)    return false;
+        else if (ke.kind == SATURN_KEY_LEFT)      keyboard_move(&k, -1, 0);
+        else if (ke.kind == SATURN_KEY_RIGHT)     keyboard_move(&k,  1, 0);
+        else if (ke.kind == SATURN_KEY_UP)        keyboard_move(&k,  0, -1);
+        else if (ke.kind == SATURN_KEY_DOWN)      keyboard_move(&k,  0,  1);
+        else {   // no keyboard event: read the gamepad (a keyboard press also
+                 // bleeds into pad bits on emulators, so gate to avoid double-input)
+            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
+            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
+            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
+            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
+            if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
+            if (g_pad->WasPressed(Button::A) ||
+                g_pad->WasPressed(Button::START)) break;
+        }
+
+        for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+        SRL::Debug::Print(2, 2, "Dial code (server number):");
+        SRL::Debug::Print(2, 4, "> %s_", k.input);
+        for (int r = 0; r < KB_ROWS; r++) {
+            char rowbuf[KB_COLS + 1];
+            for (int c = 0; c < KB_COLS; c++) rowbuf[c] = KB_LAYOUT[r][c];
+            rowbuf[KB_COLS] = '\0';
+            SRL::Debug::Print(4, 6 + r, "%s", rowbuf);
+        }
+        SRL::Debug::Print(2, 11, "C=type B=del  A/Ent=connect  Esc=back");
+        SRL::Core::Synchronize();
+    }
+    int n = k.input_len; if (n > maxlen - 1) n = maxlen - 1;
+    for (int i = 0; i < n; i++) out[i] = k.input[i];
+    out[n] = '\0';
+    return n > 0;
+}
+
+#define ONLINE_DIAL_ATTEMPTS 3   // auto-redial count (modem carrier training is flaky)
+
+// True if the player wants to abort: Esc on the Saturn keyboard, or the L+R
+// trigger chord on the gamepad (both triggers unused for typing).
+static bool online_cancel_requested(void) {
+    if (saturn_keyboard_poll().kind == SATURN_KEY_ESCAPE) return true;
+    return g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R);
+}
+
+// Wait for any button/key, used on terminal error screens.
+static void online_wait_any(void) {
+    for (;;) {
+        if (g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::B) ||
+            g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START)) return;
+        if (saturn_keyboard_poll().kind != SATURN_KEY_NONE) return;
+        SRL::Core::Synchronize();
+    }
+}
+
+// Wait until every key/button pressed to get here is released, so a held input
+// doesn't immediately submit a spurious (empty) line to the server on connect.
+static void online_settle_input(void) {
+    int idle = 0;
+    while (idle < 2) {
+        SRL::Core::Synchronize();
+        bool any = saturn_keyboard_any_down() != 0
+            || g_pad->IsHeld(Button::A) || g_pad->IsHeld(Button::B)
+            || g_pad->IsHeld(Button::C) || g_pad->IsHeld(Button::X)
+            || g_pad->IsHeld(Button::START) || g_pad->IsHeld(Button::Up)
+            || g_pad->IsHeld(Button::Down) || g_pad->IsHeld(Button::Left)
+            || g_pad->IsHeld(Button::Right);
+        idle = any ? 0 : (idle + 1);
+    }
+}
+
+// Connect to the multizork server and run the telnet terminal until the link
+// drops or the player quits, then return to the mode menu. Auto-redials a few
+// times because the NetLink<->DreamPi carrier handshake is probabilistic.
+static void online_mode(void) {
+    char number[KB_INPUT_MAX];
+    if (!online_dial_entry(number, sizeof(number))) return;
+
+    // ---- connect, with auto-redial on carrier-training failure ----
+    net_connect_result_t rc = NET_DIAL_FAIL;
+    for (int attempt = 1; attempt <= ONLINE_DIAL_ATTEMPTS; attempt++) {
+        for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+        SRL::Debug::Print(2, 4, "Dialing %s ... (attempt %d/%d)",
+                          number, attempt, ONLINE_DIAL_ATTEMPTS);
+        SRL::Debug::Print(2, 6, "Esc / L+R = cancel");
+        SRL::Core::Synchronize();
+
+        rc = net_connect_open(number);        // blocking (~35s timeout on failure)
+        if (rc == NET_OK) break;
+        if (rc == NET_NO_MODEM) break;        // hardware missing; redial won't help
+
+        // NET_DIAL_FAIL: brief pause (lets the DreamPi return to idle), then retry.
+        if (attempt < ONLINE_DIAL_ATTEMPTS) {
+            for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+            SRL::Debug::Print(2, 4, "No carrier. Retrying...");
+            SRL::Debug::Print(2, 6, "Esc / L+R = cancel");
+            bool cancelled = false;
+            for (int f = 0; f < 180; f++) {   // ~3s at 60Hz
+                if (online_cancel_requested()) { cancelled = true; break; }
+                SRL::Core::Synchronize();
+            }
+            if (cancelled) { net_connect_close(); return; }
+        }
+    }
+
+    if (rc != NET_OK) {
+        for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+        SRL::Debug::Print(2, 4, "%s",
+            rc == NET_NO_MODEM ? "NetLink modem not found." : "Connection failed.");
+        SRL::Debug::Print(2, 6, "(press any button)");
+        online_wait_any();
+        return;
+    }
+
+    const cui_transport_t *tr = net_connect_transport();
+    TermState ts; term_init(&ts);
+    KeyboardState k; keyboard_reset(&k);
+    console_init();
+    online_settle_input();      // wait for held keys/buttons to release so we
+                                // don't submit a spurious empty line on connect
+
+    // ---- terminal loop ----
+    for (;;) {
+        term_service(&ts, tr, MOJOZORK_RX_BUDGET);   // RX -> console
+
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+
+        // Esc (keyboard) or L+R (gamepad) disconnects and returns to the menu.
+        if (ke.kind == SATURN_KEY_ESCAPE ||
+            (g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R))) {
+            console_write("\n*** disconnected ***\n", 22);
+            render_console();
+            SRL::Core::Synchronize();
+            break;
+        }
+
+        // Prefer the keyboard: only read the gamepad on frames with no keyboard
+        // event, so a keyboard keypress (which also bleeds into pad button bits on
+        // emulators) doesn't double-trigger -- e.g. typing 'z' also firing pad X
+        // (space) and printing "z ".
+        if (ke.kind == SATURN_KEY_NONE) {
+            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
+            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
+            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
+            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
+            if (g_pad->WasPressed(Button::X))     keyboard_type_char(&k, ' ');
+            if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
+            if (g_pad->WasPressed(Button::A) ||
+                g_pad->WasPressed(Button::START)) keyboard_submit(&k);
+        }
+
+        if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
+        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
+        else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
+        else if (ke.kind == SATURN_KEY_LEFT)      keyboard_move(&k, -1, 0);
+        else if (ke.kind == SATURN_KEY_RIGHT)     keyboard_move(&k,  1, 0);
+        else if (ke.kind == SATURN_KEY_UP)        keyboard_move(&k,  0, -1);
+        else if (ke.kind == SATURN_KEY_DOWN)      keyboard_move(&k,  0,  1);
+
+        if (k.submitted) {
+            if (is_reboot_command(k.input)) {
+                reboot_confirm_and_maybe_reset();  // hard-resets on Yes; returns on No
+                keyboard_reset(&k);                // declined: don't send to server
+                online_settle_input();
+            } else {
+                term_submit_line(tr, &k);          // echo + send line; resets keyboard
+            }
+        }
+
+        if (!cui_transport_is_connected(tr)) {
+            console_write("\n*** connection lost ***\n", 25);
+            render_console();
+            SRL::Core::Synchronize();
+            break;
+        }
+
+        render_console();
+        render_keyboard(k);
+        SRL::Debug::Print(0, 28, "Esc/L+R=disconnect");
+        SRL::Core::Synchronize();
+    }
+    net_connect_close();
+}
+
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
     console_init();
     saturn_bup_init();
 
-    static SRL::Input::Digital pad(0);
-    g_pad = &pad;
+    static MultiPad pads;
+    g_pad = &pads;
 
     int seed = title_and_seed();
+
+    // Top-level mode choice. "Play Online" runs the multizork telnet terminal
+    // and returns here on disconnect; "Play Local" falls through to the offline
+    // Z-machine flow below.
+    static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)" };
+    for (;;) {
+        int mode = menu_select("MojoZork", modes, 2);
+        if (mode == 1) { online_mode(); continue; }
+        break;
+    }
+
     const char* game_file = game_select();
     g_story_filename = game_file;   // save/restart must re-read the selected game
 

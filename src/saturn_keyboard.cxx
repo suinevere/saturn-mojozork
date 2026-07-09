@@ -47,6 +47,13 @@ extern "C" int saturn_keyboard_present(void) {
     return find_keyboard_port() >= 0 ? 1 : 0;
 }
 
+extern "C" int saturn_keyboard_any_down(void) {
+    int port = find_keyboard_port();
+    if (port < 0) return 0;
+    const uint8_t *raw = (const uint8_t *) SRL::Input::Management::GetRawData(port);
+    return (raw[KBD_OFF_COND] & KBD_COND_MAKE) != 0 && raw[KBD_OFF_CODE] != 0;
+}
+
 extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     static uint8_t last_code = 0;
     static int repeat_timer = 0;
@@ -83,6 +90,10 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == 90 || code == 25) { ev.kind = SATURN_KEY_ENTER; return ev; }
     if (code == 102)              { ev.kind = SATURN_KEY_BACKSPACE; return ev; }
     if (code == 118)              { ev.kind = SATURN_KEY_ESCAPE; return ev; }  // Esc
+    if (code == 134)              { ev.kind = SATURN_KEY_LEFT;  return ev; }   // arrow keys
+    if (code == 141)              { ev.kind = SATURN_KEY_RIGHT; return ev; }
+    if (code == 137)              { ev.kind = SATURN_KEY_UP;    return ev; }
+    if (code == 138)              { ev.kind = SATURN_KEY_DOWN;  return ev; }
     if (code < 128 && kbd_map[code] != 0) {
         ev.kind = SATURN_KEY_CHAR;
         ev.ch = kbd_map[code];
