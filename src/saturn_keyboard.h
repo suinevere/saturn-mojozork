@@ -9,7 +9,8 @@ typedef enum {
     SATURN_KEY_NONE = 0,
     SATURN_KEY_CHAR,        /* a printable character is in .ch */
     SATURN_KEY_BACKSPACE,
-    SATURN_KEY_ENTER
+    SATURN_KEY_ENTER,
+    SATURN_KEY_ESCAPE
 } SaturnKeyKind;
 
 typedef struct {

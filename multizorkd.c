@@ -2591,7 +2591,7 @@ int main(int argc, char **argv)
     }
 
     if (!storyfname) {
-        storyfname = "zork1.dat";
+        storyfname = "ZORK1.Z3";
     }
 
     GNow = time(NULL);
