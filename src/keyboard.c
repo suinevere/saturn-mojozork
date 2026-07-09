@@ -24,11 +24,15 @@ char keyboard_current_char(const KeyboardState *k) {
     return KB_LAYOUT[k->cursor_row][k->cursor_col];
 }
 
-void keyboard_type(KeyboardState *k) {
+void keyboard_type_char(KeyboardState *k, char c) {
     if (k->input_len < KB_INPUT_MAX - 1) {
-        k->input[k->input_len++] = keyboard_current_char(k);
+        k->input[k->input_len++] = c;
         k->input[k->input_len] = '\0';
     }
+}
+
+void keyboard_type(KeyboardState *k) {
+    keyboard_type_char(k, keyboard_current_char(k));
 }
 
 void keyboard_backspace(KeyboardState *k) {

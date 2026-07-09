@@ -23,6 +23,7 @@ void keyboard_reset(KeyboardState *k);
 void keyboard_move(KeyboardState *k, int dcol, int drow);
 char keyboard_current_char(const KeyboardState *k);
 void keyboard_type(KeyboardState *k);
+void keyboard_type_char(KeyboardState *k, char c);
 void keyboard_backspace(KeyboardState *k);
 void keyboard_submit(KeyboardState *k);
 

@@ -34,6 +34,17 @@ int main(void) {
     keyboard_move(&k, 0, -1);
     assert(k.cursor_row == KB_ROWS - 1);
 
+    /* backspace on an empty buffer is a no-op (guard exercised) */
+    keyboard_reset(&k);
+    keyboard_backspace(&k);
+    assert(k.input_len == 0 && k.input[0] == '\0');
+
+    /* typing past the buffer cap stops at KB_INPUT_MAX-1, no overflow (guard exercised) */
+    keyboard_reset(&k);
+    for (int i = 0; i < KB_INPUT_MAX + 10; i++) keyboard_type(&k);
+    assert(k.input_len == KB_INPUT_MAX - 1);
+    assert(k.input[k.input_len] == '\0');
+
     /* submit */
     keyboard_submit(&k);
     assert(k.submitted == 1);

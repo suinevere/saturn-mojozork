@@ -21,6 +21,10 @@ void saturn_die(const char *fmt, ...) __attribute__((noreturn));
 void saturn_die(const char *fmt, ...);
 #endif
 
+/* Re-read ZORK1.DAT from CD into buf (len bytes). Returns 1 on success, 0 on failure.
+   Used by opcode_restart on Saturn (there is no fopen). */
+int saturn_read_story_file(uint8_t *buf, uint32_t len);
+
 /* Entry points implemented in mojozork_saturn.c, called by main.cxx. */
 void mojo_boot(uint8_t *story, uint32_t len, int seed);
 void mojo_run(void);

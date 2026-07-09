@@ -36,10 +36,11 @@ void  *malloc(size_t size);
 void   free(void *ptr);
 void  *realloc(void *ptr, size_t size);
 
-/* Provided by newlib (freestanding) but the dummy stdio/string headers omit the
-   declarations; declare them so mojozork.c compiles cleanly. */
+/* snprintf links from newlib; the dummy <stdio.h> just omits its declaration.
+   strdup we define ourselves in saturn_compat.cxx. Declare both so mojozork.c
+   compiles cleanly. */
 int    snprintf(char *str, size_t size, const char *fmt, ...);
-char  *strdup(const char *s);   /* we DEFINE this one (see saturn_compat.cxx) */
+char  *strdup(const char *s);
 
 #ifdef __cplusplus
 }

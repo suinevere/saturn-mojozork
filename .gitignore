@@ -5,3 +5,7 @@ cmake-build
 BuildDrop/
 src/*.o
 cd/data/0.bin
+cd/data/ABS.TXT
+cd/data/BIB.TXT
+cd/data/CPY.TXT
+build.log
