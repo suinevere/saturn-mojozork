@@ -7,6 +7,8 @@
 //   byte 0 = peripheral id, byte 8 = cond (status flags), byte 9 = code (scancode)
 #define KBD_ID          0x34   // PER_ID_StnKeyBoard
 #define KBD_COND_MAKE   0x08   // PER_KBD_MK (key-down this report)
+#define KBD_COND_BREAK  0x01   // PER_KBD_BR (key-up this report)
+#define KBD_CODE_LCTRL  0x14   // Left Ctrl scancode (unmapped in kbd_map)
 #define KBD_OFF_ID      0
 #define KBD_OFF_COND    8
 #define KBD_OFF_CODE    9
@@ -57,17 +59,28 @@ extern "C" int saturn_keyboard_any_down(void) {
 extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     static uint8_t last_code = 0;
     static int repeat_timer = 0;
+    static int ctrl_down = 0;   // Ctrl is a held modifier tracked across reports
 
     SaturnKeyEvent ev;
     ev.kind = SATURN_KEY_NONE;
     ev.ch = 0;
 
     int port = find_keyboard_port();
-    if (port < 0) { last_code = 0; return ev; }
+    if (port < 0) { last_code = 0; ctrl_down = 0; return ev; }
 
     const uint8_t *raw = (const uint8_t *) SRL::Input::Management::GetRawData(port);
     uint8_t cond = raw[KBD_OFF_COND];
     uint8_t code = raw[KBD_OFF_CODE];
+
+    // The keyboard delivers one key event at a time, so a Ctrl+key chord can't be
+    // read in a single report. Instead track Ctrl's held state from its own make/
+    // break events (which arrive as distinct reports) and consult it when another
+    // key is pressed. Done before the early-out below so we still catch Ctrl's
+    // break report (which has MAKE clear).
+    if (code == KBD_CODE_LCTRL) {
+        if (cond & KBD_COND_MAKE)  ctrl_down = 1;
+        if (cond & KBD_COND_BREAK) ctrl_down = 0;
+    }
 
     // No key currently down: clear the held-key state.
     if ((cond & KBD_COND_MAKE) == 0 || code == 0) {
@@ -98,6 +111,8 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == 136)              { ev.kind = SATURN_KEY_END;      return ev; }
     if (code == 139)              { ev.kind = SATURN_KEY_PAGEUP;   return ev; }
     if (code == 140)              { ev.kind = SATURN_KEY_PAGEDOWN; return ev; }
+    // Ctrl+C: clear the input line (checked before the char map so it doesn't type 'c').
+    if (ctrl_down && code < 128 && kbd_map[code] == 'c') { ev.kind = SATURN_KEY_CLEAR; return ev; }
     if (code < 128 && kbd_map[code] != 0) {
         ev.kind = SATURN_KEY_CHAR;
         ev.ch = kbd_map[code];
