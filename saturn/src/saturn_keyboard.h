@@ -14,7 +14,13 @@ typedef enum {
     SATURN_KEY_LEFT,
     SATURN_KEY_RIGHT,
     SATURN_KEY_UP,
-    SATURN_KEY_DOWN
+    SATURN_KEY_DOWN,
+    SATURN_KEY_HOME,
+    SATURN_KEY_END,
+    SATURN_KEY_PAGEUP,
+    SATURN_KEY_PAGEDOWN,
+    SATURN_KEY_TAB,         /* Tab: accept the typeahead completion */
+    SATURN_KEY_CLEAR        /* Ctrl+C: clear the current input line */
 } SaturnKeyKind;
 
 typedef struct {

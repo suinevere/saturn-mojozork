@@ -24,3 +24,11 @@ void mojo_run(void) {
         runInstruction();
     }
 }
+
+// Expose the loaded story image so the typeahead can decode the game's own
+// dictionary/grammar at runtime. Returns NULL (len 0) before a story is loaded.
+const uint8_t* saturn_story_data(uint32_t* len_out) {
+    if (GState == NULL || GState->story == NULL) { if (len_out) *len_out = 0; return NULL; }
+    if (len_out) *len_out = (uint32_t) GState->story_len;
+    return GState->story;
+}
