@@ -9,7 +9,35 @@ extern "C" {
 #include "saturn_glue.h"
 #include "term.h"
 #include "net/net_connect.h"
+#include "typeahead.h"
 }
+
+// Global typeahead trie (should be populated by the game backend eventually)
+static TrieNode* g_typeahead_root = nullptr;
+
+extern "C" void* typeahead_malloc(unsigned int size) {
+    return SRL::Memory::HighWorkRam::Malloc(size);
+}
+
+extern "C" void typeahead_free(void* ptr) {
+    SRL::Memory::Free(ptr);
+}
+
+static void init_dummy_typeahead() {
+    if (g_typeahead_root) return;
+    g_typeahead_root = create_trie_node();
+    DictionaryWord* w_take    = create_word("take", TYPE_VERB, 100);
+    DictionaryWord* w_look    = create_word("look", TYPE_VERB, 90);
+    DictionaryWord* w_lantern = create_word("lantern", TYPE_NOUN, 80);
+    DictionaryWord* w_sword   = create_word("sword", TYPE_NOUN, 50);
+    add_next_word(w_take, w_lantern, 85);
+    add_next_word(w_take, w_sword, 60);
+    insert_trie(g_typeahead_root, w_take);
+    insert_trie(g_typeahead_root, w_look);
+    insert_trie(g_typeahead_root, w_lantern);
+    insert_trie(g_typeahead_root, w_sword);
+}
+
 
 #define MOJOZORK_DIAL_NUMBER "199403"
 
@@ -251,7 +279,7 @@ static void render_console(void) {
     if (start + rows < total) SRL::Debug::Print(39, TOP_MARGIN + rows - 1, "v");
 }
 
-static void render_keyboard(const KeyboardState &k) {
+static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, int current_word_len) {
     // Keyboard hidden (real-keyboard user): the console's last line is already the
     // ">" prompt, so draw the input over it instead of on a separate row below --
     // otherwise the prompt shows twice. Clear the now-unused row underneath.
@@ -260,12 +288,25 @@ static void render_keyboard(const KeyboardState &k) {
         int row = base - 1;                     // over the console's last (prompt) line
         SRL::Debug::PrintClearLine(base);
         SRL::Debug::PrintClearLine(row);
-        SRL::Debug::Print(0, row, "> %s_", k.input);
+        
+        // Print with prediction if available
+        if (prediction && k.input_len < KB_INPUT_MAX - 1) {
+            const char* suffix = prediction->text + current_word_len;
+            SRL::Debug::Print(0, row, "> %s\\c9%s\\c0_", k.input, suffix); // Use Saturn debug color codes if supported, or just inline
+        } else {
+            SRL::Debug::Print(0, row, "> %s_", k.input);
+        }
         return;
     }
     int row = base;   // input line sits directly below the console
     SRL::Debug::PrintClearLine(row);
-    SRL::Debug::Print(0, row, "> %s_", k.input);
+    
+    if (prediction && k.input_len < KB_INPUT_MAX - 1) {
+        const char* suffix = prediction->text + current_word_len;
+        SRL::Debug::Print(0, row, "> %s%s (pred)", k.input, suffix); // Fallback visualization for onscreen keyboard
+    } else {
+        SRL::Debug::Print(0, row, "> %s_", k.input);
+    }
     for (int r = 0; r < KB_ROWS; r++) {
         char rowbuf[KB_COLS * 2 + 1];
         int p = 0;
@@ -365,6 +406,8 @@ extern "C" void saturn_writestr(const char *str, size_t slen) {
 
 extern "C" void saturn_readline(char *buf, int maxlen) {
     if (maxlen < 2) { if (maxlen > 0) buf[0] = '\0'; return; }
+    init_dummy_typeahead(); // Ensure typeahead is ready
+    
     // Keep the keyboard state (and cursor position) across prompts, so the picker
     // stays where the player left it instead of jumping back to 'a' every command.
     static KeyboardState k;
@@ -405,6 +448,45 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
             if (g_pad->WasPressed(Button::A) ||
                 g_pad->WasPressed(Button::START)) keyboard_submit(&k);     // A = enter/submit
         }
+        // Typeahead analysis
+        int word_start = 0;
+        for (int i = k.input_len - 1; i >= 0; i--) {
+            if (k.input[i] == ' ') { word_start = i + 1; break; }
+        }
+        
+        char current_word[256];
+        int cw_len = k.input_len - word_start;
+        for (int i = 0; i < cw_len; i++) current_word[i] = k.input[word_start + i];
+        current_word[cw_len] = '\0';
+        
+        DictionaryWord* prev_word = nullptr;
+        if (word_start > 1) {
+            int prev_start = 0;
+            for (int i = word_start - 2; i >= 0; i--) {
+                if (k.input[i] == ' ') { prev_start = i + 1; break; }
+            }
+            char pw[256];
+            int pw_len = (word_start - 1) - prev_start;
+            for (int i = 0; i < pw_len; i++) pw[i] = k.input[prev_start + i];
+            pw[pw_len] = '\0';
+            prev_word = find_exact_word(g_typeahead_root, pw);
+        }
+
+        DictionaryWord* prediction = predict_with_context(g_typeahead_root, prev_word, current_word);
+
+        // Accept autocomplete on TAB or RIGHT
+        if ((((ke.kind == SATURN_KEY_CHAR && ke.ch == '\t') || ke.kind == SATURN_KEY_RIGHT) || 
+            (ke.kind == SATURN_KEY_NONE && g_pad->WasPressed(Button::Right) && !pad_scroll_shift())) 
+            && prediction) 
+        {
+            const char* suffix = prediction->text + cw_len;
+            for (int i = 0; suffix[i] != '\0' && k.input_len < KB_INPUT_MAX - 1; i++) {
+                keyboard_type_char(&k, suffix[i]);
+            }
+            // Clear the key event so it doesn't trigger anything else
+            ke.kind = SATURN_KEY_NONE;
+        }
+
         if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
@@ -414,7 +496,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         else                                      scroll_handle_key(ke);   // PgUp/Dn/Home/End scroll
         pad_scroll_update();   // L/R page, Z+D-pad line/Home/End -- with hold repeat
         render_console();
-        render_keyboard(k);
+        render_keyboard(k, prediction, cw_len);
         SRL::Core::Synchronize();
       }
       g_scroll = 0;   // a submitted line returns the view to the live bottom
@@ -513,12 +595,12 @@ static int menu_select(const char *title, const char *const *items, int count) {
         int last = top + VIS; if (last > count) last = count;
 
         menu_clear();
-        SRL::Debug::Print(2, MENU_TOP, "%s", title);
-        if (top > 0)       SRL::Debug::Print(4, MENU_TOP + 1, "^ more");
+        SRL::Debug::Print(2, 2, "%s", title);
+        if (top > 0)       SRL::Debug::Print(4, 3, "^ more");
         for (int i = top; i < last; i++)
-            SRL::Debug::Print(4, MENU_TOP + 2 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
-        if (last < count)  SRL::Debug::Print(4, MENU_TOP + 2 + VIS, "v more");
-        SRL::Debug::Print(2, MENU_TOP + 4 + VIS, "%s",
+            SRL::Debug::Print(4, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
+        if (last < count)  SRL::Debug::Print(4, 4 + VIS, "v more");
+        SRL::Debug::Print(2, 6 + VIS, "%s",
             hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
         SRL::Core::Synchronize();
     }
@@ -1117,7 +1199,7 @@ static void online_mode(void) {
         }
 
         render_console();
-        render_keyboard(k);
+        render_keyboard(k, nullptr, 0);
         SRL::Debug::Print(0, 28, "%s", hint("hold L+R=disconnect", "Esc=disconnect"));
         SRL::Core::Synchronize();
     }
