@@ -1,4 +1,5 @@
 #include <srl.hpp>
+#include <setjmp.h>
 
 extern "C" {
 #include "console.h"
@@ -55,6 +56,15 @@ struct MultiPad {
 // One shared multi-port gamepad, used everywhere input is read.
 static MultiPad *g_pad = nullptr;
 
+// Soft reset (the Sega-mandated A+B+C+Start chord, and the typed "reboot" command)
+// returns the player to the title screen *in-process* -- NOT a hardware/SMPC reset,
+// which reboots the console all the way back to CD load. main() arms this jump
+// target just before the title screen; the input loops poll the chord and longjmp
+// back to it. Configured options live in backup RAM, so they survive the jump.
+static jmp_buf  g_title_jmp;
+static bool     g_title_jmp_armed = false;
+static uint8_t *g_story_buf = nullptr;   // heap story image; freed on each reset
+
 // The story file currently loaded from CD (set in main after game selection).
 // saturn_read_story_file re-reads this for save/restart, so it must track the
 // chosen game rather than a hard-coded name.
@@ -67,6 +77,11 @@ static const char *g_story_filename = "ZORK1.Z3";
 // keyboard) those rows are handed back to the console for more text.
 static const int SCREEN_ROWS = 28;
 
+// TV overscan clips the very top text row on real hardware (the first line shows
+// only its bottom half), so we keep row 0 blank and start all console content on
+// row 1. Menus already draw from row 1+, so this only affects the console layout.
+static const int TOP_MARGIN = 1;
+
 // Whether the on-screen keyboard is drawn. Flipped by the active input device: a
 // real-keyboard keypress hides it (more text room); a gamepad press shows it again.
 static bool g_kbd_visible = true;
@@ -74,7 +89,23 @@ static bool g_kbd_visible = true;
 // Console text rows currently available; the input line sits on the next row down.
 // Shown: reserve input + KB_ROWS keyboard rows + a hint row. Hidden: just input.
 static int console_height(void) {
-    return g_kbd_visible ? (SCREEN_ROWS - (1 + KB_ROWS + 1)) : (SCREEN_ROWS - 1);
+    int avail = SCREEN_ROWS - TOP_MARGIN;
+    return g_kbd_visible ? (avail - (1 + KB_ROWS + 1)) : (avail - 1);
+}
+
+// Input-hint text flips to match the active device instead of cramming both
+// devices' commands onto one line: gamepad wording while the on-screen keyboard
+// is up (the player is on a pad), real-keyboard wording once it's hidden (the
+// player is typing on a physical keyboard).
+static const char *hint(const char *pad, const char *kbd) {
+    return g_kbd_visible ? pad : kbd;
+}
+
+// Track which device the player last used so the hints (and the on-screen
+// keyboard) follow it. Call once per input frame with that frame's key event.
+static void note_input_device(const SaturnKeyEvent &ke) {
+    if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;
+    else if (g_pad->AnyPressed())   g_kbd_visible = true;
 }
 
 // ---- scrollback ------------------------------------------------------------
@@ -104,6 +135,50 @@ static bool scroll_handle_key(const SaturnKeyEvent &ke) {
     }
 }
 
+// Gamepad scrollback, mirroring the keyboard's nav keys with press-and-hold
+// auto-repeat. The L/R triggers page up/down. Z acts as a shift so the D-pad
+// controls the history instead of the on-screen keyboard cursor: Z+Up/Down move
+// one line, Z+Left/Right jump to the oldest/newest line (Home/End). Call once per
+// input frame. The on-screen keyboard cursor moves on the plain D-pad (no Z).
+static const int PAD_SCROLL_DELAY = 30;   // frames before auto-repeat kicks in
+static const int PAD_SCROLL_RATE  = 4;    // frames between repeats while held
+static void pad_scroll_update(void) {
+    static int last_action = 0;
+    static int timer = 0;
+
+    // Pick the active scroll action (0 = none). L/R take priority over the Z+D-pad
+    // combo, so an accidental Z press mid-page doesn't hijack the trigger.
+    int action = 0;
+    if      (g_pad->IsHeld(Button::L)) action = 1;   // page up  (older)
+    else if (g_pad->IsHeld(Button::R)) action = 2;   // page down (newer)
+    else if (g_pad->IsHeld(Button::Z)) {
+        if      (g_pad->IsHeld(Button::Up))    action = 3;  // line up
+        else if (g_pad->IsHeld(Button::Down))  action = 4;  // line down
+        else if (g_pad->IsHeld(Button::Left))  action = 5;  // home (oldest)
+        else if (g_pad->IsHeld(Button::Right)) action = 6;  // end  (newest)
+    }
+    if (action == 0) { last_action = 0; timer = 0; return; }
+
+    bool emit;
+    if (action != last_action) { last_action = action; timer = PAD_SCROLL_DELAY; emit = true; }
+    else if (--timer <= 0)     { timer = PAD_SCROLL_RATE; emit = true; }
+    else                       { emit = false; }
+    if (!emit) return;
+
+    switch (action) {
+        case 1: g_scroll += SCROLL_PAGE; break;
+        case 2: g_scroll -= SCROLL_PAGE; break;
+        case 3: g_scroll += 1;           break;
+        case 4: g_scroll -= 1;           break;
+        case 5: g_scroll  = SCROLL_ALL;  break;
+        case 6: g_scroll  = 0;           break;
+    }
+}
+
+// True while the Z shift is held: the D-pad is driving scrollback, so callers
+// should not also move the on-screen keyboard cursor with it.
+static bool pad_scroll_shift(void) { return g_pad->IsHeld(Button::Z); }
+
 static void render_console(void) {
     int rows = console_height();
     int total = console_line_count();
@@ -112,29 +187,30 @@ static void render_console(void) {
     if (g_scroll > maxstart) g_scroll = maxstart;   // clamp to oldest
     int start = maxstart - g_scroll;
     for (int r = 0; r < rows; r++) {
-        SRL::Debug::PrintClearLine(r);
+        SRL::Debug::PrintClearLine(TOP_MARGIN + r);
         int li = start + r;
         if (li < total) {
-            SRL::Debug::Print(0, r, "%s", console_get_line(li));
+            SRL::Debug::Print(0, TOP_MARGIN + r, "%s", console_get_line(li));
         }
     }
     // Edge markers when there's off-screen text above/below the window.
-    if (start > 0)            SRL::Debug::Print(39, 0, "^");
-    if (start + rows < total) SRL::Debug::Print(39, rows - 1, "v");
+    if (start > 0)            SRL::Debug::Print(39, TOP_MARGIN, "^");
+    if (start + rows < total) SRL::Debug::Print(39, TOP_MARGIN + rows - 1, "v");
 }
 
 static void render_keyboard(const KeyboardState &k) {
     // Keyboard hidden (real-keyboard user): the console's last line is already the
     // ">" prompt, so draw the input over it instead of on a separate row below --
     // otherwise the prompt shows twice. Clear the now-unused row underneath.
+    int base = TOP_MARGIN + console_height();   // first row below the console
     if (!g_kbd_visible) {
-        int row = console_height() - 1;
-        SRL::Debug::PrintClearLine(console_height());
+        int row = base - 1;                     // over the console's last (prompt) line
+        SRL::Debug::PrintClearLine(base);
         SRL::Debug::PrintClearLine(row);
         SRL::Debug::Print(0, row, "> %s_", k.input);
         return;
     }
-    int row = console_height();   // input line sits directly below the console
+    int row = base;   // input line sits directly below the console
     SRL::Debug::PrintClearLine(row);
     SRL::Debug::Print(0, row, "> %s_", k.input);
     for (int r = 0; r < KB_ROWS; r++) {
@@ -166,29 +242,64 @@ static int is_reboot_command(const char *line) {
     return line[i] == '\0';
 }
 
-// Modal Y/N confirm. On Yes, fires the SMPC reset-button NMI (never returns) --
-// the same soft reset as the console's L+R+Start chord, so the Saturn's boot
-// handler flushes state and reboots to the title screen. On No, returns false so
-// the caller resumes.
+// Perform the Sega software reset: drop any live connection, release the story
+// image, and longjmp back to the title screen (armed in main). This is an
+// in-process restart, not an SMPC reset -- the console never re-reads the CD. If
+// the jump target isn't armed yet (can't happen once main is running), fall back
+// to the SMPC reset-button NMI.
+static void soft_reset_to_title(void) {
+    net_connect_close();          // idempotent: drops the modem link if online
+    if (g_title_jmp_armed) longjmp(g_title_jmp, 1);
+    slNMIRequest();               // fallback only
+    while (1) {}
+}
+
+// Frames the A+B+C+Start reset chord must be held before it fires. A debounce, not
+// a feature: it rejects the garbage peripheral read on the very first frame (before
+// the first vsync has polled real input), which otherwise reads as "all held" and
+// resets instantly. ~0.5s is still well below any real four-button hold.
+static const int SOFT_RESET_HOLD = 30;
+
+// True when the software-reset chord (A+B+C+Start) is physically held this frame.
+static bool soft_reset_chord_held(void) {
+    return g_pad->IsHeld(Button::A) && g_pad->IsHeld(Button::B) &&
+           g_pad->IsHeld(Button::C) && g_pad->IsHeld(Button::START);
+}
+
+// Poll the software-reset chord. Call once per frame from the input loops; it never
+// returns once the chord has been held long enough (it soft-resets to the title).
+static void check_soft_reset(void) {
+    static int hold = 0;
+    hold = soft_reset_chord_held() ? (hold + 1) : 0;
+    if (hold >= SOFT_RESET_HOLD) soft_reset_to_title();
+}
+
+// Modal Y/N confirm. On Yes, soft-resets to the title screen in-process (the same
+// return-to-title as the A+B+C+Start chord); configured options in backup RAM are
+// retained. On No, returns false so the caller resumes.
 static bool reboot_confirm_and_maybe_reset(void) {
     SRL::Core::Synchronize();   // drop the submit edge that triggered this
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);   // so the prompt below matches the device in hand
         bool yes = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'y' || ke.ch == 'Y'))
                  || ke.kind == SATURN_KEY_ENTER
                  || g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)
                  || g_pad->WasPressed(Button::C);
         bool no  = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'n' || ke.ch == 'N'))
                  || ke.kind == SATURN_KEY_ESCAPE || g_pad->WasPressed(Button::B);
-        if (yes) { slNMIRequest(); while (1) {} }   // soft reset (L+R+Start); never returns
-        if (no)  return false;
+        if (yes) { soft_reset_to_title(); }   // in-process return to title; never returns
+        if (no) return false;
 
+        render_console();
+        // Full-line clears across the whole prompt band so nothing bleeds through --
+        // in keyboard mode the console text (and in pad mode the on-screen keyboard
+        // row, e.g. "789.,") would otherwise show behind these lines. Drawn below the
+        // console the same way in both modes.
+        for (int r = 21; r <= 28; r++) SRL::Debug::PrintClearLine(r);
         SRL::Debug::Print(2, 22, "reboot back to the title screen?");
-        SRL::Debug::PrintClearLine(23);
-        SRL::Debug::Print(1, 24, "Y (Enter) (A) (C) (start) is affirmative");
-        SRL::Debug::PrintClearLine(25);
-        SRL::Debug::Print(1, 26, "N (Escape) (B) is cancel");
-        for (int r = 27; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+        SRL::Debug::Print(1, 24, "%s", hint("(A) (C) (Start) = yes", "Y / Enter = yes"));
+        SRL::Debug::Print(1, 26, "%s", hint("(B) = no", "N / Esc = no"));
         SRL::Core::Synchronize();
     }
 }
@@ -217,6 +328,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
     SRL::Core::Synchronize();
     for (;;) {
       while (!k.submitted) {
+        check_soft_reset();   // A+B+C+Start -> back to the title screen
         // Prefer the keyboard: only read the gamepad on frames with no keyboard
         // event, so a keyboard keypress (which also bleeds into pad button bits)
         // doesn't double-trigger. The gamepad still works whenever the keyboard is
@@ -225,10 +337,12 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;   // real keyboard in use: hide the on-screen one
         if (ke.kind == SATURN_KEY_NONE) {
             if (g_pad->AnyPressed()) g_kbd_visible = true;        // gamepad in use: show the on-screen keyboard
-            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
-            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
-            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
-            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            if (!pad_scroll_shift()) {   // plain D-pad moves the cursor; Z+D-pad scrolls (below)
+                if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
+                if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
+                if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
+                if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            }
             if (g_pad->WasPressed(Button::C))     keyboard_type(&k);       // C = type letter
             if (g_pad->WasPressed(Button::X))     keyboard_type_char(&k, ' '); // X = space
             if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);  // B = delete
@@ -238,13 +352,18 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
+        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
         else                                      scroll_handle_key(ke);   // arrows/PgUp/Dn/Home/End scroll the history
+        pad_scroll_update();   // L/R page, Z+D-pad line/Home/End -- with hold repeat
         render_console();
         render_keyboard(k);
         SRL::Core::Synchronize();
       }
       g_scroll = 0;   // a submitted line returns the view to the live bottom
       if (is_reboot_command(k.input)) {
+          console_write(k.input, (unsigned int) k.input_len);   // echo onto the game's ">" prompt
+          console_write("\n", 1);                               // line so the command stays visible
+          render_console();
           reboot_confirm_and_maybe_reset();   // soft-resets on Yes; returns on No
           k.input_len = 0; k.input[0] = '\0'; k.submitted = 0;
           SRL::Core::Synchronize();
@@ -309,11 +428,13 @@ static int menu_select(const char *title, const char *const *items, int count) {
     int top = 0;                // index of the first visible row
     SRL::Core::Synchronize();   // consume any stale button/key edge
     for (;;) {
+        check_soft_reset();   // A+B+C+Start -> back to the title screen
         if (g_pad->WasPressed(Button::Up))    sel = (sel - 1 + count) % count;
         if (g_pad->WasPressed(Button::Down))  sel = (sel + 1) % count;
         bool pick = g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START);
         bool cancel = g_pad->WasPressed(Button::B);
         SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
         if (ke.kind == SATURN_KEY_ENTER) pick = true;
         else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
         else if (ke.kind == SATURN_KEY_CHAR && ke.ch >= '1' && ke.ch <= '9') {
@@ -336,7 +457,8 @@ static int menu_select(const char *title, const char *const *items, int count) {
         for (int i = top; i < last; i++)
             SRL::Debug::Print(4, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
         if (last < count)  SRL::Debug::Print(4, 4 + VIS, "v more");
-        SRL::Debug::Print(2, 6 + VIS, "pad/num pick   C/Ent=ok   Esc/B=back");
+        SRL::Debug::Print(2, 6 + VIS, "%s",
+            hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
         SRL::Core::Synchronize();
     }
 }
@@ -389,6 +511,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
 
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
 
         if (!editing) {
             bool pick = false, cancel = false;
@@ -421,6 +544,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
             bool submit = false;
             if (ke.kind == SATURN_KEY_ENTER) submit = true;
             else if (ke.kind == SATURN_KEY_ESCAPE) { editing = 0; SRL::Core::Synchronize(); continue; }
+            else if (ke.kind == SATURN_KEY_CLEAR) { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
             else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
             else if (ke.kind == SATURN_KEY_CHAR) { if (k.input_len < maxchars) keyboard_type_char(&k, ke.ch); }
             else {
@@ -456,7 +580,8 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
             }
         }
         if (!editing) {
-            SRL::Debug::Print(2, 4 + SAVE_SLOTS, "pad/num pick   C/Ent=edit   Esc/B=back");
+            SRL::Debug::Print(2, 4 + SAVE_SLOTS, "%s",
+                hint("pad picks   C=edit   B=back", "num picks   Enter=edit   Esc=back"));
         } else {
             for (int r = 0; r < KB_ROWS; r++) {
                 char rowbuf[KB_COLS * 2 + 1];
@@ -468,7 +593,8 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
                 rowbuf[p] = '\0';
                 SRL::Debug::Print(4, 4 + SAVE_SLOTS + r, "%s", rowbuf);
             }
-            SRL::Debug::Print(2, 5 + SAVE_SLOTS + KB_ROWS, "C=type X=space  Esc/B=back  A/Ent=OK");
+            SRL::Debug::Print(2, 5 + SAVE_SLOTS + KB_ROWS, "%s",
+                hint("C=type X=space  B=back  A=OK", "type name  Esc=back  Enter=OK"));
         }
         SRL::Core::Synchronize();
     }
@@ -480,6 +606,7 @@ static bool menu_confirm(const char *line1, const char *line2) {
     SRL::Core::Synchronize();   // consume the edge that got us here
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
         if (ke.kind == SATURN_KEY_ENTER) return true;
         if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) return false;
         if (ke.kind == SATURN_KEY_CHAR) {
@@ -492,7 +619,8 @@ static bool menu_confirm(const char *line1, const char *line2) {
         menu_clear();
         SRL::Debug::Print(2, 3, "%s", line1);
         if (line2 && line2[0]) SRL::Debug::Print(2, 4, "%s", line2);
-        SRL::Debug::Print(2, 6, "C/A/Enter = Yes     Esc/B = No");
+        SRL::Debug::Print(2, 6, "%s",
+            hint("A / C = Yes     B = No", "Enter = Yes     Esc = No"));
         SRL::Core::Synchronize();
     }
 }
@@ -571,7 +699,21 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
 // Title screen: wait for any face button; use elapsed frames as an RNG seed.
 static int title_and_seed(void) {
     int frames = 0;
+    int reset_hold = 0;
+    // Wipe the debug layer: after a soft reset the previous game's text is still on
+    // screen and would show through the (non-clearing) title draw below.
+    for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+    SRL::Core::Synchronize();   // poll real input once before reading it (avoid boot garbage)
     for (;;) {
+        // Software reset while already on the title screen: per the Sega spec, send
+        // the player out to the system (BIOS / CD player) via the SMPC reset. This
+        // is the one place a hardware reset is correct -- in-game it returns here.
+        // Debounced like check_soft_reset so a boot-time garbage read can't fire it.
+        reset_hold = soft_reset_chord_held() ? (reset_hold + 1) : 0;
+        if (reset_hold >= SOFT_RESET_HOLD) {
+            slNMIRequest();
+            while (1) {}
+        }
         // Advance on any gamepad face button or any keyboard key. Polling the
         // keyboard here (rather than a raw "key down" check) also records the
         // held key so it doesn't immediately type into the first prompt.
@@ -608,6 +750,11 @@ static int has_z3_ext(const char *s) {
 static int scan_z3_folder(char out[][16], int max) {
     static GfsDirName dirnames[SRL_MAX_CD_FILES];
     static GfsDirTbl  tbl;
+
+    // GFS_SetDir below makes Z3 the current CD directory, and that persists. After a
+    // soft reset we re-enter here still inside Z3, so "Z3" would resolve relative to
+    // Z3 and fail. Return to the root directory first so the scan is idempotent.
+    SRL::Cd::ChangeDir((char *) nullptr);
 
     int32_t fid = GFS_NameToId((int8_t *) "Z3");
     if (fid < 0) return -1;
@@ -669,8 +816,9 @@ const char* game_select() {
         SRL::Debug::Print(2, 2, "%s", (count < 0)
             ? "No Z3 folder found on the CD."
             : "No .Z3 games found in the Z3 folder.");
-        SRL::Debug::Print(2, 4, "(cannot continue)");
-        for (;;) SRL::Core::Synchronize();
+        SRL::Debug::Print(2, 4, "(press any key/button to go back)");
+        menu_wait();
+        return nullptr;   // back to the single/multiplayer select menu
     }
 
     for (int i = 0; i < count; i++) items[i] = names[i];
@@ -695,8 +843,10 @@ static bool online_dial_entry(char *out, int maxlen) {
     SRL::Core::Synchronize();   // consume the menu-pick edge
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
         if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
+        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
         else if (ke.kind == SATURN_KEY_ENTER)     break;
         else if (ke.kind == SATURN_KEY_ESCAPE)    return false;
         else if (ke.kind == SATURN_KEY_LEFT)      keyboard_move(&k, -1, 0);
@@ -724,7 +874,8 @@ static bool online_dial_entry(char *out, int maxlen) {
             rowbuf[KB_COLS] = '\0';
             SRL::Debug::Print(4, 6 + r, "%s", rowbuf);
         }
-        SRL::Debug::Print(2, 11, "C=type B=del  A/Ent=connect  Esc=back");
+        SRL::Debug::Print(2, 11, "%s",
+            hint("C=type B=del  A=connect", "type number  Enter=connect  Esc=back"));
         SRL::Core::Synchronize();
     }
     int n = k.input_len; if (n > maxlen - 1) n = maxlen - 1;
@@ -794,7 +945,7 @@ static void online_mode(void) {
         for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
         SRL::Debug::Print(2, 4, "Dialing %s ... (attempt %d/%d)",
                           number, attempt, ONLINE_DIAL_ATTEMPTS);
-        SRL::Debug::Print(2, 6, "Esc / L+R = cancel");
+        SRL::Debug::Print(2, 6, "%s", hint("L+R = cancel", "Esc = cancel"));
         SRL::Core::Synchronize();
 
         rc = net_connect_open(number);        // blocking (~35s timeout on failure)
@@ -805,7 +956,7 @@ static void online_mode(void) {
         if (attempt < ONLINE_DIAL_ATTEMPTS) {
             for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
             SRL::Debug::Print(2, 4, "No carrier. Retrying...");
-            SRL::Debug::Print(2, 6, "Esc / L+R = cancel");
+            SRL::Debug::Print(2, 6, "%s", hint("L+R = cancel", "Esc = cancel"));
             bool cancelled = false;
             for (int f = 0; f < 180; f++) {   // ~3s at 60Hz
                 if (online_cancel_requested()) { cancelled = true; break; }
@@ -832,15 +983,22 @@ static void online_mode(void) {
     keyboard_reset(&k);         // modem's SMPC power-on, then clear any residue
 
     // ---- terminal loop ----
+    // L and R now page the scrollback, so switching page direction briefly holds
+    // both. Require the L+R disconnect chord to be held deliberately (~0.75s) so a
+    // quick direction change doesn't drop the connection.
+    const int LR_DISCONNECT_HOLD = 45;
+    int lr_hold = 0;
     for (;;) {
         term_service(&ts, tr, MOJOZORK_RX_BUDGET);   // RX -> console
 
+        check_soft_reset();   // A+B+C+Start -> back to the title screen
         SaturnKeyEvent ke = saturn_keyboard_poll();
         if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;   // real keyboard in use: hide the on-screen one
 
-        // Esc (keyboard) or L+R (gamepad) disconnects and returns to the menu.
-        if (ke.kind == SATURN_KEY_ESCAPE ||
-            (g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R))) {
+        // Esc (keyboard) or a sustained L+R hold (gamepad) disconnects.
+        bool lr = g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R);
+        lr_hold = lr ? (lr_hold + 1) : 0;
+        if (ke.kind == SATURN_KEY_ESCAPE || lr_hold >= LR_DISCONNECT_HOLD) {
             console_write("\n*** disconnected ***\n", 22);
             render_console();
             SRL::Core::Synchronize();
@@ -853,10 +1011,12 @@ static void online_mode(void) {
         // (space) and printing "z ".
         if (ke.kind == SATURN_KEY_NONE) {
             if (g_pad->AnyPressed()) g_kbd_visible = true;        // gamepad in use: show the on-screen keyboard
-            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
-            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
-            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
-            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            if (!pad_scroll_shift()) {   // plain D-pad moves the cursor; Z+D-pad scrolls (below)
+                if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
+                if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
+                if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
+                if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            }
             if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
             if (g_pad->WasPressed(Button::X))     keyboard_type_char(&k, ' ');
             if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
@@ -867,7 +1027,9 @@ static void online_mode(void) {
         if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
+        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
         else                                      scroll_handle_key(ke);   // arrows/PgUp/Dn/Home/End scroll the history
+        pad_scroll_update();   // L/R page, Z+D-pad line/Home/End -- with hold repeat
 
         if (k.submitted) {
             g_scroll = 0;   // sending a line returns the view to the live bottom
@@ -889,7 +1051,7 @@ static void online_mode(void) {
 
         render_console();
         render_keyboard(k);
-        SRL::Debug::Print(0, 28, "Esc/L+R=disconnect");
+        SRL::Debug::Print(0, 28, "%s", hint("hold L+R=disconnect", "Esc=disconnect"));
         SRL::Core::Synchronize();
     }
     net_connect_close();
@@ -897,11 +1059,21 @@ static void online_mode(void) {
 
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
-    console_init();
     saturn_bup_init();
 
     static MultiPad pads;
     g_pad = &pads;
+
+    // Soft reset (A+B+C+Start, or the typed "reboot") longjmps back here to restart
+    // at the title screen without touching the CD. Free any story image from the
+    // previous run first so repeated resets don't leak High Work RAM.
+    setjmp(g_title_jmp);
+    g_title_jmp_armed = true;
+    if (g_story_buf != nullptr) {
+        SRL::Memory::HighWorkRam::Free(g_story_buf);
+        g_story_buf = nullptr;
+    }
+    console_init();
 
     int seed = title_and_seed();
 
@@ -934,7 +1106,7 @@ int main(void) {
         SRL::Cd::File f(game_file);
         int32_t bytes = f.Size.Bytes;
         int32_t ssz   = f.Size.SectorSize;
-        SRL::Debug::Print(2, 20, "loading %s...", game_file);
+        SRL::Debug::Print(2, 26, "loading %s...           ", game_file);
         if (ssz == 2048 && bytes > 0 && bytes <= 0x40000) {
             uint8_t *buf = (uint8_t *) SRL::Memory::HighWorkRam::Malloc((uint32_t) bytes);
             if (buf != nullptr && f.Open()) {
@@ -947,6 +1119,7 @@ int main(void) {
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
     if (story == nullptr) { saturn_die("Could not load %s from CD",game_file); }
+    g_story_buf = story;   // hand ownership to the reset handler so it frees on reboot
 
     mojo_boot(story, len, seed);
     mojo_run();
