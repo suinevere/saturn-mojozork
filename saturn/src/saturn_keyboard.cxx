@@ -94,6 +94,10 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == 141)              { ev.kind = SATURN_KEY_RIGHT; return ev; }
     if (code == 137)              { ev.kind = SATURN_KEY_UP;    return ev; }
     if (code == 138)              { ev.kind = SATURN_KEY_DOWN;  return ev; }
+    if (code == 135)              { ev.kind = SATURN_KEY_HOME;     return ev; }  // nav cluster
+    if (code == 136)              { ev.kind = SATURN_KEY_END;      return ev; }
+    if (code == 139)              { ev.kind = SATURN_KEY_PAGEUP;   return ev; }
+    if (code == 140)              { ev.kind = SATURN_KEY_PAGEDOWN; return ev; }
     if (code < 128 && kbd_map[code] != 0) {
         ev.kind = SATURN_KEY_CHAR;
         ev.ch = kbd_map[code];
