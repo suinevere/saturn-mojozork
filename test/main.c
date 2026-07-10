@@ -209,7 +209,7 @@ int main() {
 
     // 5. Interactive Simulation loop
     printf("--- INTERACTIVE TYPE-AHEAD ---\n");
-    printf("Type letters to see predictions. Press TAB to accept autocomplete.\n");
+    printf("Type letters to see predictions. Press TAB or Right Arrow to accept autocomplete.\n");
     printf("Press SPACE to finish a word. Press ENTER to quit.\n\n");
 
     char current_word[256] = {0};
@@ -219,7 +219,17 @@ int main() {
     
     printf("> ");
     while (1) {
-        char c = _getch();
+        unsigned char c = _getch();
+        
+        // Handle special keys (arrows, etc. send two bytes: 0xE0 or 0x00 then the key code)
+        if (c == 0 || c == 224) { 
+            unsigned char ext = _getch();
+            if (ext == 77) { // 77 is Right Arrow
+                c = '\t';    // Treat Right Arrow exactly like TAB
+            } else {
+                continue;    // Ignore other special keys (Up, Down, Left, etc.)
+            }
+        }
         
         if (c == '\r' || c == '\n') {
             break;
