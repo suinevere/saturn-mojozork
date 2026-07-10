@@ -14,7 +14,11 @@ typedef enum {
     SATURN_KEY_LEFT,
     SATURN_KEY_RIGHT,
     SATURN_KEY_UP,
-    SATURN_KEY_DOWN
+    SATURN_KEY_DOWN,
+    SATURN_KEY_HOME,
+    SATURN_KEY_END,
+    SATURN_KEY_PAGEUP,
+    SATURN_KEY_PAGEDOWN
 } SaturnKeyKind;
 
 typedef struct {
