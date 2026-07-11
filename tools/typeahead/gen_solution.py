@@ -32,13 +32,20 @@ def runtime_form_fn(data):
     dictset = {w for w in dict_words if re.fullmatch(r"[a-z]+", w)}
     fullmap = full_word_map(dict_words, harvest_full_words(data))
 
+    # The extractor expands truncated diagonals to full names; mirror that so
+    # walkthrough words like "northeast" resolve against the on-device trie.
+    diag = {"northe": "northeast", "northw": "northwest",
+            "southe": "southeast", "southw": "southwest"}
+
     def form(t):
         k = t[:6]
         if k in fullmap:
-            return fullmap[k]       # runtime recovered the full spelling
-        if k in dictset:
-            return k                # runtime keeps the (truncated) dict form
-        return t
+            r = fullmap[k]          # runtime recovered the full spelling
+        elif k in dictset:
+            r = k                   # runtime keeps the (truncated) dict form
+        else:
+            r = t
+        return diag.get(r, r)
 
     return form
 
