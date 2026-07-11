@@ -10,7 +10,7 @@ extern "C" {
 #include "term.h"
 #include "net/net_connect.h"
 #include "typeahead.h"
-#include "typeahead_zork.h"
+#include "typeahead_extract.h"
 }
 
 // Global typeahead trie (should be populated by the game backend eventually)
@@ -24,10 +24,19 @@ extern "C" void typeahead_free(void* ptr) {
     SRL::Memory::Free(ptr);
 }
 
-static void init_dummy_typeahead() {
-    if (g_typeahead_root) return;
+// Build the typeahead from whatever story is currently loaded, decoding its own
+// dictionary and grammar on-device. Rebuilds (freeing the old trie) whenever the
+// loaded story changes, so switching games picks up the new vocabulary.
+static const uint8_t* g_ta_story = nullptr;
+static void ensure_typeahead() {
+    uint32_t len = 0;
+    const uint8_t* story = saturn_story_data(&len);
+    if (g_typeahead_root && story == g_ta_story) return;   // already built for this story
+    if (g_typeahead_root) { destroy_typeahead(g_typeahead_root); g_typeahead_root = nullptr; }
     g_typeahead_root = create_trie_node();
-    build_zork_typeahead(g_typeahead_root);   // Zork I vocabulary + word transitions
+    if (story != nullptr && len > 0)
+        build_typeahead_from_story(g_typeahead_root, story, len);
+    g_ta_story = story;
 }
 
 
@@ -432,7 +441,7 @@ extern "C" void saturn_writestr(const char *str, size_t slen) {
 
 extern "C" void saturn_readline(char *buf, int maxlen) {
     if (maxlen < 2) { if (maxlen > 0) buf[0] = '\0'; return; }
-    init_dummy_typeahead(); // Ensure typeahead is ready
+    ensure_typeahead(); // decode the loaded game's dictionary/grammar (once per story)
     
     // Keep the keyboard state (and cursor position) across prompts, so the picker
     // stays where the player left it instead of jumping back to 'a' every command.
@@ -526,18 +535,17 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         selected = ncand > 0 ? cands[sug_index] : nullptr;
         if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT) ke.kind = SATURN_KEY_NONE;
 
-        // Accept (A button or Tab): commit the ghost, cursor jumps to the end. With
-        // no ghost to accept, A submits the line. Space (Y / space bar) accepts and
+        // Accept the ghost: A button, or Tab on a real keyboard (space does NOT --
+        // on the keyboard space is a literal space). Cursor jumps to the end. With
+        // no ghost to accept, A submits the line. The gamepad Y button accepts and
         // then appends a space so the player can keep typing the next word.
         bool a_press = pad && g_pad->WasPressed(Button::A);
         if (a_press || ke.kind == SATURN_KEY_TAB) {
             if (ghost_len() > 0) accept(false);
             else if (a_press)    keyboard_submit(&k);
             ke.kind = SATURN_KEY_NONE;
-        } else if ((pad && g_pad->WasPressed(Button::Y)) ||
-                   (ke.kind == SATURN_KEY_CHAR && ke.ch == ' ')) {
+        } else if (pad && g_pad->WasPressed(Button::Y)) {
             accept(true);
-            ke.kind = SATURN_KEY_NONE;
         }
         if (pad && g_pad->WasPressed(Button::START)) keyboard_submit(&k);   // Start always submits
 

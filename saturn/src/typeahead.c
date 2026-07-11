@@ -135,6 +135,21 @@ DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, 
     return current_node->best_completion;
 }
 
+// Recursively free the trie, plus each word's links and text. A DictionaryWord
+// is the word_data of exactly one node, so every allocation is freed once.
+void destroy_typeahead(TrieNode* node) {
+    if (node == NULL) return;
+    TrieNode* c = node->first_child;
+    while (c != NULL) { TrieNode* next = c->next_sibling; destroy_typeahead(c); c = next; }
+    if (node->word_data != NULL) {
+        NextWordLink* l = node->word_data->next_words;
+        while (l != NULL) { NextWordLink* n = l->next; TYPEAHEAD_FREE(l); l = n; }
+        TYPEAHEAD_FREE(node->word_data->text);
+        TYPEAHEAD_FREE(node->word_data);
+    }
+    TYPEAHEAD_FREE(node);
+}
+
 // ---- ranked candidate list (for cycling through suggestions) ----------------
 
 #define CAND_MAX 32

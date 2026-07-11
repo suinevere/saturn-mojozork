@@ -68,6 +68,11 @@ DictionaryWord* find_exact_word(TrieNode* root, const char* text);
 int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
                        const char* prefix, DictionaryWord** out, int max);
 
+// Free an entire trie built by the above: every node, and each word's text and
+// next-word links. Each DictionaryWord is one node's word_data, so this frees
+// everything exactly once. Use before rebuilding for a newly loaded story.
+void destroy_typeahead(TrieNode* root);
+
 #ifdef __cplusplus
 }
 #endif

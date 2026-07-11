@@ -35,6 +35,9 @@ int saturn_load_blob(uint8_t *buf, uint32_t maxlen);
 void mojo_boot(uint8_t *story, uint32_t len, int seed);
 void mojo_run(void);
 
+/* The loaded story image (for runtime typeahead extraction). NULL before load. */
+const uint8_t* saturn_story_data(uint32_t* len_out);
+
 #ifdef __cplusplus
 }
 #endif
