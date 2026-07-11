@@ -10,6 +10,7 @@ extern "C" {
 #include "term.h"
 #include "net/net_connect.h"
 #include "typeahead.h"
+#include "typeahead_zork.h"
 }
 
 // Global typeahead trie (should be populated by the game backend eventually)
@@ -26,16 +27,7 @@ extern "C" void typeahead_free(void* ptr) {
 static void init_dummy_typeahead() {
     if (g_typeahead_root) return;
     g_typeahead_root = create_trie_node();
-    DictionaryWord* w_take    = create_word("take", TYPE_VERB, 100);
-    DictionaryWord* w_look    = create_word("look", TYPE_VERB, 90);
-    DictionaryWord* w_lantern = create_word("lantern", TYPE_NOUN, 80);
-    DictionaryWord* w_sword   = create_word("sword", TYPE_NOUN, 50);
-    add_next_word(w_take, w_lantern, 85);
-    add_next_word(w_take, w_sword, 60);
-    insert_trie(g_typeahead_root, w_take);
-    insert_trie(g_typeahead_root, w_look);
-    insert_trie(g_typeahead_root, w_lantern);
-    insert_trie(g_typeahead_root, w_sword);
+    build_zork_typeahead(g_typeahead_root);   // Zork I vocabulary + word transitions
 }
 
 
