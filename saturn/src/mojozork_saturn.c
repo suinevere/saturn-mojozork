@@ -15,6 +15,7 @@ void mojo_boot(uint8_t *story, uint32_t len, int seed) {
     GState->die      = saturn_die;
     GState->writestr = saturn_writestr;
     GState->readline = saturn_readline;
+    GState->sound_effect = saturn_sound_effect;
     random_seed = (sint32) seed;
     initStory("ZORK1.Z3", story, len);
 }
