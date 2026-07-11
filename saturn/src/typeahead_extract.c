@@ -61,6 +61,23 @@ static int common_verb_weight(const char* t) {
     return 0;
 }
 
+// Bare direction abbreviations -- dropped from suggestions (the full word is
+// offered instead; the player can still type the letter, it just isn't listed).
+static int is_dir_abbrev(const char* t) {
+    return !strcmp(t, "n") || !strcmp(t, "s") || !strcmp(t, "e") || !strcmp(t, "w")
+        || !strcmp(t, "u") || !strcmp(t, "d") || !strcmp(t, "ne") || !strcmp(t, "nw")
+        || !strcmp(t, "se") || !strcmp(t, "sw");
+}
+
+// Expand a 6-char truncated diagonal to its full name (parser still matches the
+// first 6 chars), so suggestions read "southwest" rather than "southw".
+static void diag_full(char* t) {
+    if      (!strcmp(t, "northe")) strcpy(t, "northeast");
+    else if (!strcmp(t, "northw")) strcpy(t, "northwest");
+    else if (!strcmp(t, "southe")) strcpy(t, "southeast");
+    else if (!strcmp(t, "southw")) strcpy(t, "southwest");
+}
+
 static const char A0[] = "abcdefghijklmnopqrstuvwxyz";
 static const char A1[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 // A2 for z-chars 6..31; index 0 (z-char 6) is the 10-bit escape, handled inline.
@@ -261,6 +278,8 @@ void build_typeahead_from_story(TrieNode* root, const unsigned char* story, unsi
 
     // --- create words (full spellings) and insert into the trie ---
     for (int i = 0; i < d_count; i++) {
+        if ((d_flags[i] & FL_DIR) && is_dir_abbrev(d_text[i])) { d_word[i] = NULL; continue; }
+        if (d_flags[i] & FL_DIR) diag_full(d_text[i]);   // northe -> northeast
         WordType ty = TYPE_UNKNOWN;
         if (d_flags[i] & FL_NOUN) ty = TYPE_NOUN;
         else if (d_flags[i] & FL_VERB) ty = TYPE_VERB;
@@ -281,7 +300,7 @@ void build_typeahead_from_story(TrieNode* root, const unsigned char* story, unsi
     for (int i = 0; i < 256; i++) prep_canon[i] = NULL;
     static int pref_rank[256];
     for (int i = 0; i < d_count; i++) {
-        if (!(d_flags[i] & FL_PREP)) continue;
+        if (!(d_flags[i] & FL_PREP) || d_word[i] == NULL) continue;
         int id = d_id[i];
         int rank = 999;
         for (int r = 0; r < (int)(sizeof(PREP_PREF) / sizeof(PREP_PREF[0])); r++)
@@ -312,7 +331,7 @@ void build_typeahead_from_story(TrieNode* root, const unsigned char* story, unsi
     unsigned int prep_gov[256];
     for (int i = 0; i < 256; i++) prep_gov[i] = 0;
     for (int i = 0; i < d_count; i++) {
-        if (!(d_flags[i] & FL_VERB)) continue;
+        if (!(d_flags[i] & FL_VERB) || d_word[i] == NULL) continue;
         unsigned int a = rd16(static_base + 2 * (255 - d_id[i]));
         if (a < static_base || a >= len) continue;
         int nrows = S[a];

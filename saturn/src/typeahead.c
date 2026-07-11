@@ -204,6 +204,15 @@ static int dir_rank(const char* t) {
     return cv * 2 + pref;
 }
 
+// A "compass" exit (leads verbs at the first word). In/out and any oddballs are
+// excluded, so a lone "o" still offers "open" rather than "out".
+static int is_compass(const char* t) {
+    return !strcmp(t, "north") || !strcmp(t, "south") || !strcmp(t, "east") || !strcmp(t, "west")
+        || !strcmp(t, "northeast") || !strcmp(t, "northwest")
+        || !strcmp(t, "southeast") || !strcmp(t, "southwest")
+        || !strcmp(t, "up") || !strcmp(t, "down");
+}
+
 static int is_diagonal(const char* t) {
     return !strcmp(t, "ne") || !strcmp(t, "nw") || !strcmp(t, "se") || !strcmp(t, "sw")
         || !strcmp(t, "northe") || !strcmp(t, "northw") || !strcmp(t, "southe") || !strcmp(t, "southw")
@@ -238,7 +247,7 @@ static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n,
         if (w->type == TYPE_DIRECTION) {
             weight = DIR_BASE + dir_rank(w->text);       // clockwise compass order
             if (fw && !is_diagonal(w->text)) weight += 3;   // a lone "s" means south, not SE
-                                                            // (small: mustn't lift "out" over "open")
+            if (fw && is_compass(w->text)) weight += 80;    // exits lead the verbs (in/out don't)
         }
         else { weight = w->base_weight; if (w->type == TYPE_NOUN) weight += word_hot(w); }
         if (fw && (w->type == TYPE_VERB || w->type == TYPE_DIRECTION))
