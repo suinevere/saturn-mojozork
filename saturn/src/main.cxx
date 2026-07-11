@@ -23,6 +23,16 @@ static TrieNode* g_typeahead_root = nullptr;
 enum { DIFF_EASY = 0, DIFF_MEDIUM = 1, DIFF_HARD = 2 };
 static int g_difficulty = DIFF_EASY;
 
+// Online server config (editable in Options -> Configure MojoZork; persisted).
+static char g_host[64] = "suinevere.duckdns.org";
+static char g_port[8]  = "23";
+
+// "Load Save Game": a save slot pre-selected from the menu, applied by the first
+// in-game "restore" (queued via g_autocmd) instead of the choose_dest prompt.
+static int g_restore_device = -1;
+static int g_restore_slot   = -1;
+static const char *g_autocmd = nullptr;   // command auto-submitted on the next readline
+
 extern "C" void* typeahead_malloc(unsigned int size) {
     return SRL::Memory::HighWorkRam::Malloc(size);
 }
@@ -161,14 +171,33 @@ static void note_input_device(const SaturnKeyEvent &ke) {
 // (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
 // typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
 // off. Defaults to Easy; only written to backup once the player changes it.
+// Persisted blob: difficulty(1) + host(NUL-terminated) + port(NUL-terminated).
+// Older 1-byte saves (difficulty only) load fine: the zeroed tail leaves the
+// host/port at their compiled defaults.
 static void options_load(void) {
-    uint8_t buf[16];
-    if (saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf) && buf[0] <= DIFF_HARD)
-        g_difficulty = (int) buf[0];
+    uint8_t buf[128];
+    for (int z = 0; z < (int) sizeof(buf); z++) buf[z] = 0;
+    if (!saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf)) return;
+    if (buf[0] <= DIFF_HARD) g_difficulty = (int) buf[0];
+    int i = 1, j;
+    if (buf[i]) {
+        for (j = 0; buf[i] && j < (int) sizeof(g_host) - 1; ) g_host[j++] = (char) buf[i++];
+        g_host[j] = '\0';
+        i++;   // skip the NUL between host and port
+        if (buf[i]) {
+            for (j = 0; buf[i] && j < (int) sizeof(g_port) - 1; ) g_port[j++] = (char) buf[i++];
+            g_port[j] = '\0';
+        }
+    }
 }
 static void options_save(void) {
-    uint8_t buf[1] = { (uint8_t) g_difficulty };
-    saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, 1);
+    uint8_t buf[128]; int n = 0;
+    buf[n++] = (uint8_t) g_difficulty;
+    for (int i = 0; g_host[i] && n < 118; i++) buf[n++] = (uint8_t) g_host[i];
+    buf[n++] = 0;
+    for (int i = 0; g_port[i] && n < 126; i++) buf[n++] = (uint8_t) g_port[i];
+    buf[n++] = 0;
+    saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
 
@@ -613,6 +642,15 @@ static void typeahead_scan_screen(TrieNode *root) {
 
 extern "C" void saturn_readline(char *buf, int maxlen) {
     if (maxlen < 2) { if (maxlen > 0) buf[0] = '\0'; return; }
+    // "Load Save Game" queues a one-shot "restore" so the first turn applies the
+    // pre-picked save (see g_restore_slot).
+    if (g_autocmd != nullptr) {
+        const char *c = g_autocmd; g_autocmd = nullptr;
+        int n = 0;
+        while (c[n] && n < maxlen - 2) { buf[n] = c[n]; n++; }
+        buf[n] = '\n'; buf[n + 1] = '\0';
+        return;
+    }
     ensure_typeahead();                       // decode the game's dictionary/grammar
     typeahead_scan_screen(g_typeahead_root);  // on-screen objects lead suggestions
 
@@ -769,33 +807,134 @@ static int menu_select(const char *title, const char *const *items, int count) {
     }
 }
 
-// Options menu: a centered, bordered box with the difficulty slider. Left/Right
-// change it; A/Start/Enter/B/Esc close. The chosen difficulty is written to
-// backup only if the player actually changed it. Overlays whatever is behind
-// (mode menu or the frozen game console).
+// Basic validation for the server host/port.
+static bool valid_host(const char *s) {
+    if (!s[0]) return false;
+    int dot = 0;
+    for (int i = 0; s[i]; i++) {
+        char c = s[i];
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '.' || c == '-';
+        if (!ok) return false;
+        if (c == '.') dot = 1;
+    }
+    return dot;   // require a dotted name / IP
+}
+static bool valid_port(const char *s) {
+    if (!s[0]) return false;
+    long v = 0;
+    for (int i = 0; s[i]; i++) {
+        if (s[i] < '0' || s[i] > '9') return false;
+        v = v * 10 + (s[i] - '0');
+        if (v > 65535) return false;
+    }
+    return v >= 1 && v <= 65535;
+}
+
+// Configure MojoZork: edit the server host + port. L/R (or Tab) switch fields;
+// the on-screen keyboard / real keyboard edits the focused one. A/Enter accept
+// (after validation); Start/Esc cancel. Both return to the Options menu.
+static void config_page(void) {
+    KeyboardState kh, kp; keyboard_reset(&kh); keyboard_reset(&kp);
+    for (int i = 0; g_host[i] && kh.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&kh, g_host[i]);
+    for (int i = 0; g_port[i] && kp.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&kp, g_port[i]);
+    int focus = 0;
+    const char *err = "";
+    SRL::Core::Synchronize();
+    for (;;) {
+        check_soft_reset();
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        KeyboardState *cur = focus == 0 ? &kh : &kp;
+        bool accept = false, cancel = false, swap = false;
+        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(cur, ke.ch);
+        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(cur);
+        else if (ke.kind == SATURN_KEY_ENTER)     accept = true;
+        else if (ke.kind == SATURN_KEY_ESCAPE)    cancel = true;
+        else if (ke.kind == SATURN_KEY_TAB)       swap = true;
+        else if (ke.kind == SATURN_KEY_CLEAR)     { cur->input_len = 0; cur->input[0] = '\0'; }
+        else {
+            if (g_pad->WasPressed(Button::Up))    keyboard_move(cur, 0, -1);
+            if (g_pad->WasPressed(Button::Down))  keyboard_move(cur, 0,  1);
+            if (g_pad->WasPressed(Button::Left))  keyboard_move(cur, -1, 0);
+            if (g_pad->WasPressed(Button::Right)) keyboard_move(cur,  1, 0);
+            if (g_pad->WasPressed(Button::C))     keyboard_type(cur);
+            if (g_pad->WasPressed(Button::B))     keyboard_backspace(cur);
+            if (g_pad->WasPressed(Button::L) || g_pad->WasPressed(Button::R)) swap = true;
+            if (g_pad->WasPressed(Button::A))     accept = true;
+            if (g_pad->WasPressed(Button::START)) cancel = true;
+        }
+        if (swap) focus ^= 1;
+        if (cancel) return;
+        if (accept) {
+            if (!valid_host(kh.input))      err = "Invalid host.";
+            else if (!valid_port(kp.input)) err = "Invalid port (1-65535).";
+            else {
+                int j;
+                for (j = 0; kh.input[j] && j < (int) sizeof(g_host) - 1; j++) g_host[j] = kh.input[j];
+                g_host[j] = '\0';
+                for (j = 0; kp.input[j] && j < (int) sizeof(g_port) - 1; j++) g_port[j] = kp.input[j];
+                g_port[j] = '\0';
+                options_save();
+                return;
+            }
+        }
+        menu_clear();
+        SRL::Debug::Print(2, 1, "Configure MojoZork");
+        SRL::Debug::Print(2, 3, "%c Host: %s%s", focus == 0 ? '>' : ' ', kh.input, focus == 0 ? "_" : "");
+        SRL::Debug::Print(2, 4, "%c Port: %s%s", focus == 1 ? '>' : ' ', kp.input, focus == 1 ? "_" : "");
+        for (int r = 0; r < KB_ROWS; r++) {
+            char rowbuf[KB_COLS * 2 + 1]; int p = 0;
+            for (int c = 0; c < KB_COLS; c++) {
+                rowbuf[p++] = (r == cur->cursor_row && c == cur->cursor_col) ? '[' : ' ';
+                rowbuf[p++] = KB_LAYOUT[r][c];
+            }
+            rowbuf[p] = '\0';
+            SRL::Debug::Print(4, 6 + r, "%s", rowbuf);
+        }
+        if (err[0]) SRL::Debug::Print(2, 11, "%s", err);
+        SRL::Debug::Print(2, 13, "%s",
+            hint("L/R=field C=type B=del A=save Start=cancel", "Tab=field Enter=save Esc=cancel"));
+        SRL::Core::Synchronize();
+    }
+}
+
+// Options menu (centered box): a difficulty slider plus actions. Up/Down select
+// a row; on Difficulty, Left/Right change it; A/Enter activate; B/Esc close.
+// The difficulty is written to backup only if the player changed it.
 static void options_menu(void) {
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
     static const char *const DESC[]  = { "Full typeahead + hints",
                                          "Typeahead, no hints",
                                          "Typeahead off" };
-    const int x0 = 6, y0 = 9, w = 28, h = 9;   // centered box
-    int diff = g_difficulty;
+    const int x0 = 5, y0 = 8, w = 30, h = 11;
+    const int NITEMS = 4;
+    int diff = g_difficulty, sel = 0;
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
         SaturnKeyEvent ke = saturn_keyboard_poll();
         note_input_device(ke);
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + NITEMS) % NITEMS;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % NITEMS;
         bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
         bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
-        bool close = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)
-                   || g_pad->WasPressed(Button::B) || g_pad->WasPressed(Button::C)
-                   || ke.kind == SATURN_KEY_ENTER || ke.kind == SATURN_KEY_ESCAPE
-                   || ke.kind == SATURN_KEY_BACKSPACE;
-        if (left  && diff > DIFF_EASY) diff--;
-        if (right && diff < DIFF_HARD) diff++;
-        if (close) break;
+        if (sel == 0) { if (left && diff > DIFF_EASY) diff--; if (right && diff < DIFF_HARD) diff++; }
+        bool act = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+                 || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
+        bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
+                  || ke.kind == SATURN_KEY_BACKSPACE;
+        if (back) break;
+        if (act) {
+            if (sel == 1) { config_page(); }
+            else if (sel == 2) {   // Return to Title Screen (never returns)
+                if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
+                soft_reset_to_title();
+            }
+            else if (sel == 3) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+        }
 
-        for (int r = 0; r < h; r++) {           // border + cleared interior
+        for (int r = 0; r < h; r++) {
             char line[40]; int p = 0;
             for (int c = 0; c < w; c++)
                 line[p++] = (r == 0 || r == h - 1) ? ((c == 0 || c == w - 1) ? '+' : '-')
@@ -803,20 +942,17 @@ static void options_menu(void) {
             line[p] = '\0';
             SRL::Debug::Print(x0, y0 + r, "%s", line);
         }
-        SRL::Debug::Print(x0 + 10, y0 + 1, "OPTIONS");
-        SRL::Debug::Print(x0 + 3, y0 + 3, "Difficulty:");
-        SRL::Debug::Print(x0 + 5, y0 + 4, "%s %s %s",
-                          diff > DIFF_EASY ? "<" : " ", NAMES[diff],
-                          diff < DIFF_HARD ? ">" : " ");
-        SRL::Debug::Print(x0 + 3, y0 + 6, "%s", DESC[diff]);
-        SRL::Debug::Print(x0 + 3, y0 + 7, "%s",
-                          hint("<> change  A = done", "<> change  Enter=done"));
+        SRL::Debug::Print(x0 + 11, y0 + 1, "OPTIONS");
+        SRL::Debug::Print(x0 + 2, y0 + 3, "%c Difficulty: %s %s %s", sel == 0 ? '>' : ' ',
+                          diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
+        SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
+        SRL::Debug::Print(x0 + 2, y0 + 6, "%c Configure MojoZork", sel == 1 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 7, "%c Return to Title Screen", sel == 2 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 8, "%c Done", sel == 3 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 9, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
         SRL::Core::Synchronize();
     }
-    if (diff != g_difficulty) {   // persist only when the player changed it
-        g_difficulty = diff;
-        options_save();
-    }
+    if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
 }
 
 // Per-game backup filename for a slot: the story's base name (uppercased, up to
@@ -1037,7 +1173,12 @@ extern "C" int saturn_save_blob(const uint8_t *data, uint32_t len) {
 extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
     (void) maxlen;
     int device, slot;
-    if (!choose_dest("RESTORE - device?", "RESTORE - slot?", &device, &slot)) return 0;
+    if (g_restore_slot >= 0) {                 // slot pre-picked via "Load Save Game"
+        device = g_restore_device; slot = g_restore_slot;
+        g_restore_device = -1; g_restore_slot = -1;   // one-shot
+    } else if (!choose_dest("RESTORE - device?", "RESTORE - slot?", &device, &slot)) {
+        return 0;
+    }
     char name[12];
     make_slot_name(name, slot);
     int ok = saturn_bup_read(device, name, buf);
@@ -1169,58 +1310,6 @@ const char* game_select() {
 
 // ---- online mode (multizork telnet terminal) -------------------------------
 
-// Edit the dial code with the on-screen keyboard, pre-filled with the default.
-// Returns false if cancelled.
-static bool online_dial_entry(char *out, int maxlen) {
-    KeyboardState k;
-    keyboard_reset(&k);
-    const char *def = MOJOZORK_DIAL_NUMBER;
-    for (int i = 0; def[i] && k.input_len < KB_INPUT_MAX - 1; i++)
-        keyboard_type_char(&k, def[i]);
-
-    SRL::Core::Synchronize();   // consume the menu-pick edge
-    for (;;) {
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        note_input_device(ke);
-        if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
-        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
-        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
-        else if (ke.kind == SATURN_KEY_ENTER)     break;
-        else if (ke.kind == SATURN_KEY_ESCAPE)    return false;
-        else if (ke.kind == SATURN_KEY_LEFT)      keyboard_move(&k, -1, 0);
-        else if (ke.kind == SATURN_KEY_RIGHT)     keyboard_move(&k,  1, 0);
-        else if (ke.kind == SATURN_KEY_UP)        keyboard_move(&k,  0, -1);
-        else if (ke.kind == SATURN_KEY_DOWN)      keyboard_move(&k,  0,  1);
-        else {   // no keyboard event: read the gamepad (a keyboard press also
-                 // bleeds into pad bits on emulators, so gate to avoid double-input)
-            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
-            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
-            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
-            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
-            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
-            if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
-            if (g_pad->WasPressed(Button::A) ||
-                g_pad->WasPressed(Button::START)) break;
-        }
-
-        for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-        SRL::Debug::Print(2, 2, "Dial code (server number):");
-        SRL::Debug::Print(2, 4, "> %s_", k.input);
-        for (int r = 0; r < KB_ROWS; r++) {
-            char rowbuf[KB_COLS + 1];
-            for (int c = 0; c < KB_COLS; c++) rowbuf[c] = KB_LAYOUT[r][c];
-            rowbuf[KB_COLS] = '\0';
-            SRL::Debug::Print(4, 6 + r, "%s", rowbuf);
-        }
-        SRL::Debug::Print(2, 11, "%s",
-            hint("C=type B=del  A=connect", "type number  Enter=connect  Esc=back"));
-        SRL::Core::Synchronize();
-    }
-    int n = k.input_len; if (n > maxlen - 1) n = maxlen - 1;
-    for (int i = 0; i < n; i++) out[i] = k.input[i];
-    out[n] = '\0';
-    return n > 0;
-}
 
 #define ONLINE_DIAL_ATTEMPTS 3   // auto-redial count (modem carrier training is flaky)
 
@@ -1309,9 +1398,14 @@ static void ensure_online_typeahead(void) {
 // drops or the player quits, then return to the mode menu. Auto-redials a few
 // times because the NetLink<->DreamPi carrier handshake is probabilistic.
 static void online_mode(void) {
-    char number[KB_INPUT_MAX];
     ensure_online_typeahead();   // load the Zork I vocabulary before the modem is up
-    if (!online_dial_entry(number, sizeof(number))) return;
+    // Dial the configured server as "host:port" (ATDT<host:port>); change it in
+    // Options -> Configure MojoZork.
+    char number[80]; int nn = 0;
+    for (int i = 0; g_host[i] && nn < 70; i++) number[nn++] = g_host[i];
+    number[nn++] = ':';
+    for (int i = 0; g_port[i] && nn < 78; i++) number[nn++] = g_port[i];
+    number[nn] = '\0';
 
     // ---- connect, with auto-redial on carrier-training failure ----
     net_connect_result_t rc = NET_DIAL_FAIL;
@@ -1460,12 +1554,23 @@ int main(void) {
     // Top-level mode choice. "Play Online" runs the multizork telnet terminal
     // and returns here on disconnect; "Play Local" falls through to the offline
     // Z-machine flow below.
-    static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)", "Options" };
+    static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)",
+                                   "Load Save Game", "Options" };
     const char* game_file = nullptr;
     for (;;) {
-        int mode = menu_select("MojoZork", modes, 3);
-        if (mode == 2) { options_menu(); continue; }
+        int mode = menu_select("MojoZork", modes, 4);
+        if (mode == 3) { options_menu(); continue; }
         if (mode == 1) { online_mode(); continue; }
+        if (mode == 2) {   // Load Save Game: pick a game, then one of its save slots.
+            game_file = game_select();
+            if (game_file == nullptr) continue;
+            g_story_filename = game_file;   // so the slot names resolve to this game
+            int device, slot;
+            if (!choose_dest("LOAD - device?", "LOAD - slot?", &device, &slot)) continue;
+            g_restore_device = device; g_restore_slot = slot;
+            g_autocmd = "restore";          // the first turn applies the picked save
+            break;
+        }
         // Play Local (or B at this top menu): pick a game. Pressing B on the game
         // menu returns nullptr, so we loop back to this mode menu instead of trying
         // to load a bogus story file.
