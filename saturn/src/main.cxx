@@ -23,9 +23,8 @@ static TrieNode* g_typeahead_root = nullptr;
 enum { DIFF_EASY = 0, DIFF_MEDIUM = 1, DIFF_HARD = 2 };
 static int g_difficulty = DIFF_EASY;
 
-// Online server config (editable in Options -> Configure MojoZork; persisted).
-static char g_host[64] = "suinevere.duckdns.org";
-static char g_port[8]  = "23";
+// Online dial number (editable in Options -> Configure MojoZork; persisted).
+static char g_dialnum[24] = "199403";
 
 // "Load Save Game": a save slot pre-selected from the menu, applied by the first
 // in-game "restore" (queued via g_autocmd) instead of the choose_dest prompt.
@@ -171,31 +170,23 @@ static void note_input_device(const SaturnKeyEvent &ke) {
 // (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
 // typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
 // off. Defaults to Easy; only written to backup once the player changes it.
-// Persisted blob: difficulty(1) + host(NUL-terminated) + port(NUL-terminated).
-// Older 1-byte saves (difficulty only) load fine: the zeroed tail leaves the
-// host/port at their compiled defaults.
+// Persisted blob: difficulty(1) + dial number(NUL-terminated). Older 1-byte saves
+// (difficulty only) load fine: the zeroed tail leaves the dial number at default.
 static void options_load(void) {
-    uint8_t buf[128];
+    uint8_t buf[64];
     for (int z = 0; z < (int) sizeof(buf); z++) buf[z] = 0;
     if (!saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf)) return;
     if (buf[0] <= DIFF_HARD) g_difficulty = (int) buf[0];
-    int i = 1, j;
-    if (buf[i]) {
-        for (j = 0; buf[i] && j < (int) sizeof(g_host) - 1; ) g_host[j++] = (char) buf[i++];
-        g_host[j] = '\0';
-        i++;   // skip the NUL between host and port
-        if (buf[i]) {
-            for (j = 0; buf[i] && j < (int) sizeof(g_port) - 1; ) g_port[j++] = (char) buf[i++];
-            g_port[j] = '\0';
-        }
+    if (buf[1]) {
+        int j;
+        for (j = 0; buf[1 + j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = (char) buf[1 + j];
+        g_dialnum[j] = '\0';
     }
 }
 static void options_save(void) {
-    uint8_t buf[128]; int n = 0;
+    uint8_t buf[64]; int n = 0;
     buf[n++] = (uint8_t) g_difficulty;
-    for (int i = 0; g_host[i] && n < 118; i++) buf[n++] = (uint8_t) g_host[i];
-    buf[n++] = 0;
-    for (int i = 0; g_port[i] && n < 126; i++) buf[n++] = (uint8_t) g_port[i];
+    for (int i = 0; g_dialnum[i] && n < 62; i++) buf[n++] = (uint8_t) g_dialnum[i];
     buf[n++] = 0;
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
@@ -807,86 +798,60 @@ static int menu_select(const char *title, const char *const *items, int count) {
     }
 }
 
-// Basic validation for the server host/port.
-static bool valid_host(const char *s) {
+// Basic validation for the dial number: non-empty, digits only.
+static bool valid_dialnum(const char *s) {
     if (!s[0]) return false;
-    int dot = 0;
-    for (int i = 0; s[i]; i++) {
-        char c = s[i];
-        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                 (c >= '0' && c <= '9') || c == '.' || c == '-';
-        if (!ok) return false;
-        if (c == '.') dot = 1;
-    }
-    return dot;   // require a dotted name / IP
-}
-static bool valid_port(const char *s) {
-    if (!s[0]) return false;
-    long v = 0;
-    for (int i = 0; s[i]; i++) {
-        if (s[i] < '0' || s[i] > '9') return false;
-        v = v * 10 + (s[i] - '0');
-        if (v > 65535) return false;
-    }
-    return v >= 1 && v <= 65535;
+    for (int i = 0; s[i]; i++) if (s[i] < '0' || s[i] > '9') return false;
+    return true;
 }
 
-// Configure MojoZork: edit the server host + port. L/R (or Tab) switch fields;
-// the on-screen keyboard / real keyboard edits the focused one. A/Enter accept
-// (after validation); Start/Esc cancel. Both return to the Options menu.
+// Configure MojoZork: edit the server dial number with the on-screen / real
+// keyboard. A/Enter accept (after validation); Start/Esc cancel. Both return to
+// the Options menu.
 static void config_page(void) {
-    KeyboardState kh, kp; keyboard_reset(&kh); keyboard_reset(&kp);
-    for (int i = 0; g_host[i] && kh.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&kh, g_host[i]);
-    for (int i = 0; g_port[i] && kp.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&kp, g_port[i]);
-    int focus = 0;
+    KeyboardState k; keyboard_reset(&k);
+    for (int i = 0; g_dialnum[i] && k.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&k, g_dialnum[i]);
     const char *err = "";
     SRL::Core::Synchronize();
     for (;;) {
         check_soft_reset();
         SaturnKeyEvent ke = saturn_keyboard_poll();
         note_input_device(ke);
-        KeyboardState *cur = focus == 0 ? &kh : &kp;
-        bool accept = false, cancel = false, swap = false;
-        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(cur, ke.ch);
-        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(cur);
+        bool accept = false, cancel = false;
+        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
+        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     accept = true;
         else if (ke.kind == SATURN_KEY_ESCAPE)    cancel = true;
-        else if (ke.kind == SATURN_KEY_TAB)       swap = true;
-        else if (ke.kind == SATURN_KEY_CLEAR)     { cur->input_len = 0; cur->input[0] = '\0'; }
+        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }
         else {
-            if (g_pad->WasPressed(Button::Up))    keyboard_move(cur, 0, -1);
-            if (g_pad->WasPressed(Button::Down))  keyboard_move(cur, 0,  1);
-            if (g_pad->WasPressed(Button::Left))  keyboard_move(cur, -1, 0);
-            if (g_pad->WasPressed(Button::Right)) keyboard_move(cur,  1, 0);
-            if (g_pad->WasPressed(Button::C))     keyboard_type(cur);
-            if (g_pad->WasPressed(Button::B))     keyboard_backspace(cur);
-            if (g_pad->WasPressed(Button::L) || g_pad->WasPressed(Button::R)) swap = true;
+            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
+            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
+            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
+            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
+            if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
             if (g_pad->WasPressed(Button::A))     accept = true;
             if (g_pad->WasPressed(Button::START)) cancel = true;
         }
-        if (swap) focus ^= 1;
         if (cancel) return;
         if (accept) {
-            if (!valid_host(kh.input))      err = "Invalid host.";
-            else if (!valid_port(kp.input)) err = "Invalid port (1-65535).";
+            if (!valid_dialnum(k.input)) err = "Invalid number (digits only).";
             else {
                 int j;
-                for (j = 0; kh.input[j] && j < (int) sizeof(g_host) - 1; j++) g_host[j] = kh.input[j];
-                g_host[j] = '\0';
-                for (j = 0; kp.input[j] && j < (int) sizeof(g_port) - 1; j++) g_port[j] = kp.input[j];
-                g_port[j] = '\0';
+                for (j = 0; k.input[j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = k.input[j];
+                g_dialnum[j] = '\0';
                 options_save();
                 return;
             }
         }
         menu_clear();
         SRL::Debug::Print(2, 1, "Configure MojoZork");
-        SRL::Debug::Print(2, 3, "%c Host: %s%s", focus == 0 ? '>' : ' ', kh.input, focus == 0 ? "_" : "");
-        SRL::Debug::Print(2, 4, "%c Port: %s%s", focus == 1 ? '>' : ' ', kp.input, focus == 1 ? "_" : "");
+        SRL::Debug::Print(2, 3, "Server dial number:");
+        SRL::Debug::Print(2, 4, "> %s_", k.input);
         for (int r = 0; r < KB_ROWS; r++) {
             char rowbuf[KB_COLS * 2 + 1]; int p = 0;
             for (int c = 0; c < KB_COLS; c++) {
-                rowbuf[p++] = (r == cur->cursor_row && c == cur->cursor_col) ? '[' : ' ';
+                rowbuf[p++] = (r == k.cursor_row && c == k.cursor_col) ? '[' : ' ';
                 rowbuf[p++] = KB_LAYOUT[r][c];
             }
             rowbuf[p] = '\0';
@@ -894,7 +859,7 @@ static void config_page(void) {
         }
         if (err[0]) SRL::Debug::Print(2, 11, "%s", err);
         SRL::Debug::Print(2, 13, "%s",
-            hint("L/R=field C=type B=del A=save Start=cancel", "Tab=field Enter=save Esc=cancel"));
+            hint("C=type B=del  A=save  Start=cancel", "type number  Enter=save  Esc=cancel"));
         SRL::Core::Synchronize();
     }
 }
@@ -1417,13 +1382,7 @@ static void ensure_online_typeahead(void) {
 // times because the NetLink<->DreamPi carrier handshake is probabilistic.
 static void online_mode(void) {
     ensure_online_typeahead();   // load the Zork I vocabulary before the modem is up
-    // Dial the configured server as "host:port" (ATDT<host:port>); change it in
-    // Options -> Configure MojoZork.
-    char number[80]; int nn = 0;
-    for (int i = 0; g_host[i] && nn < 70; i++) number[nn++] = g_host[i];
-    number[nn++] = ':';
-    for (int i = 0; g_port[i] && nn < 78; i++) number[nn++] = g_port[i];
-    number[nn] = '\0';
+    const char *number = g_dialnum;   // change it in Options -> Configure MojoZork
 
     // ---- connect, with auto-redial on carrier-training failure ----
     net_connect_result_t rc = NET_DIAL_FAIL;
