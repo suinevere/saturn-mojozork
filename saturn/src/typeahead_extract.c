@@ -34,6 +34,33 @@
 #define NAMELEN   48
 #define CLASSCAP  64
 
+// The standard interactive-fiction verb set, most-common first. These lead the
+// first-word suggestions ahead of the game's obscure verbs. Matched against the
+// dictionary form (which may be truncated to 6 chars), so "examine" also hits the
+// stored "examin", "inventory" hits "invent", etc.
+static const char* const COMMON_VERBS[] = {
+    "examine", "push", "take", "pull", "drop", "turn", "open", "feel", "put",
+    "eat", "climb", "drink", "wave", "fill", "wear", "smell", "listen", "break",
+    "dig", "burn", "enter", "look", "search", "unlock",
+    "jump", "sleep", "pray", "wake", "curse", "undo", "sing", "read", "talk",
+    "ask", "tell", "give", "show", "inventory", "wait",
+};
+
+// Base weight for a common verb (0 if not one). Earlier in the list -> heavier;
+// all stay above the default verb prior so any listed verb leads the obscure ones.
+static int common_verb_weight(const char* t) {
+    int tl = (int) strlen(t);
+    int nc = (int)(sizeof(COMMON_VERBS) / sizeof(COMMON_VERBS[0]));
+    for (int i = 0; i < nc; i++) {
+        const char* c = COMMON_VERBS[i];
+        if (strcmp(t, c) == 0 || (tl == 6 && strncmp(t, c, 6) == 0)) {
+            int w = 88 - i;
+            return w < 58 ? 58 : w;
+        }
+    }
+    return 0;
+}
+
 static const char A0[] = "abcdefghijklmnopqrstuvwxyz";
 static const char A1[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 // A2 for z-chars 6..31; index 0 (z-char 6) is the 10-bit escape, handled inline.
@@ -241,7 +268,11 @@ void build_typeahead_from_story(TrieNode* root, const unsigned char* story, unsi
         else if (d_flags[i] & FL_PREP) ty = TYPE_PREP;
         int wt = BASE_DEF;
         if (d_flags[i] & FL_DIR) wt = BASE_DIR;
-        else if (d_flags[i] & FL_VERB) wt = BASE_VERB;
+        else if (d_flags[i] & FL_VERB) {
+            wt = BASE_VERB;
+            int cw = common_verb_weight(d_text[i]);
+            if (cw > wt) wt = cw;               // lift the standard IF verbs
+        }
         d_word[i] = create_word(d_text[i], ty, wt);
         insert_trie(root, d_word[i]);
     }
