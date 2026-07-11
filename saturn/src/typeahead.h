@@ -38,6 +38,7 @@ struct DictionaryWord {
     WordType type;
     int base_weight;
     NextWordLink* next_words;
+    int hot_gen;             // == the current screen generation when on-screen now
 };
 
 // Trie node using a first-child / next-sibling layout instead of a dense
@@ -77,6 +78,11 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
 // next-word links. Each DictionaryWord is one node's word_data, so this frees
 // everything exactly once. Use before rebuilding for a newly loaded story.
 void destroy_typeahead(TrieNode* root);
+
+// Mark the vocabulary words appearing in `text` (e.g. the visible room text) as
+// "on screen": predict_candidates then ranks them above their peers, so an
+// object the game just mentioned leads its suggestions. Call once per prompt.
+void typeahead_set_screen(TrieNode* root, const char* text);
 
 #ifdef __cplusplus
 }

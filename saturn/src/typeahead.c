@@ -20,6 +20,7 @@ DictionaryWord* create_word(const char* text, WordType type, int weight) {
     word->type = type;
     word->base_weight = weight;
     word->next_words = NULL;
+    word->hot_gen = 0;
     return word;
 }
 
@@ -158,6 +159,19 @@ void destroy_typeahead(TrieNode* node) {
 // a command (well above any base weight, but below a context match's 10000).
 #define FIRST_WORD_POS_BONUS 2000
 
+// Bonus for a word currently visible on screen -- enough to top its tier (base
+// weights and context transitions differ by far less) without crossing tiers.
+#define SCREEN_BONUS 500
+#define HOT_MAX 64
+
+static int g_hot_gen = 0;                 // bumped each time the screen is set
+static DictionaryWord* g_hot[HOT_MAX];    // on-screen words, for empty-prefix surfacing
+static int g_nhot = 0;
+
+static int word_hot(DictionaryWord* w) {
+    return (g_hot_gen != 0 && w->hot_gen == g_hot_gen) ? SCREEN_BONUS : 0;
+}
+
 // Add `w` at `weight`, de-duplicating by pointer (keeping the higher weight).
 // When the arrays are full, keep the top CAND_MAX by weight -- evict the current
 // minimum if this candidate is heavier -- so a busy prefix never drops the
@@ -177,7 +191,7 @@ static int cand_add(DictionaryWord** cand, int* wt, int n, DictionaryWord* w, in
 static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n, int fw) {
     if (node->word_data) {
         DictionaryWord* w = node->word_data;
-        int weight = w->base_weight;
+        int weight = w->base_weight + word_hot(w);
         if (fw && (w->type == TYPE_VERB || w->type == TYPE_DIRECTION))
             weight += FIRST_WORD_POS_BONUS;
         *n = cand_add(cand, wt, *n, w, weight);
@@ -199,7 +213,15 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
     if (prev_word != NULL) {
         for (NextWordLink* l = prev_word->next_words; l != NULL; l = l->next) {
             if (plen == 0 || strncmp(l->target_word->text, prefix, plen) == 0)
-                n = cand_add(cand, wt, n, l->target_word, 10000 + l->transition_weight);
+                n = cand_add(cand, wt, n, l->target_word,
+                             10000 + l->transition_weight + word_hot(l->target_word));
+        }
+        // At an empty object slot, also surface on-screen nouns the verb's grammar
+        // may not list (e.g. "open " with the mailbox visible but no such link).
+        if (plen == 0) {
+            for (int i = 0; i < g_nhot; i++)
+                if (g_hot[i]->type == TYPE_NOUN)
+                    n = cand_add(cand, wt, n, g_hot[i], g_hot[i]->base_weight + word_hot(g_hot[i]));
         }
     }
 
@@ -224,6 +246,38 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
         out[i] = cand[i];
     }
     return count;
+}
+
+// Mark vocabulary words appearing in `text` as on-screen for the current prompt.
+// Uses a generation counter so the previous screen's marks expire for free.
+void typeahead_set_screen(TrieNode* root, const char* text) {
+    g_hot_gen++;
+    g_nhot = 0;
+    if (root == NULL || text == NULL) return;
+    char tok[24];
+    int tp = 0;
+    for (const char* p = text; ; p++) {
+        char c = *p;
+        if (c >= 'A' && c <= 'Z') c = (char) (c - 'A' + 'a');
+        if (c >= 'a' && c <= 'z') {
+            if (tp < (int) sizeof(tok) - 1) tok[tp++] = c;
+        } else {
+            if (tp > 0) {
+                tok[tp] = 0;
+                DictionaryWord* w = find_exact_word(root, tok);
+                // Only objects (nouns): boosting prose function words like "with"
+                // in "with a boarded door" would wrongly top the suggestions.
+                if (w != NULL && w->type == TYPE_NOUN) {
+                    w->hot_gen = g_hot_gen;
+                    int dup = 0;
+                    for (int i = 0; i < g_nhot; i++) if (g_hot[i] == w) { dup = 1; break; }
+                    if (!dup && g_nhot < HOT_MAX) g_hot[g_nhot++] = w;
+                }
+                tp = 0;
+            }
+            if (c == 0) break;
+        }
+    }
 }
 
 // Find exact dictionary word (used when user hits space)
