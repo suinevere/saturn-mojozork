@@ -296,6 +296,11 @@ void build_typeahead_from_story(TrieNode* root, const unsigned char* story, unsi
         insert_trie(root, d_word[i]);
     }
 
+    // "reboot" is the Saturn port's global return-to-title command -- not in any
+    // game's dictionary, so add it so every game can suggest/complete it.
+    if (find_exact_word(root, "reboot") == NULL)
+        insert_trie(root, create_word("reboot", TYPE_VERB, BASE_VERB));
+
     // --- canonical preposition word per id (prefer common spellings) ---
     for (int i = 0; i < 256; i++) prep_canon[i] = NULL;
     static int pref_rank[256];
