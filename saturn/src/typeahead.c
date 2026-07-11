@@ -154,27 +154,41 @@ void destroy_typeahead(TrieNode* node) {
 
 #define CAND_MAX 32
 
-// Add `w` to the candidate arrays, de-duplicating by pointer (keeping the higher
-// weight). Returns the new count.
+// Bonus that lifts verbs/directions above other parts of speech at the start of
+// a command (well above any base weight, but below a context match's 10000).
+#define FIRST_WORD_POS_BONUS 2000
+
+// Add `w` at `weight`, de-duplicating by pointer (keeping the higher weight).
+// When the arrays are full, keep the top CAND_MAX by weight -- evict the current
+// minimum if this candidate is heavier -- so a busy prefix never drops the
+// best-ranked word just because it was reached late in the traversal.
 static int cand_add(DictionaryWord** cand, int* wt, int n, DictionaryWord* w, int weight) {
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++)
         if (cand[i] == w) { if (weight > wt[i]) wt[i] = weight; return n; }
-    }
     if (n < CAND_MAX) { cand[n] = w; wt[n] = weight; return n + 1; }
+    int mi = 0;
+    for (int i = 1; i < n; i++) if (wt[i] < wt[mi]) mi = i;
+    if (weight > wt[mi]) { cand[mi] = w; wt[mi] = weight; }
     return n;
 }
 
-// Depth-first collect every word in this subtree, weighted by its base_weight.
-static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n) {
-    if (*n >= CAND_MAX) return;
-    if (node->word_data)
-        *n = cand_add(cand, wt, *n, node->word_data, node->word_data->base_weight);
-    for (TrieNode* c = node->first_child; c != NULL && *n < CAND_MAX; c = c->next_sibling)
-        cand_collect(c, cand, wt, n);
+// Depth-first collect every word in this subtree. `fw` (first word) lifts verbs
+// and directions so they rank above nouns/prepositions at the start of a command.
+static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n, int fw) {
+    if (node->word_data) {
+        DictionaryWord* w = node->word_data;
+        int weight = w->base_weight;
+        if (fw && (w->type == TYPE_VERB || w->type == TYPE_DIRECTION))
+            weight += FIRST_WORD_POS_BONUS;
+        *n = cand_add(cand, wt, *n, w, weight);
+    }
+    for (TrieNode* c = node->first_child; c != NULL; c = c->next_sibling)
+        cand_collect(c, cand, wt, n, fw);
 }
 
 int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
-                       const char* prefix, DictionaryWord** out, int max) {
+                       const char* prefix, DictionaryWord** out, int max,
+                       int first_word) {
     DictionaryWord* cand[CAND_MAX];
     int wt[CAND_MAX];
     int n = 0;
@@ -196,7 +210,7 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
             char c = (char) tolower((unsigned char) prefix[i]);
             node = (c < 'a' || c > 'z') ? NULL : find_child(node, c);
         }
-        if (node != NULL) cand_collect(node, cand, wt, &n);
+        if (node != NULL) cand_collect(node, cand, wt, &n, first_word);
     }
 
     // Selection-sort the top `max` by descending weight.

@@ -21,8 +21,11 @@
 #define W_PREP_NOUN 55
 #define W_ADJ_NOUN  52
 #define MAX_CLASS   40     // skip verb/prep->noun links for classes larger than this
-#define BASE_DIR    66     // part-of-speech base-weight priors
-#define BASE_VERB   44
+// Part-of-speech base-weight priors. Verbs and directions sit close together so a
+// rarely-used direction (out/up) doesn't outrank a common verb; the solution
+// overlay/frequency then ranks the directions that actually get typed (n/s/e/w).
+#define BASE_DIR    48
+#define BASE_VERB   46
 #define BASE_DEF    30
 
 // Build-time limits (Sorcerer, the largest v3 game here, has ~1012 dict words).
