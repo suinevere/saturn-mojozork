@@ -595,27 +595,27 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
     cw_len_out = cw_len;
 }
 
+// Mark the words on the currently visible console as on-screen, so objects the
+// game just described lead their suggestions. Must be re-run after any trie
+// rebuild (e.g. a mid-game difficulty change), since the marks live on the words.
+static void typeahead_scan_screen(TrieNode *root) {
+    char scr[1024]; int sp = 0;
+    int total = console_line_count(), rows = console_height();
+    int startln = (total > rows) ? (total - rows) : 0;
+    for (int li = startln; li < total && sp < (int) sizeof(scr) - 1; li++) {
+        const char* ln = console_get_line(li);
+        for (int j = 0; ln[j] && sp < (int) sizeof(scr) - 1; j++) scr[sp++] = ln[j];
+        if (sp < (int) sizeof(scr) - 1) scr[sp++] = ' ';
+    }
+    scr[sp] = '\0';
+    typeahead_set_screen(root, scr);
+}
+
 extern "C" void saturn_readline(char *buf, int maxlen) {
     if (maxlen < 2) { if (maxlen > 0) buf[0] = '\0'; return; }
-    ensure_typeahead(); // decode the loaded game's dictionary/grammar (once per story)
+    ensure_typeahead();                       // decode the game's dictionary/grammar
+    typeahead_scan_screen(g_typeahead_root);  // on-screen objects lead suggestions
 
-    // Mark the words on the current screen so objects the game just described lead
-    // their suggestions (type "o" -> open, accept, and the mailbox on screen tops
-    // the object list). The screen is static while we wait for input, so once is
-    // enough per prompt.
-    {
-        char scr[1024]; int sp = 0;
-        int total = console_line_count(), rows = console_height();
-        int startln = (total > rows) ? (total - rows) : 0;
-        for (int li = startln; li < total && sp < (int) sizeof(scr) - 1; li++) {
-            const char* ln = console_get_line(li);
-            for (int j = 0; ln[j] && sp < (int) sizeof(scr) - 1; j++) scr[sp++] = ln[j];
-            if (sp < (int) sizeof(scr) - 1) scr[sp++] = ' ';
-        }
-        scr[sp] = '\0';
-        typeahead_set_screen(g_typeahead_root, scr);
-    }
-    
     // Keep the keyboard state (and cursor position) across prompts, so the picker
     // stays where the player left it instead of jumping back to 'a' every command.
     static KeyboardState k;
@@ -648,7 +648,8 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         // Start (gamepad) or Esc (keyboard) opens the Options menu mid-game.
         if ((pad && g_pad->WasPressed(Button::START)) || ke.kind == SATURN_KEY_ESCAPE) {
             options_menu();
-            ensure_typeahead();          // rebuild if the difficulty changed
+            ensure_typeahead();                       // rebuild if the difficulty changed
+            typeahead_scan_screen(g_typeahead_root);  // re-mark on-screen words on the new trie
             SRL::Core::Synchronize();    // consume the edge that closed the menu
             continue;
         }
@@ -804,10 +805,10 @@ static void options_menu(void) {
         }
         SRL::Debug::Print(x0 + 10, y0 + 1, "OPTIONS");
         SRL::Debug::Print(x0 + 3, y0 + 3, "Difficulty:");
-        SRL::Debug::Print(x0 + 5, y0 + 4, "%s %-8s %s",
+        SRL::Debug::Print(x0 + 5, y0 + 4, "%s %s %s",
                           diff > DIFF_EASY ? "<" : " ", NAMES[diff],
                           diff < DIFF_HARD ? ">" : " ");
-        SRL::Debug::Print(x0 + 3, y0 + 6, "%-22s", DESC[diff]);
+        SRL::Debug::Print(x0 + 3, y0 + 6, "%s", DESC[diff]);
         SRL::Debug::Print(x0 + 3, y0 + 7, "%s",
                           hint("<> change  A = done", "<> change  Enter=done"));
         SRL::Core::Synchronize();
