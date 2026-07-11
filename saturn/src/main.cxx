@@ -174,13 +174,13 @@ static void pad_scroll_update(void) {
     static int last_action = 0;
     static int timer = 0;
 
-    // Pick the active scroll action (0 = none). L/R take priority over the Z+D-pad
-    // combo, so an accidental Z press mid-page doesn't hijack the trigger.
+    // All scrolling lives under the Z shift now, so plain L/R is free to cycle
+    // typeahead suggestions. Z+L/R page, Z+Up/Down line, Z+Left/Right home/end.
     int action = 0;
-    if      (g_pad->IsHeld(Button::L)) action = 1;   // page up  (older)
-    else if (g_pad->IsHeld(Button::R)) action = 2;   // page down (newer)
-    else if (g_pad->IsHeld(Button::Z)) {
-        if      (g_pad->IsHeld(Button::Up))    action = 3;  // line up
+    if (g_pad->IsHeld(Button::Z)) {
+        if      (g_pad->IsHeld(Button::L))     action = 1;  // page up  (older)
+        else if (g_pad->IsHeld(Button::R))     action = 2;  // page down (newer)
+        else if (g_pad->IsHeld(Button::Up))    action = 3;  // line up
         else if (g_pad->IsHeld(Button::Down))  action = 4;  // line down
         else if (g_pad->IsHeld(Button::Left))  action = 5;  // home (oldest)
         else if (g_pad->IsHeld(Button::Right)) action = 6;  // end  (newest)
@@ -344,7 +344,7 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
         SRL::Debug::PrintClearLine(row + 1 + r);
         SRL::Debug::Print(2, row + 1 + r, "%s", rowbuf);
     }
-    SRL::Debug::Print(0, row + 1 + KB_ROWS, "A=enter B=delete C=type Y=space");
+    SRL::Debug::Print(0, row + 1 + KB_ROWS, "C=type A=accept Y=space L/R=cycle Start=go");
 }
 
 // ---- global reboot command -------------------------------------------------
@@ -448,6 +448,8 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
     // read as a fresh press here and instantly submit/type. Refresh once to turn
     // any held button into "held", not "just pressed", before we poll.
     SRL::Core::Synchronize();
+    int sug_index = 0;           // which suggestion the player has cycled to
+    char sug_last[256] = "";     // the typed word the cycle position belongs to
     for (;;) {
       while (!k.submitted) {
         check_soft_reset();   // A+B+C+Start -> back to the title screen
@@ -457,72 +459,101 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         // idle, so on-screen navigation never gets stuck.
         SaturnKeyEvent ke = saturn_keyboard_poll();
         if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;   // real keyboard in use: hide the on-screen one
-        if (ke.kind == SATURN_KEY_NONE) {
-            if (g_pad->AnyPressed()) g_kbd_visible = true;        // gamepad in use: show the on-screen keyboard
-            if (g_pad->IsHeld(Button::X)) {   // Y + Up/Down recalls command history
-                if (g_pad->WasPressed(Button::Up))    history_recall(&k, 1);   // older
-                if (g_pad->WasPressed(Button::Down))  history_recall(&k, 0);   // newer
-            } else if (!pad_scroll_shift()) {   // plain D-pad moves the cursor; Z+D-pad scrolls (below)
+        bool pad = (ke.kind == SATURN_KEY_NONE);
+        if (pad && g_pad->AnyPressed()) g_kbd_visible = true;    // gamepad in use: show the on-screen keyboard
+
+        // On-screen keyboard editing (gamepad): move the picker, type, delete.
+        if (pad) {
+            if (g_pad->IsHeld(Button::X)) {                 // X + Up/Down recalls history
+                if (g_pad->WasPressed(Button::Up))    history_recall(&k, 1);
+                if (g_pad->WasPressed(Button::Down))  history_recall(&k, 0);
+            } else if (!pad_scroll_shift()) {               // plain D-pad moves the picker
                 if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
                 if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
                 if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
                 if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
             }
-            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);       // C = type letter
-            if (g_pad->WasPressed(Button::Y))     keyboard_type_char(&k, ' '); // X = space
-            if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);  // B = delete
-            if (g_pad->WasPressed(Button::A) ||
-                g_pad->WasPressed(Button::START)) keyboard_submit(&k);     // A = enter/submit
-        }
-        // Typeahead analysis
-        int word_start = 0;
-        for (int i = k.input_len - 1; i >= 0; i--) {
-            if (k.input[i] == ' ') { word_start = i + 1; break; }
-        }
-        
-        char current_word[256];
-        int cw_len = k.input_len - word_start;
-        for (int i = 0; i < cw_len; i++) current_word[i] = k.input[word_start + i];
-        current_word[cw_len] = '\0';
-        
-        DictionaryWord* prev_word = nullptr;
-        if (word_start > 1) {
-            int prev_start = 0;
-            for (int i = word_start - 2; i >= 0; i--) {
-                if (k.input[i] == ' ') { prev_start = i + 1; break; }
-            }
-            char pw[256];
-            int pw_len = (word_start - 1) - prev_start;
-            for (int i = 0; i < pw_len; i++) pw[i] = k.input[prev_start + i];
-            pw[pw_len] = '\0';
-            prev_word = find_exact_word(g_typeahead_root, pw);
+            if (g_pad->WasPressed(Button::C)) keyboard_type(&k);       // C = type letter
+            if (g_pad->WasPressed(Button::B)) keyboard_backspace(&k);  // B = delete
         }
 
-        DictionaryWord* prediction = predict_with_context(g_typeahead_root, prev_word, current_word);
-
-        // Accept autocomplete on TAB or RIGHT
-        if (((ke.kind == SATURN_KEY_TAB || ke.kind == SATURN_KEY_RIGHT) ||
-            (ke.kind == SATURN_KEY_NONE && g_pad->WasPressed(Button::Right) && !pad_scroll_shift())) 
-            && prediction) 
-        {
-            const char* suffix = prediction->text + cw_len;
-            for (int i = 0; suffix[i] != '\0' && k.input_len < KB_INPUT_MAX - 1; i++) {
-                keyboard_type_char(&k, suffix[i]);
+        // Recompute the current word and its ranked suggestions from the input.
+        char current_word[256]; int cw_len; DictionaryWord* prev_word;
+        DictionaryWord* cands[24]; int ncand; DictionaryWord* selected;
+        auto refresh = [&]() {
+            int ws = 0;
+            for (int i = k.input_len - 1; i >= 0; i--) if (k.input[i] == ' ') { ws = i + 1; break; }
+            cw_len = k.input_len - ws;
+            if (cw_len > 255) cw_len = 255;
+            for (int i = 0; i < cw_len; i++) current_word[i] = k.input[ws + i];
+            current_word[cw_len] = '\0';
+            prev_word = nullptr;
+            if (ws > 1) {
+                int ps = 0;
+                for (int i = ws - 2; i >= 0; i--) if (k.input[i] == ' ') { ps = i + 1; break; }
+                char pw[256]; int pl = (ws - 1) - ps; if (pl > 255) pl = 255;
+                for (int i = 0; i < pl; i++) pw[i] = k.input[ps + i];
+                pw[pl] = '\0';
+                prev_word = find_exact_word(g_typeahead_root, pw);
             }
-            // Clear the key event so it doesn't trigger anything else
+            ncand = predict_candidates(g_typeahead_root, prev_word, current_word, cands, 24);
+            bool same = true;                                // reset cycle if the word changed
+            for (int i = 0; i <= cw_len; i++) if (current_word[i] != sug_last[i]) { same = false; break; }
+            if (!same) { sug_index = 0; for (int i = 0; i <= cw_len; i++) sug_last[i] = current_word[i]; }
+            if (ncand == 0) sug_index = 0; else if (sug_index >= ncand) sug_index %= ncand;
+            selected = ncand > 0 ? cands[sug_index] : nullptr;
+        };
+        refresh();
+
+        auto ghost_len = [&]() -> int {              // chars of `selected` past what's typed
+            if (!selected) return 0;
+            int n = 0; while (selected->text[n]) n++;
+            return n > cw_len ? n - cw_len : 0;
+        };
+        auto accept = [&](bool add_space) {          // commit the suggestion; cursor -> end
+            if (ghost_len() > 0)
+                for (int i = cw_len; selected->text[i] && k.input_len < KB_INPUT_MAX - 1; i++)
+                    keyboard_type_char(&k, selected->text[i]);
+            if (add_space && k.input_len < KB_INPUT_MAX - 1) keyboard_type_char(&k, ' ');
+            sug_index = 0;
+        };
+
+        // L/R (shoulders) or keyboard Left/Right cycle through the suggestions.
+        bool cyc_prev = (pad && !pad_scroll_shift() && g_pad->WasPressed(Button::L)) || ke.kind == SATURN_KEY_LEFT;
+        bool cyc_next = (pad && !pad_scroll_shift() && g_pad->WasPressed(Button::R)) || ke.kind == SATURN_KEY_RIGHT;
+        if (ncand > 0 && cyc_prev) sug_index = (sug_index - 1 + ncand) % ncand;
+        if (ncand > 0 && cyc_next) sug_index = (sug_index + 1) % ncand;
+        selected = ncand > 0 ? cands[sug_index] : nullptr;
+        if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT) ke.kind = SATURN_KEY_NONE;
+
+        // Accept (A button or Tab): commit the ghost, cursor jumps to the end. With
+        // no ghost to accept, A submits the line. Space (Y / space bar) accepts and
+        // then appends a space so the player can keep typing the next word.
+        bool a_press = pad && g_pad->WasPressed(Button::A);
+        if (a_press || ke.kind == SATURN_KEY_TAB) {
+            if (ghost_len() > 0) accept(false);
+            else if (a_press)    keyboard_submit(&k);
+            ke.kind = SATURN_KEY_NONE;
+        } else if ((pad && g_pad->WasPressed(Button::Y)) ||
+                   (ke.kind == SATURN_KEY_CHAR && ke.ch == ' ')) {
+            accept(true);
             ke.kind = SATURN_KEY_NONE;
         }
+        if (pad && g_pad->WasPressed(Button::START)) keyboard_submit(&k);   // Start always submits
 
-        if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
+        // Remaining keyboard events (typing a letter extends the prefix).
+        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
         else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
-        else if (ke.kind == SATURN_KEY_UP)        history_recall(&k, 1);   // recall older command
-        else if (ke.kind == SATURN_KEY_DOWN)      history_recall(&k, 0);   // recall newer command
-        else                                      scroll_handle_key(ke);   // PgUp/Dn/Home/End scroll
-        pad_scroll_update();   // L/R page, Z+D-pad line/Home/End -- with hold repeat
+        else if (ke.kind == SATURN_KEY_UP)        history_recall(&k, 1);
+        else if (ke.kind == SATURN_KEY_DOWN)      history_recall(&k, 0);
+        else                                      scroll_handle_key(ke);   // PgUp/Dn/Home/End
+
+        refresh();             // reflect any edit before drawing
+        pad_scroll_update();   // Z+L/R page, Z+D-pad line/Home/End -- with hold repeat
         render_console();
-        render_keyboard(k, prediction, cw_len);
+        render_keyboard(k, selected, cw_len);
         SRL::Core::Synchronize();
       }
       g_scroll = 0;   // a submitted line returns the view to the live bottom

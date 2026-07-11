@@ -61,6 +61,13 @@ void insert_trie(TrieNode* root, DictionaryWord* word);
 DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, const char* prefix);
 DictionaryWord* find_exact_word(TrieNode* root, const char* text);
 
+// Fill `out` (capacity `max`) with candidate completions for `prefix` given the
+// `prev_word` context, ranked by descending weight (context matches first, then
+// trie completions by base weight). Returns how many were written. Used by the
+// UI to let the player cycle through suggestions.
+int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
+                       const char* prefix, DictionaryWord** out, int max);
+
 #ifdef __cplusplus
 }
 #endif
