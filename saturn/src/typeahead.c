@@ -191,7 +191,11 @@ static int cand_add(DictionaryWord** cand, int* wt, int n, DictionaryWord* w, in
 static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n, int fw) {
     if (node->word_data) {
         DictionaryWord* w = node->word_data;
-        int weight = w->base_weight + word_hot(w);
+        int weight = w->base_weight;
+        // On-screen objects lead anywhere; on-screen exits only where movement
+        // fits (the first word), so a visible exit can't hijack "take n...".
+        if (w->type == TYPE_NOUN) weight += word_hot(w);
+        else if (fw && w->type == TYPE_DIRECTION) weight += word_hot(w);
         if (fw && (w->type == TYPE_VERB || w->type == TYPE_DIRECTION))
             weight += FIRST_WORD_POS_BONUS;
         *n = cand_add(cand, wt, *n, w, weight);
@@ -212,9 +216,12 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
     //    above trie completions so the context-aware suggestion sorts first.
     if (prev_word != NULL) {
         for (NextWordLink* l = prev_word->next_words; l != NULL; l = l->next) {
-            if (plen == 0 || strncmp(l->target_word->text, prefix, plen) == 0)
-                n = cand_add(cand, wt, n, l->target_word,
-                             10000 + l->transition_weight + word_hot(l->target_word));
+            if (plen == 0 || strncmp(l->target_word->text, prefix, plen) == 0) {
+                // Only boost an on-screen object here; a direction in a verb's
+                // grammar is a preposition ("drop it down"), not a visible exit.
+                int hot = (l->target_word->type == TYPE_NOUN) ? word_hot(l->target_word) : 0;
+                n = cand_add(cand, wt, n, l->target_word, 10000 + l->transition_weight + hot);
+            }
         }
         // At an empty object slot, also surface on-screen nouns the verb's grammar
         // may not list (e.g. "open " with the mailbox visible but no such link).
@@ -265,9 +272,9 @@ void typeahead_set_screen(TrieNode* root, const char* text) {
             if (tp > 0) {
                 tok[tp] = 0;
                 DictionaryWord* w = find_exact_word(root, tok);
-                // Only objects (nouns): boosting prose function words like "with"
+                // Objects and exits only: boosting prose function words like "with"
                 // in "with a boarded door" would wrongly top the suggestions.
-                if (w != NULL && w->type == TYPE_NOUN) {
+                if (w != NULL && (w->type == TYPE_NOUN || w->type == TYPE_DIRECTION)) {
                     w->hot_gen = g_hot_gen;
                     int dup = 0;
                     for (int i = 0; i < g_nhot; i++) if (g_hot[i] == w) { dup = 1; break; }
