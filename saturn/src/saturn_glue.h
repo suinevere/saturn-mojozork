@@ -35,6 +35,9 @@ int saturn_load_blob(uint8_t *buf, uint32_t maxlen);
 void mojo_boot(uint8_t *story, uint32_t len, int seed);
 void mojo_run(void);
 
+/* Z-machine sound_effect hook (implemented in sound.cxx). */
+void saturn_sound_effect(int number, int effect, int volume);
+
 /* The loaded story image (for runtime typeahead extraction). NULL before load. */
 const uint8_t* saturn_story_data(uint32_t* len_out);
 
