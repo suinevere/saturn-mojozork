@@ -13,10 +13,17 @@ toward the winning move ("easy mode").
    words harvested from the story's own **object short-names** and
    **abbreviations table** (e.g. `screwd` -> `screwdriver`, `lanter` ->
    `lantern`). Pass `--no-fullwords` to keep the raw 6-char forms.
-2. **Weights + combinations** — reads a walkthrough (one command per line). Word
-   frequency becomes the base completion weight; consecutive words within a
-   command become weighted context transitions (`kill`→`troll`→`with`→`sword`).
-3. **Codegen** — emits `saturn/src/typeahead_zork.c`, a table-driven
+2. **Grammar (no walkthrough needed)** — decodes the story's part-of-speech flags
+   and verb grammar table to build context transitions automatically: verb→the
+   prepositions it accepts (`put`→`in`/`on`/`under`, `kill`→`with`, `tie`→`to`),
+   and verb/preposition→the *object class* it expects, resolved against object
+   attributes (`eat`→food, `open`→openables, `attack…with`→weapons, `climb`→
+   tree/ladder/stairs). This is the game designers' own semantic model.
+3. **Weights + combinations (refinement)** — a walkthrough (one command per line)
+   sets base completion weights by word frequency and boosts the specific
+   winning-path pairings on top of the grammar baseline
+   (`kill`→`troll`, `dig`→`sand`).
+4. **Codegen** — emits `saturn/src/typeahead_zork.c`, a table-driven
    `build_zork_typeahead()` compiled into the client.
 
 `saturn/src/typeahead_zork.c` is **generated** — do not hand-edit it; change the
