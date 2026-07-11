@@ -279,7 +279,54 @@ static void render_console(void) {
     if (start + rows < total) SRL::Debug::Print(39, TOP_MARGIN + rows - 1, "v");
 }
 
+// ---- blinking block cursor -------------------------------------------------
+//
+// The SGL ASCII font has no solid-block glyph, so we carve one into the
+// otherwise-unused DEL (0x7F) slot and print that as the cursor. ASCII::Print
+// addresses font 0's char data at VDP2_VRAM_B1 + 0x18000 + charNum*0x20, where
+// charNum = char + 640 (see srl_ascii.hpp: fontBank=640, and LoadFontSG's dest
+// math). For 0x7F that lands at +0x1DFE0, the last tile LoadFontSG populated.
+// 0xFF fills every 4bpp pixel with color index 15 -- the same index the font
+// glyphs use -- so the block renders in the current text color.
+static const char CURSOR_BLOCK_STR[2] = { (char) 0x7f, '\0' };
+
+static void install_block_glyph(void) {
+    volatile uint8_t* tile =
+        (volatile uint8_t*)(VDP2_VRAM_B1 + 0x18000 + (0x7f + 640) * 0x20);
+    for (int i = 0; i < 32; i++) tile[i] = 0xFF;
+}
+
+// Draw "> {input}{ghost}" at (0,row) with a blinking block cursor. The block
+// sits on the first predicted (ghost) character -- the next char TAB would
+// accept -- or just past the input when there's no prediction. When the block
+// is "off" the cell shows the character underneath, so it appears to blink.
+static void draw_input_line(int row, const KeyboardState &k,
+                            DictionaryWord* prediction, int current_word_len,
+                            bool block_on) {
+    const char* suffix = "";
+    if (prediction && k.input_len < KB_INPUT_MAX - 1)
+        suffix = prediction->text + current_word_len;
+    SRL::Debug::Print(0, row, "> %s%s", k.input, suffix);
+
+    int cursor_col = 2 + k.input_len;   // 2 = width of the "> " prompt
+    char under = suffix[0] ? suffix[0] : ' ';
+    if (block_on) SRL::Debug::Print(cursor_col, row, "%s", CURSOR_BLOCK_STR);
+    else          SRL::Debug::Print(cursor_col, row, "%c", under);
+}
+
+// Half-period, in frames, of the cursor blink (~0.33s at 60fps -> ~1.5Hz).
+#define CURSOR_BLINK_FRAMES 20
+
 static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, int current_word_len) {
+    // One-time: install the solid-block glyph the cursor prints. Done here (not
+    // at boot) so VDP2/the font are guaranteed up by the first render.
+    static bool glyph_ready = false;
+    if (!glyph_ready) { install_block_glyph(); glyph_ready = true; }
+
+    // Advance the blink phase once per render (one render == one frame).
+    static uint32_t blink = 0;
+    bool block_on = ((blink++ / CURSOR_BLINK_FRAMES) & 1) != 0;
+
     // Keyboard hidden (real-keyboard user): the console's last line is already the
     // ">" prompt, so draw the input over it instead of on a separate row below --
     // otherwise the prompt shows twice. Clear the now-unused row underneath.
@@ -288,25 +335,12 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
         int row = base - 1;                     // over the console's last (prompt) line
         SRL::Debug::PrintClearLine(base);
         SRL::Debug::PrintClearLine(row);
-        
-        // Print with prediction if available
-        if (prediction && k.input_len < KB_INPUT_MAX - 1) {
-            const char* suffix = prediction->text + current_word_len;
-            SRL::Debug::Print(0, row, "> %s\\c9%s\\c0_", k.input, suffix); // Use Saturn debug color codes if supported, or just inline
-        } else {
-            SRL::Debug::Print(0, row, "> %s_", k.input);
-        }
+        draw_input_line(row, k, prediction, current_word_len, block_on);
         return;
     }
     int row = base;   // input line sits directly below the console
     SRL::Debug::PrintClearLine(row);
-    
-    if (prediction && k.input_len < KB_INPUT_MAX - 1) {
-        const char* suffix = prediction->text + current_word_len;
-        SRL::Debug::Print(0, row, "> %s%s (pred)", k.input, suffix); // Fallback visualization for onscreen keyboard
-    } else {
-        SRL::Debug::Print(0, row, "> %s_", k.input);
-    }
+    draw_input_line(row, k, prediction, current_word_len, block_on);
     for (int r = 0; r < KB_ROWS; r++) {
         char rowbuf[KB_COLS * 2 + 1];
         int p = 0;
@@ -318,7 +352,7 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
         SRL::Debug::PrintClearLine(row + 1 + r);
         SRL::Debug::Print(2, row + 1 + r, "%s", rowbuf);
     }
-    SRL::Debug::Print(0, row + 1 + KB_ROWS, "A=enter B=delete C=type X=space");
+    SRL::Debug::Print(0, row + 1 + KB_ROWS, "A=enter B=delete C=type Y=space");
 }
 
 // ---- global reboot command -------------------------------------------------
@@ -475,7 +509,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         DictionaryWord* prediction = predict_with_context(g_typeahead_root, prev_word, current_word);
 
         // Accept autocomplete on TAB or RIGHT
-        if ((((ke.kind == SATURN_KEY_CHAR && ke.ch == '\t') || ke.kind == SATURN_KEY_RIGHT) || 
+        if (((ke.kind == SATURN_KEY_TAB || ke.kind == SATURN_KEY_RIGHT) ||
             (ke.kind == SATURN_KEY_NONE && g_pad->WasPressed(Button::Right) && !pad_scroll_shift())) 
             && prediction) 
         {
@@ -737,7 +771,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
                 SRL::Debug::Print(4, 4 + SAVE_SLOTS + r, "%s", rowbuf);
             }
             SRL::Debug::Print(2, 5 + SAVE_SLOTS + KB_ROWS, "%s",
-                hint("C=type X=space  B=back  A=OK", "type name  Esc=back  Enter=OK"));
+                hint("C=type Y=space  B=back  A=OK", "type name  Esc=back  Enter=OK"));
         }
         SRL::Core::Synchronize();
     }
