@@ -101,6 +101,7 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (!emit) return ev;
 
     if (code == 90 || code == 25) { ev.kind = SATURN_KEY_ENTER; return ev; }
+    if (code == 13)               { ev.kind = SATURN_KEY_TAB; return ev; }       // Tab (PS/2 set 2)
     if (code == 102)              { ev.kind = SATURN_KEY_BACKSPACE; return ev; }
     if (code == 118)              { ev.kind = SATURN_KEY_ESCAPE; return ev; }  // Esc
     if (code == 134)              { ev.kind = SATURN_KEY_LEFT;  return ev; }   // arrow keys
