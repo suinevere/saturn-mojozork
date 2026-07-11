@@ -12,6 +12,7 @@ extern "C" {
 #include "typeahead.h"
 #include "typeahead_extract.h"
 #include "typeahead_solution.h"
+#include "game_titles.h"
 }
 
 // Global typeahead trie (should be populated by the game backend eventually)
@@ -1249,9 +1250,32 @@ static int scan_z3_folder(char out[][16], int max) {
     return n;
 }
 
+// Read a game's header (release 0x02 + serial 0x12) from the CD and return its
+// display title, or NULL if unknown / unreadable. Reads one sector.
+static const char* read_game_title(const char* filename) {
+    static uint8_t hdr[2048];
+    for (int attempt = 0; attempt < 8; attempt++) {
+        SRL::Cd::File f(filename);
+        int32_t bytes = f.Size.Bytes, ssz = f.Size.SectorSize;
+        if (ssz == 2048 && bytes >= 0x1a) {
+            if (f.Open()) {
+                int32_t got = f.Read(2048, hdr);
+                f.Close();
+                if (got >= 0x1a && hdr[0] == 3)
+                    return game_title((unsigned short)((hdr[2] << 8) | hdr[3]),
+                                      (const char*)(hdr + 0x12));
+                return nullptr;
+            }
+        }
+        for (int i = 0; i < 4; i++) SRL::Core::Synchronize();
+    }
+    return nullptr;
+}
+
 const char* game_select() {
     const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
     static char names[MAX_GAMES][16];   // static so the returned pointer stays valid
+    static char labels[MAX_GAMES][40];  // display titles (or filename fallback)
     const char *items[MAX_GAMES];
     int count = scan_z3_folder(names, MAX_GAMES);
 
@@ -1265,12 +1289,21 @@ const char* game_select() {
         return nullptr;   // back to the single/multiplayer select menu
     }
 
-    for (int i = 0; i < count; i++) items[i] = names[i];
-    if (count == 1) return items[0];    // only one game: skip the menu
+    // Label each game with its title (from the header id), falling back to the
+    // filename for anything the table doesn't know.
+    for (int i = 0; i < count; i++) {
+        const char* title = read_game_title(names[i]);
+        int j = 0;
+        const char* src = title ? title : names[i];
+        for (; src[j] && j < 39; j++) labels[i][j] = src[j];
+        labels[i][j] = '\0';
+        items[i] = labels[i];
+    }
+    if (count == 1) return names[0];    // only one game: skip the menu
 
     int sel = menu_select("Please Select a game:", items, count);
     if (sel < 0) return nullptr;   // B/Esc cancelled: caller returns to the mode menu
-    return items[sel];
+    return names[sel];             // the caller loads by filename, not the label
 }
 
 // ---- online mode (multizork telnet terminal) -------------------------------
