@@ -789,12 +789,12 @@ static int menu_select(const char *title, const char *const *items, int count) {
 
         menu_clear();
         SRL::Debug::Print(2, 2, "%s", title);
-        if (top > 0)       SRL::Debug::Print(4, 3, "^ more");
+        if (top > 0)       SRL::Debug::Print(1, 3, "^ more");
         for (int i = top; i < last; i++)
-            SRL::Debug::Print(4, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
-        if (last < count)  SRL::Debug::Print(4, 4 + VIS, "v more");
-        SRL::Debug::Print(2, 6 + VIS, "%s",
-            hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
+            SRL::Debug::Print(1, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
+        if (last < count)  SRL::Debug::Print(1, 4 + VIS, "v more");
+        SRL::Debug::Print(1, 6 + VIS, "%s",
+            hint("pad picks   C=ok   B=back", "dir picks   Enter=ok   Esc=back"));
         SRL::Core::Synchronize();
     }
 }
@@ -1250,10 +1250,12 @@ static int scan_z3_folder(char out[][16], int max) {
     return n;
 }
 
-// Read a game's header (release 0x02 + serial 0x12) from the CD and return its
-// display title, or NULL if unknown / unreadable. Reads one sector.
-static const char* read_game_title(const char* filename) {
+// Read a game's header (release 0x02 + serial 0x12) from the CD. Returns its
+// display title (NULL if unknown/unreadable) and sets *cat to its category
+// (GAME_CAT_OTHER if unknown). Reads one sector.
+static const char* read_game_info(const char* filename, int* cat) {
     static uint8_t hdr[2048];
+    *cat = GAME_CAT_OTHER;
     for (int attempt = 0; attempt < 8; attempt++) {
         SRL::Cd::File f(filename);
         int32_t bytes = f.Size.Bytes, ssz = f.Size.SectorSize;
@@ -1261,9 +1263,12 @@ static const char* read_game_title(const char* filename) {
             if (f.Open()) {
                 int32_t got = f.Read(2048, hdr);
                 f.Close();
-                if (got >= 0x1a && hdr[0] == 3)
-                    return game_title((unsigned short)((hdr[2] << 8) | hdr[3]),
-                                      (const char*)(hdr + 0x12));
+                if (got >= 0x1a && hdr[0] == 3) {
+                    unsigned short rel = (unsigned short)((hdr[2] << 8) | hdr[3]);
+                    const char* serial = (const char*)(hdr + 0x12);
+                    *cat = game_category(rel, serial);
+                    return game_title(rel, serial);
+                }
                 return nullptr;
             }
         }
@@ -1272,10 +1277,16 @@ static const char* read_game_title(const char* filename) {
     return nullptr;
 }
 
+static const char *const CAT_NAMES[GAME_CAT_COUNT] = {
+    "The Zork Universe", "The Planetfall Series", "The Mystery Series",
+    "Tales of Adventure & Fantasy", "Sci-Fi & Horror", "Comedy", "Other",
+};
+
 const char* game_select() {
     const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
     static char names[MAX_GAMES][16];   // static so the returned pointer stays valid
     static char labels[MAX_GAMES][40];  // display titles (or filename fallback)
+    static int  cats[MAX_GAMES];
     const char *items[MAX_GAMES];
     int count = scan_z3_folder(names, MAX_GAMES);
 
@@ -1289,21 +1300,32 @@ const char* game_select() {
         return nullptr;   // back to the single/multiplayer select menu
     }
 
-    // Label each game with its title (from the header id), falling back to the
-    // filename for anything the table doesn't know.
+    // Classify each game: title (or filename fallback) + category.
     for (int i = 0; i < count; i++) {
-        const char* title = read_game_title(names[i]);
+        const char* title = read_game_info(names[i], &cats[i]);
         int j = 0;
         const char* src = title ? title : names[i];
         for (; src[j] && j < 39; j++) labels[i][j] = src[j];
         labels[i][j] = '\0';
-        items[i] = labels[i];
     }
-    if (count == 1) return names[0];    // only one game: skip the menu
 
-    int sel = menu_select("Please Select a game:", items, count);
-    if (sel < 0) return nullptr;   // B/Esc cancelled: caller returns to the mode menu
-    return names[sel];             // the caller loads by filename, not the label
+    // Category page -> game page. Back from the game page returns to categories.
+    for (;;) {
+        int catmap[GAME_CAT_COUNT], ncat = 0;   // menu index -> category id
+        for (int c = 0; c < GAME_CAT_COUNT; c++) {
+            int any = 0;
+            for (int i = 0; i < count && !any; i++) if (cats[i] == c) any = 1;
+            if (any) { items[ncat] = CAT_NAMES[c]; catmap[ncat] = c; ncat++; }
+        }
+        int cs = (ncat == 1) ? 0 : menu_select("Choose a category:", items, ncat);
+        if (cs < 0) return nullptr;   // B/Esc at categories: back to the mode menu
+
+        int gmap[MAX_GAMES], ng = 0;   // menu index -> game index
+        for (int i = 0; i < count; i++) if (cats[i] == catmap[cs]) { items[ng] = labels[i]; gmap[ng] = i; ng++; }
+        int gs = menu_select(CAT_NAMES[catmap[cs]], items, ng);
+        if (gs < 0) { if (ncat == 1) return nullptr; else continue; }   // back to categories
+        return names[gmap[gs]];       // the caller loads by filename, not the label
+    }
 }
 
 // ---- online mode (multizork telnet terminal) -------------------------------
@@ -1549,6 +1571,7 @@ int main(void) {
     static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)",
                                    "Load Save Game", "Options" };
     const char* game_file = nullptr;
+
     for (;;) {
         int mode = menu_select("MojoZork", modes, 4);
         if (mode == 3) { options_menu(); continue; }
