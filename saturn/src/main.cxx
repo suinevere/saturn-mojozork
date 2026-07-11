@@ -12,6 +12,7 @@ extern "C" {
 #include "typeahead.h"
 #include "typeahead_extract.h"
 #include "typeahead_solution.h"
+#include "game_titles.h"
 }
 
 // Global typeahead trie (should be populated by the game backend eventually)
@@ -23,9 +24,8 @@ static TrieNode* g_typeahead_root = nullptr;
 enum { DIFF_EASY = 0, DIFF_MEDIUM = 1, DIFF_HARD = 2 };
 static int g_difficulty = DIFF_EASY;
 
-// Online server config (editable in Options -> Configure MojoZork; persisted).
-static char g_host[64] = "suinevere.duckdns.org";
-static char g_port[8]  = "23";
+// Online dial number (editable in Options -> Configure MojoZork; persisted).
+static char g_dialnum[24] = "199403";
 
 // "Load Save Game": a save slot pre-selected from the menu, applied by the first
 // in-game "restore" (queued via g_autocmd) instead of the choose_dest prompt.
@@ -171,35 +171,28 @@ static void note_input_device(const SaturnKeyEvent &ke) {
 // (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
 // typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
 // off. Defaults to Easy; only written to backup once the player changes it.
-// Persisted blob: difficulty(1) + host(NUL-terminated) + port(NUL-terminated).
-// Older 1-byte saves (difficulty only) load fine: the zeroed tail leaves the
-// host/port at their compiled defaults.
+// Persisted blob: difficulty(1) + dial number(NUL-terminated). Older 1-byte saves
+// (difficulty only) load fine: the zeroed tail leaves the dial number at default.
 static void options_load(void) {
-    uint8_t buf[128];
+    uint8_t buf[64];
     for (int z = 0; z < (int) sizeof(buf); z++) buf[z] = 0;
     if (!saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf)) return;
     if (buf[0] <= DIFF_HARD) g_difficulty = (int) buf[0];
-    int i = 1, j;
-    if (buf[i]) {
-        for (j = 0; buf[i] && j < (int) sizeof(g_host) - 1; ) g_host[j++] = (char) buf[i++];
-        g_host[j] = '\0';
-        i++;   // skip the NUL between host and port
-        if (buf[i]) {
-            for (j = 0; buf[i] && j < (int) sizeof(g_port) - 1; ) g_port[j++] = (char) buf[i++];
-            g_port[j] = '\0';
-        }
+    if (buf[1]) {
+        int j;
+        for (j = 0; buf[1 + j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = (char) buf[1 + j];
+        g_dialnum[j] = '\0';
     }
 }
 static void options_save(void) {
-    uint8_t buf[128]; int n = 0;
+    uint8_t buf[64]; int n = 0;
     buf[n++] = (uint8_t) g_difficulty;
-    for (int i = 0; g_host[i] && n < 118; i++) buf[n++] = (uint8_t) g_host[i];
-    buf[n++] = 0;
-    for (int i = 0; g_port[i] && n < 126; i++) buf[n++] = (uint8_t) g_port[i];
+    for (int i = 0; g_dialnum[i] && n < 62; i++) buf[n++] = (uint8_t) g_dialnum[i];
     buf[n++] = 0;
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
+static bool menu_confirm(const char *line1, const char *line2);  // defined below
 
 // ---- scrollback ------------------------------------------------------------
 
@@ -599,11 +592,11 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
     selected = ncand > 0 ? cands[sug_index] : nullptr;
     if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT) ke.kind = SATURN_KEY_NONE;
 
-    // Accept: A or Tab commit the ghost (Tab only on a keyboard; space is literal
-    // there). No ghost -> A submits. Gamepad Y accepts then appends a space.
+    // Accept: A or Tab commit the ghost and append a space, so the next word's
+    // typeahead starts fresh. No ghost -> A submits. Gamepad Y also accepts+space.
     bool a_press = pad && g_pad->WasPressed(Button::A);
     if (a_press || ke.kind == SATURN_KEY_TAB) {
-        if (ghost_len() > 0) accept(false);
+        if (ghost_len() > 0) accept(true);
         else if (a_press)    keyboard_submit(&k);
         ke.kind = SATURN_KEY_NONE;
     } else if (pad && pad_fired(Button::Y)) {
@@ -700,6 +693,9 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         render_keyboard(k, selected, cw_len);
         SRL::Core::Synchronize();
       }
+      // Autocomplete-accept appends a trailing space; strip trailing spaces so the
+      // parser, the reboot check, history, and the echo all see the clean command.
+      while (k.input_len > 0 && k.input[k.input_len - 1] == ' ') k.input[--k.input_len] = '\0';
       g_scroll = 0;   // a submitted line returns the view to the live bottom
       history_push(k.input);   // remember the command for Up/Down recall
       // Echo the entered command onto the game's "> " prompt line so it stays in the
@@ -797,96 +793,70 @@ static int menu_select(const char *title, const char *const *items, int count) {
 
         menu_clear();
         SRL::Debug::Print(2, 2, "%s", title);
-        if (top > 0)       SRL::Debug::Print(4, 3, "^ more");
+        if (top > 0)       SRL::Debug::Print(1, 3, "^ more");
         for (int i = top; i < last; i++)
-            SRL::Debug::Print(4, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
-        if (last < count)  SRL::Debug::Print(4, 4 + VIS, "v more");
-        SRL::Debug::Print(2, 6 + VIS, "%s",
-            hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
+            SRL::Debug::Print(1, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
+        if (last < count)  SRL::Debug::Print(1, 4 + VIS, "v more");
+        SRL::Debug::Print(1, 6 + VIS, "%s",
+            hint("pad picks   C=ok   B=back", "dir picks   Enter=ok   Esc=back"));
         SRL::Core::Synchronize();
     }
 }
 
-// Basic validation for the server host/port.
-static bool valid_host(const char *s) {
+// Basic validation for the dial number: non-empty, digits only.
+static bool valid_dialnum(const char *s) {
     if (!s[0]) return false;
-    int dot = 0;
-    for (int i = 0; s[i]; i++) {
-        char c = s[i];
-        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                 (c >= '0' && c <= '9') || c == '.' || c == '-';
-        if (!ok) return false;
-        if (c == '.') dot = 1;
-    }
-    return dot;   // require a dotted name / IP
-}
-static bool valid_port(const char *s) {
-    if (!s[0]) return false;
-    long v = 0;
-    for (int i = 0; s[i]; i++) {
-        if (s[i] < '0' || s[i] > '9') return false;
-        v = v * 10 + (s[i] - '0');
-        if (v > 65535) return false;
-    }
-    return v >= 1 && v <= 65535;
+    for (int i = 0; s[i]; i++) if (s[i] < '0' || s[i] > '9') return false;
+    return true;
 }
 
-// Configure MojoZork: edit the server host + port. L/R (or Tab) switch fields;
-// the on-screen keyboard / real keyboard edits the focused one. A/Enter accept
-// (after validation); Start/Esc cancel. Both return to the Options menu.
+// Configure MojoZork: edit the server dial number with the on-screen / real
+// keyboard. A/Enter accept (after validation); Start/Esc cancel. Both return to
+// the Options menu.
 static void config_page(void) {
-    KeyboardState kh, kp; keyboard_reset(&kh); keyboard_reset(&kp);
-    for (int i = 0; g_host[i] && kh.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&kh, g_host[i]);
-    for (int i = 0; g_port[i] && kp.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&kp, g_port[i]);
-    int focus = 0;
+    KeyboardState k; keyboard_reset(&k);
+    for (int i = 0; g_dialnum[i] && k.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&k, g_dialnum[i]);
     const char *err = "";
     SRL::Core::Synchronize();
     for (;;) {
         check_soft_reset();
         SaturnKeyEvent ke = saturn_keyboard_poll();
         note_input_device(ke);
-        KeyboardState *cur = focus == 0 ? &kh : &kp;
-        bool accept = false, cancel = false, swap = false;
-        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(cur, ke.ch);
-        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(cur);
+        bool accept = false, cancel = false;
+        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
+        else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     accept = true;
         else if (ke.kind == SATURN_KEY_ESCAPE)    cancel = true;
-        else if (ke.kind == SATURN_KEY_TAB)       swap = true;
-        else if (ke.kind == SATURN_KEY_CLEAR)     { cur->input_len = 0; cur->input[0] = '\0'; }
+        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }
         else {
-            if (g_pad->WasPressed(Button::Up))    keyboard_move(cur, 0, -1);
-            if (g_pad->WasPressed(Button::Down))  keyboard_move(cur, 0,  1);
-            if (g_pad->WasPressed(Button::Left))  keyboard_move(cur, -1, 0);
-            if (g_pad->WasPressed(Button::Right)) keyboard_move(cur,  1, 0);
-            if (g_pad->WasPressed(Button::C))     keyboard_type(cur);
-            if (g_pad->WasPressed(Button::B))     keyboard_backspace(cur);
-            if (g_pad->WasPressed(Button::L) || g_pad->WasPressed(Button::R)) swap = true;
+            if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
+            if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
+            if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
+            if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
+            if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
             if (g_pad->WasPressed(Button::A))     accept = true;
             if (g_pad->WasPressed(Button::START)) cancel = true;
         }
-        if (swap) focus ^= 1;
         if (cancel) return;
         if (accept) {
-            if (!valid_host(kh.input))      err = "Invalid host.";
-            else if (!valid_port(kp.input)) err = "Invalid port (1-65535).";
+            if (!valid_dialnum(k.input)) err = "Invalid number (digits only).";
             else {
                 int j;
-                for (j = 0; kh.input[j] && j < (int) sizeof(g_host) - 1; j++) g_host[j] = kh.input[j];
-                g_host[j] = '\0';
-                for (j = 0; kp.input[j] && j < (int) sizeof(g_port) - 1; j++) g_port[j] = kp.input[j];
-                g_port[j] = '\0';
+                for (j = 0; k.input[j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = k.input[j];
+                g_dialnum[j] = '\0';
                 options_save();
                 return;
             }
         }
         menu_clear();
         SRL::Debug::Print(2, 1, "Configure MojoZork");
-        SRL::Debug::Print(2, 3, "%c Host: %s%s", focus == 0 ? '>' : ' ', kh.input, focus == 0 ? "_" : "");
-        SRL::Debug::Print(2, 4, "%c Port: %s%s", focus == 1 ? '>' : ' ', kp.input, focus == 1 ? "_" : "");
+        SRL::Debug::Print(2, 3, "Server dial number:");
+        SRL::Debug::Print(2, 4, "> %s_", k.input);
         for (int r = 0; r < KB_ROWS; r++) {
             char rowbuf[KB_COLS * 2 + 1]; int p = 0;
             for (int c = 0; c < KB_COLS; c++) {
-                rowbuf[p++] = (r == cur->cursor_row && c == cur->cursor_col) ? '[' : ' ';
+                rowbuf[p++] = (r == k.cursor_row && c == k.cursor_col) ? '[' : ' ';
                 rowbuf[p++] = KB_LAYOUT[r][c];
             }
             rowbuf[p] = '\0';
@@ -894,7 +864,7 @@ static void config_page(void) {
         }
         if (err[0]) SRL::Debug::Print(2, 11, "%s", err);
         SRL::Debug::Print(2, 13, "%s",
-            hint("L/R=field C=type B=del A=save Start=cancel", "Tab=field Enter=save Esc=cancel"));
+            hint("C=type B=del  A=save  Start=cancel", "type number  Enter=save  Esc=cancel"));
         SRL::Core::Synchronize();
     }
 }
@@ -927,9 +897,11 @@ static void options_menu(void) {
         if (back) break;
         if (act) {
             if (sel == 1) { config_page(); }
-            else if (sel == 2) {   // Return to Title Screen (never returns)
-                if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
-                soft_reset_to_title();
+            else if (sel == 2) {   // Return to Title Screen (soft reset; never returns on Yes)
+                if (menu_confirm("Return to the title screen?", "Are you sure?")) {
+                    if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
+                    soft_reset_to_title();
+                }
             }
             else if (sel == 3) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
@@ -1284,31 +1256,72 @@ static int scan_z3_folder(char out[][16], int max) {
     return n;
 }
 
+// Read a game's header (release 0x02 + serial 0x12) from the CD. Returns its
+// display title (NULL if unknown/unreadable) and sets *cat to its category
+// (GAME_CAT_OTHER if unknown). Reads one sector.
+static const char* read_game_info(const char* filename, int* cat) {
+    static uint8_t hdr[64];
+    *cat = GAME_CAT_OTHER;
+    // One sector-addressed LoadBytes instead of Size-stat + Open + Read + Close:
+    // fewer GFS calls per file (faster over ~25 games) and it sidesteps the
+    // flaky first-access GFS_GetFileSize the old Size check had to retry around.
+    for (int attempt = 0; attempt < 8; attempt++) {
+        SRL::Cd::File f(filename);
+        int32_t got = f.LoadBytes(0, (int32_t) sizeof(hdr), hdr);   // header lives in sector 0
+        if (got >= 0x1a) {
+            if (hdr[0] != 3) return nullptr;                        // read ok, not a v3 story
+            unsigned short rel = (unsigned short)((hdr[2] << 8) | hdr[3]);
+            const char* serial = (const char*)(hdr + 0x12);
+            *cat = game_category(rel, serial);
+            return game_title(rel, serial);
+        }
+        for (int i = 0; i < 4; i++) SRL::Core::Synchronize();
+    }
+    return nullptr;
+}
+
+static const char *const CAT_NAMES[GAME_CAT_COUNT] = {
+    "The Zork Universe", "The Planetfall Series", "The Mystery Series",
+    "Tales of Adventure & Fantasy", "Sci-Fi & Horror", "Comedy", "Other",
+};
+
+// Release year parsed from a label's trailing "(YYYY)" (e.g. "Zork I (1980)").
+// Returns 9999 when there's no 4-digit year, so undated games sort after dated
+// ones (then alphabetically among themselves) per the menu's sort order.
+// Lexicographic compare, <0 / 0 / >0 like strcmp (avoids a <string.h> dependency).
+static int label_cmp(const char* a, const char* b) {
+    while (*a && (*a == *b)) { a++; b++; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+static int label_year(const char* s) {
+    int n = 0; while (s[n]) n++;
+    if (n >= 6 && s[n-6] == '(' && s[n-1] == ')') {
+        int y = 0;
+        for (int k = n-5; k <= n-2; k++) {
+            if (s[k] < '0' || s[k] > '9') return 9999;
+            y = y * 10 + (s[k] - '0');
+        }
+        return y;
+    }
+    return 9999;
+}
+
 const char* game_select() {
     const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
     static char names[MAX_GAMES][16];   // static so the returned pointer stays valid
+    static char labels[MAX_GAMES][40];  // display titles (or filename fallback)
+    static int  cats[MAX_GAMES];
     const char *items[MAX_GAMES];
+
+    // Reading each game's header off the CD takes a moment; show a notice first.
+    menu_clear();
+    SRL::Debug::Print(2, 2, "Loading games...");
+    SRL::Core::Synchronize();
+
     int count = scan_z3_folder(names, MAX_GAMES);
 
-    int sel = 0;
-    SRL::Core::Synchronize();   // consume any stale button/key edge
-    for (;;) {
-        if (g_pad->WasPressed(Button::Up))    sel = (sel - 1 + count) % count;
-        if (g_pad->WasPressed(Button::Down))  sel = (sel + 1) % count;
-        bool pick = g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START);
-        bool cancel = g_pad->WasPressed(Button::B);
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        if (ke.kind == SATURN_KEY_ENTER) pick = true;
-        else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
-        else if (ke.kind == SATURN_KEY_CHAR && ke.ch >= '1' && ke.ch <= '9') {
-            int idx = (int) (ke.ch - '1');
-            if (idx < count) { sel = idx; pick = true; }
-        }
-        else if (ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + count) % count;
-        else if (ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % count;
-        if (cancel) return "-1";
-        if (pick)   return items[sel];
-
+    if (count <= 0) {
         menu_clear();
         SRL::Debug::Print(2, 2, "%s", (count < 0)
             ? "No Z3 folder found on the CD."
@@ -1318,12 +1331,45 @@ const char* game_select() {
         return nullptr;   // back to the single/multiplayer select menu
     }
 
-    for (int i = 0; i < count; i++) items[i] = names[i];
-    if (count == 1) return items[0];    // only one game: skip the menu
+    // Classify each game: title (or filename fallback) + category.
+    for (int i = 0; i < count; i++) {
+        const char* title = read_game_info(names[i], &cats[i]);
+        int j = 0;
+        const char* src = title ? title : names[i];
+        for (; src[j] && j < 39; j++) labels[i][j] = src[j];
+        labels[i][j] = '\0';
+    }
 
-    int sel = menu_select("Please Select a game:", items, count);
-    if (sel < 0) return nullptr;   // B/Esc cancelled: caller returns to the mode menu
-    return items[sel];
+    // Category page -> game page. Back from the game page returns to categories.
+    for (;;) {
+        int catmap[GAME_CAT_COUNT], ncat = 0;   // menu index -> category id
+        for (int c = 0; c < GAME_CAT_COUNT; c++) {
+            int any = 0;
+            for (int i = 0; i < count && !any; i++) if (cats[i] == c) any = 1;
+            if (any) { items[ncat] = CAT_NAMES[c]; catmap[ncat] = c; ncat++; }
+        }
+        int cs = (ncat == 1) ? 0 : menu_select("Choose a category:", items, ncat);
+        if (cs < 0) return nullptr;   // B/Esc at categories: back to the mode menu
+
+        int gmap[MAX_GAMES], ng = 0;   // menu index -> game index
+        for (int i = 0; i < count; i++) if (cats[i] == catmap[cs]) gmap[ng++] = i;
+        // Sort within the category by release year (from the label's "(YYYY)"),
+        // then alphabetically by title (also breaks ties among undated games).
+        for (int a = 1; a < ng; a++) {
+            int key = gmap[a], ya = label_year(labels[key]);
+            int b = a - 1;
+            while (b >= 0) {
+                int yb = label_year(labels[gmap[b]]);
+                if (yb < ya || (yb == ya && label_cmp(labels[gmap[b]], labels[key]) <= 0)) break;
+                gmap[b+1] = gmap[b]; b--;
+            }
+            gmap[b+1] = key;
+        }
+        for (int i = 0; i < ng; i++) items[i] = labels[gmap[i]];
+        int gs = menu_select(CAT_NAMES[catmap[cs]], items, ng);
+        if (gs < 0) { if (ncat == 1) return nullptr; else continue; }   // back to categories
+        return names[gmap[gs]];       // the caller loads by filename, not the label
+    }
 }
 
 // ---- online mode (multizork telnet terminal) -------------------------------
@@ -1417,13 +1463,7 @@ static void ensure_online_typeahead(void) {
 // times because the NetLink<->DreamPi carrier handshake is probabilistic.
 static void online_mode(void) {
     ensure_online_typeahead();   // load the Zork I vocabulary before the modem is up
-    // Dial the configured server as "host:port" (ATDT<host:port>); change it in
-    // Options -> Configure MojoZork.
-    char number[80]; int nn = 0;
-    for (int i = 0; g_host[i] && nn < 70; i++) number[nn++] = g_host[i];
-    number[nn++] = ':';
-    for (int i = 0; g_port[i] && nn < 78; i++) number[nn++] = g_port[i];
-    number[nn] = '\0';
+    const char *number = g_dialnum;   // change it in Options -> Configure MojoZork
 
     // ---- connect, with auto-redial on carrier-training failure ----
     net_connect_result_t rc = NET_DIAL_FAIL;
@@ -1575,6 +1615,7 @@ int main(void) {
     static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)",
                                    "Load Save Game", "Options" };
     const char* game_file = nullptr;
+
     for (;;) {
         int mode = menu_select("MojoZork", modes, 4);
         if (mode == 3) { options_menu(); continue; }
