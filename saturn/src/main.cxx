@@ -11,6 +11,7 @@ extern "C" {
 #include "net/net_connect.h"
 #include "typeahead.h"
 #include "typeahead_extract.h"
+#include "typeahead_solution.h"
 }
 
 // Global typeahead trie (should be populated by the game backend eventually)
@@ -34,8 +35,10 @@ static void ensure_typeahead() {
     if (g_typeahead_root && story == g_ta_story) return;   // already built for this story
     if (g_typeahead_root) { destroy_typeahead(g_typeahead_root); g_typeahead_root = nullptr; }
     g_typeahead_root = create_trie_node();
-    if (story != nullptr && len > 0)
-        build_typeahead_from_story(g_typeahead_root, story, len);
+    if (story != nullptr && len > 0) {
+        build_typeahead_from_story(g_typeahead_root, story, len);   // grammar layer
+        apply_solution_overlay(g_typeahead_root, story, len);       // winning-path boosts
+    }
     g_ta_story = story;
 }
 

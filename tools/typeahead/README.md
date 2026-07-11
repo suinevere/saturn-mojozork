@@ -47,6 +47,39 @@ cd ../../saturn && ./compile.bat
 
 Omit `--script` to get the full dictionary with flat weights and no transitions.
 
+## Runtime vs. build-time
+
+The device now decodes the loaded game's dictionary + grammar **at runtime**
+(`saturn/src/typeahead_extract.c`), so every v3 game gets the grammar layer with
+no baked-in table. `gen_typeahead.py` remains useful for inspecting/prototyping
+output on the host (`--dump`, `--out`), but its emitted table is no longer
+compiled in.
+
+The winning-path "easy mode" ships as a compiled **solution overlay** applied on
+top of the runtime grammar layer.
+
+## Solution overlay (easy mode)
+
+A *solution file* is the winning walkthrough: plain text, **one command per
+line**, `#` for comments (e.g. `zork1_walkthrough.txt`). `gen_solution.py` turns
+one or more of these into `saturn/src/typeahead_solution.c`:
+
+```sh
+python gen_solution.py \
+    --game ../../saturn/cd/data/Z3/ZORK1.Z3:zork1_walkthrough.txt \
+    --out  ../../saturn/src/typeahead_solution.c
+# add more with repeated --game STORY:SCRIPT
+```
+
+- Each overlay is keyed by the story's **release number + serial** (Z-machine
+  header 0x02 / 0x12), so it only applies to the exact game it was built for;
+  other games fall back to the grammar layer.
+- It carries **base-weight boosts** (word frequency in the solve) and
+  **transition boosts** (command word-bigrams), emitted in the runtime's own
+  spelling so they resolve against the on-device trie.
+- At load, `apply_solution_overlay()` raises those base weights and adds the
+  winning-path transitions on top of the grammar build.
+
 ## Tuning "easy mode"
 
 `zork1_walkthrough.txt` is the winning command script (one command per line;
