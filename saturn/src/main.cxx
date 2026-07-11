@@ -445,6 +445,23 @@ extern "C" void saturn_writestr(const char *str, size_t slen) {
 extern "C" void saturn_readline(char *buf, int maxlen) {
     if (maxlen < 2) { if (maxlen > 0) buf[0] = '\0'; return; }
     ensure_typeahead(); // decode the loaded game's dictionary/grammar (once per story)
+
+    // Mark the words on the current screen so objects the game just described lead
+    // their suggestions (type "o" -> open, accept, and the mailbox on screen tops
+    // the object list). The screen is static while we wait for input, so once is
+    // enough per prompt.
+    {
+        char scr[1024]; int sp = 0;
+        int total = console_line_count(), rows = console_height();
+        int startln = (total > rows) ? (total - rows) : 0;
+        for (int li = startln; li < total && sp < (int) sizeof(scr) - 1; li++) {
+            const char* ln = console_get_line(li);
+            for (int j = 0; ln[j] && sp < (int) sizeof(scr) - 1; j++) scr[sp++] = ln[j];
+            if (sp < (int) sizeof(scr) - 1) scr[sp++] = ' ';
+        }
+        scr[sp] = '\0';
+        typeahead_set_screen(g_typeahead_root, scr);
+    }
     
     // Keep the keyboard state (and cursor position) across prompts, so the picker
     // stays where the player left it instead of jumping back to 'a' every command.
