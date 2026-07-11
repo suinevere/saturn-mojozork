@@ -36,12 +36,21 @@ void add_next_word(DictionaryWord* source, DictionaryWord* target, int weight) {
 // Create an empty Trie Node
 TrieNode* create_trie_node() {
     TrieNode* node = (TrieNode*)TYPEAHEAD_MALLOC(sizeof(TrieNode));
+    node->first_child = NULL;
+    node->next_sibling = NULL;
+    node->letter = 0;
     node->word_data = NULL;
     node->best_completion = NULL;
-    for (int i = 0; i < ALPHABET_SIZE; i++) {
-        node->children[i] = NULL;
-    }
     return node;
+}
+
+// Find the child of 'node' for letter 'c' (lowercase a-z), or NULL. Walks the
+// sibling list -- short for English tries (small branching factor).
+static TrieNode* find_child(TrieNode* node, char c) {
+    for (TrieNode* ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
+        if (ch->letter == c) return ch;
+    }
+    return NULL;
 }
 
 // Insert a word into the Trie and update 'best_completion' caches
@@ -50,13 +59,17 @@ void insert_trie(TrieNode* root, DictionaryWord* word) {
     int len = strlen(word->text);
 
     for (int i = 0; i < len; i++) {
-        int index = tolower(word->text[i]) - 'a';
-        if (index < 0 || index >= ALPHABET_SIZE) continue; // Skip non-letters
+        char c = (char)tolower((unsigned char)word->text[i]);
+        if (c < 'a' || c > 'z') continue; // Skip non-letters
 
-        if (current->children[index] == NULL) {
-            current->children[index] = create_trie_node();
+        TrieNode* child = find_child(current, c);
+        if (child == NULL) {
+            child = create_trie_node();
+            child->letter = c;
+            child->next_sibling = current->first_child; // prepend to child list
+            current->first_child = child;
         }
-        current = current->children[index];
+        current = child;
 
         // OPTIMIZATION: Update the cache as we traverse down
         // If this node has no best completion, or the new word is heavier, swap it.
@@ -113,11 +126,10 @@ DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, 
     // 2. Fallback to Trie base_weight prediction
     TrieNode* current_node = root;
     for (int i = 0; i < prefix_len; i++) {
-        int index = tolower(prefix[i]) - 'a';
-        if (index < 0 || index >= ALPHABET_SIZE || current_node->children[index] == NULL) {
-            return NULL; // No matches
-        }
-        current_node = current_node->children[index];
+        char c = (char)tolower((unsigned char)prefix[i]);
+        if (c < 'a' || c > 'z') return NULL;
+        current_node = find_child(current_node, c);
+        if (current_node == NULL) return NULL; // No matches
     }
 
     return current_node->best_completion;
@@ -128,9 +140,10 @@ DictionaryWord* find_exact_word(TrieNode* root, const char* text) {
     TrieNode* current = root;
     int len = strlen(text);
     for (int i = 0; i < len; i++) {
-        int index = tolower(text[i]) - 'a';
-        if (index < 0 || index >= ALPHABET_SIZE || current->children[index] == NULL) return NULL;
-        current = current->children[index];
+        char c = (char)tolower((unsigned char)text[i]);
+        if (c < 'a' || c > 'z') return NULL;
+        current = find_child(current, c);
+        if (current == NULL) return NULL;
     }
     return current->word_data;
 }

@@ -40,10 +40,17 @@ struct DictionaryWord {
     NextWordLink* next_words;
 };
 
+// Trie node using a first-child / next-sibling layout instead of a dense
+// children[26] array. English words branch sparsely, so a 26-pointer array
+// wastes ~100 bytes per node; storing only the children that exist cuts the
+// node from ~112 to ~20 bytes (~5x less RAM for a full game dictionary). The
+// letter this node represents lives in `letter`; the root's is unused.
 typedef struct TrieNode {
-    struct TrieNode* children[ALPHABET_SIZE];
-    DictionaryWord* word_data;
-    DictionaryWord* best_completion;
+    struct TrieNode* first_child;    // head of this node's child list
+    struct TrieNode* next_sibling;   // next child of this node's parent
+    char letter;                     // 'a'..'z' for this node (0 for the root)
+    DictionaryWord* word_data;       // set if a word ends exactly here
+    DictionaryWord* best_completion; // heaviest word passing through this prefix
 } TrieNode;
 
 // Library functions
