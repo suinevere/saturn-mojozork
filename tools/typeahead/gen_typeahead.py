@@ -65,9 +65,14 @@ def _decode(zchars):
 
 
 def extract_dictionary(data):
-    """Return the list of dictionary words decoded from a v3 story image."""
-    if data[0] != 3:
-        print(f"warning: story version is {data[0]}, expected 3", file=sys.stderr)
+    """Return the list of dictionary words decoded from a story image.
+
+    The encoded word is 4 bytes (6 z-chars) in v1-v3 and 6 bytes (9 z-chars) in
+    v4+; the parser only ever compares those characters, so the decoded forms
+    are authoritative even though longer real words get truncated here.
+    """
+    version = data[0]
+    word_bytes = 4 if version < 4 else 6
     p = _w16(data, 0x08)                 # dictionary address (header offset 0x08)
     n_sep = data[p]; p += 1
     p += n_sep                           # skip word separators
@@ -76,11 +81,103 @@ def extract_dictionary(data):
     words = []
     for k in range(count):
         off = p + k * entry_len
-        w1, w2 = _w16(data, off), _w16(data, off + 2)
-        z = [(w1 >> 10) & 0x1f, (w1 >> 5) & 0x1f, w1 & 0x1f,
-             (w2 >> 10) & 0x1f, (w2 >> 5) & 0x1f, w2 & 0x1f]
+        z = []
+        for b in range(0, word_bytes, 2):
+            w = _w16(data, off + b)
+            z += [(w >> 10) & 0x1f, (w >> 5) & 0x1f, w & 0x1f]
         words.append(_decode(z).rstrip())
     return words
+
+
+# --- Full-word recovery from the story's own text ------------------------------
+#
+# The dictionary truncates words, so to show full spellings we harvest clean
+# words from two places that are at fixed header offsets and decode reliably:
+# object short-names and the abbreviations table. Each decoded word is matched
+# back to a dictionary entry by its truncated prefix.
+
+def _decode_zstring(data, addr, abbr_table, depth=0):
+    """Decode a Z-string at a byte address, expanding abbreviations (v3)."""
+    zs, a = [], addr
+    while True:
+        w = _w16(data, a); a += 2
+        zs += [(w >> 10) & 0x1f, (w >> 5) & 0x1f, w & 0x1f]
+        if w & 0x8000 or a + 1 >= len(data):
+            break
+    out, alpha, i = [], 0, 0
+    while i < len(zs):
+        c = zs[i]
+        if c == 0:
+            out.append(' '); alpha = 0; i += 1; continue
+        if c in (1, 2, 3) and depth == 0:          # abbreviations don't nest in v3
+            if i + 1 < len(zs):
+                idx = 32 * (c - 1) + zs[i + 1]
+                aa = _w16(data, abbr_table + 2 * idx) * 2
+                out.append(_decode_zstring(data, aa, abbr_table, 1)); i += 2; alpha = 0; continue
+            i += 1; continue
+        if c == 4:
+            alpha = 1; i += 1; continue
+        if c == 5:
+            alpha = 2; i += 1; continue
+        if alpha == 0:
+            out.append(A0[c - 6])
+        elif alpha == 1:
+            out.append(A1[c - 6])
+        else:
+            if c == 6:
+                if i + 2 < len(zs):
+                    zc = (zs[i + 1] << 5) | zs[i + 2]
+                    if 32 <= zc < 127:
+                        out.append(chr(zc))
+                    i += 3; alpha = 0; continue
+                i += 1; continue
+            out.append(A2[c - 6])
+        alpha = 0; i += 1
+    return ''.join(out)
+
+
+def harvest_full_words(data):
+    """Return a set of clean words from object short-names + abbreviations."""
+    if data[0] >= 4:
+        return set()                     # object format differs; v3-only for now
+    obj_table = _w16(data, 0x0a)
+    abbr_table = _w16(data, 0x18)
+    base = obj_table + 31 * 2            # v3: 31 two-byte property defaults
+    min_prop, props, k = 1 << 30, [], 0
+    while base + k * 9 + 9 <= len(data) and base + k * 9 < min_prop:
+        prop = _w16(data, base + k * 9 + 7)
+        if 0 < prop < min_prop:
+            min_prop = prop
+        props.append(prop); k += 1
+    texts = []
+    for prop in props:
+        if 0 < prop < len(data) and data[prop] != 0:
+            texts.append(_decode_zstring(data, prop + 1, abbr_table))
+    for idx in range(96):               # abbreviation strings themselves
+        aa = _w16(data, abbr_table + 2 * idx) * 2
+        if aa < len(data):
+            texts.append(_decode_zstring(data, aa, abbr_table, 1))
+    words = set()
+    for t in texts:
+        words.update(re.findall(r"[a-z]{3,}", t.lower()))
+    return words
+
+
+def full_word_map(dict_words, harvested):
+    """Map each 6-char (truncated) dict form to a full spelling when we have one."""
+    by_prefix = {}
+    for w in harvested:
+        by_prefix.setdefault(w[:6], []).append(w)
+    mapping = {}
+    for d in dict_words:
+        if len(d) < 6:
+            continue                     # not truncated -- already the full word
+        cands = by_prefix.get(d, [])
+        if d in cands or not cands:
+            continue                     # complete word, or nothing better found
+        # Prefer the shortest completion (avoids over-long / plural noise).
+        mapping[d] = min(cands, key=len)
+    return mapping
 
 
 # --- Walkthrough parsing -------------------------------------------------------
@@ -106,20 +203,21 @@ def parse_script(path):
 
 # --- Weight model --------------------------------------------------------------
 
-def build_model(dict_words, freq, bigrams):
+def build_model(dict_words, freq, bigrams, fullmap):
     """Merge dictionary + walkthrough into {word: base_weight} and transitions."""
-    # Keep dictionary words that are plain letters (the trie only stores a-z).
+    # Keep dictionary words that are plain letters (the trie only stores a-z),
+    # substituting the recovered full spelling where we have one.
     base = {}
     for w in dict_words:
         if re.fullmatch(r"[a-z]+", w):
-            base[w] = 30
+            base[fullmap.get(w, w)] = 30
 
     # A walkthrough word is the full spelling of a (truncated) dictionary word.
-    # Prefer the full spelling for display; the parser only reads its first 6.
+    # Prefer it (verified in-game usage): drop any entry sharing its 6-char key.
     for full in list(freq):
         key = full[:6]
-        if key in base and key != full:
-            base.pop(key, None)
+        for existing in [b for b in base if b[:6] == key and b != full]:
+            base.pop(existing, None)
         base[full] = base.get(full, 30)
 
     # Frequency in the winning path drives base completion weight.
@@ -225,23 +323,28 @@ def main():
     ap.add_argument("--script", help="winning command walkthrough (one command per line)")
     ap.add_argument("--out", help="output C file (default: print a summary only)")
     ap.add_argument("--dump", action="store_true", help="print the decoded dictionary and exit")
+    ap.add_argument("--no-fullwords", action="store_true",
+                    help="keep 6-char dictionary forms instead of recovering full spellings")
     args = ap.parse_args()
 
     data = open(args.story, "rb").read()
     dict_words = extract_dictionary(data)
 
+    fullmap = {} if args.no_fullwords else full_word_map(dict_words, harvest_full_words(data))
+
     if args.dump:
         for w in dict_words:
-            print(w)
-        print(f"\n{len(dict_words)} dictionary entries", file=sys.stderr)
+            print(fullmap.get(w, w))
+        print(f"\n{len(dict_words)} dictionary entries; "
+              f"{len(fullmap)} expanded to full words", file=sys.stderr)
         return
 
     freq, bigrams = (Counter(), Counter())
     if args.script:
         freq, bigrams = parse_script(args.script)
 
-    base, transitions = build_model(dict_words, freq, bigrams)
-    print(f"dictionary words: {len(dict_words)}")
+    base, transitions = build_model(dict_words, freq, bigrams, fullmap)
+    print(f"dictionary words: {len(dict_words)}   full-word expansions: {len(fullmap)}")
     print(f"script words: {len(freq)}   bigrams: {len(bigrams)}")
     print(f"vocabulary: {len(base)}   transitions: {len(transitions)}")
 

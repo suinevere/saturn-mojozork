@@ -7,8 +7,12 @@ toward the winning move ("easy mode").
 ## What it does
 
 1. **Words** — decodes the story's own parser dictionary (the exact set of words
-   the game accepts). Z3 stores each word truncated to 6 characters; that's all
-   the parser ever compares, so these forms are authoritative.
+   the game accepts). Z3 stores each word truncated to 6 characters (v4+ store
+   9); that's all the parser ever compares, so these forms are authoritative.
+   To show full spellings anyway, truncated entries are matched against clean
+   words harvested from the story's own **object short-names** and
+   **abbreviations table** (e.g. `screwd` -> `screwdriver`, `lanter` ->
+   `lantern`). Pass `--no-fullwords` to keep the raw 6-char forms.
 2. **Weights + combinations** — reads a walkthrough (one command per line). Word
    frequency becomes the base completion weight; consecutive words within a
    command become weighted context transitions (`kill`→`troll`→`with`→`sword`).
@@ -45,8 +49,10 @@ uses becomes a stronger suggestion.
 
 ## Notes
 
-- Fits comfortably in HWRAM for Zork I (~221 KB trie, ~240 KB headroom). Games
-  with much larger dictionaries may want a more compact trie node (the current
-  `TrieNode` holds 26 child pointers); ask if you want that optimization.
+- Memory is comfortable across the whole v3 library. The trie uses a compact
+  first-child/next-sibling node (~20 bytes on the SH2), so even the largest
+  dictionary here (Sorcerer, ~1000 words) is ~54 KB, leaving ~350 KB of the
+  572 KB HWRAM heap free after the story image loads.
 - Works on any v3 (`.z3`) story, not just Zork — point `--story` at any of the
-  games under `saturn/cd/data/Z3/`.
+  games under `saturn/cd/data/Z3/`. Full-word recovery is v3-only for now; v4+
+  dictionaries still decode (9-char words) but keep their truncated forms.
