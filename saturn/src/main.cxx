@@ -219,6 +219,35 @@ static void pad_scroll_update(void) {
 // should not also move the on-screen keyboard cursor with it.
 static bool pad_scroll_shift(void) { return g_pad->IsHeld(Button::Z); }
 
+// ---- gamepad auto-repeat ----------------------------------------------------
+// The editing buttons (D-pad, C, B, Y, L, R) should repeat while held, like the
+// real keyboard. pad_repeat_update() ticks all their timers once per frame;
+// pad_fired() then reports the initial press plus each repeat tick.
+#define PAD_REPEAT_DELAY 30   // frames before auto-repeat kicks in (~0.5s)
+#define PAD_REPEAT_RATE  4    // frames between repeats while held
+
+static struct PadRepeat { Button btn; int timer; bool fired; } g_padrep[] = {
+    { Button::Up, 0, false }, { Button::Down, 0, false },
+    { Button::Left, 0, false }, { Button::Right, 0, false },
+    { Button::L, 0, false }, { Button::R, 0, false },
+    { Button::C, 0, false }, { Button::B, 0, false }, { Button::Y, 0, false },
+};
+
+static void pad_repeat_update(void) {
+    for (auto &r : g_padrep) {
+        if (!g_pad->IsHeld(r.btn))      { r.timer = 0; r.fired = false; }
+        else if (r.timer == 0)          { r.fired = true;  r.timer = PAD_REPEAT_DELAY; }
+        else if (--r.timer <= 0)        { r.fired = true;  r.timer = PAD_REPEAT_RATE; }
+        else                            { r.fired = false; }
+    }
+}
+
+// Initial press or a repeat tick this frame (tracked buttons); plain edge otherwise.
+static bool pad_fired(Button b) {
+    for (auto &r : g_padrep) if (r.btn == b) return r.fired;
+    return g_pad->WasPressed(b);
+}
+
 // ---- command history -------------------------------------------------------
 // Up/Down recall previously entered commands into the input line (shell-style).
 #define HISTORY_MAX 16
@@ -490,20 +519,21 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;   // real keyboard in use: hide the on-screen one
         bool pad = (ke.kind == SATURN_KEY_NONE);
         if (pad && g_pad->AnyPressed()) g_kbd_visible = true;    // gamepad in use: show the on-screen keyboard
+        pad_repeat_update();   // tick held-button auto-repeat (D-pad, C, B, Y, L, R)
 
         // On-screen keyboard editing (gamepad): move the picker, type, delete.
         if (pad) {
             if (g_pad->IsHeld(Button::X)) {                 // X + Up/Down recalls history
-                if (g_pad->WasPressed(Button::Up))    history_recall(&k, 1);
-                if (g_pad->WasPressed(Button::Down))  history_recall(&k, 0);
+                if (pad_fired(Button::Up))    history_recall(&k, 1);
+                if (pad_fired(Button::Down))  history_recall(&k, 0);
             } else if (!pad_scroll_shift()) {               // plain D-pad moves the picker
-                if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
-                if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
-                if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
-                if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
+                if (pad_fired(Button::Up))    keyboard_move(&k, 0, -1);
+                if (pad_fired(Button::Down))  keyboard_move(&k, 0,  1);
+                if (pad_fired(Button::Left))  keyboard_move(&k, -1, 0);
+                if (pad_fired(Button::Right)) keyboard_move(&k,  1, 0);
             }
-            if (g_pad->WasPressed(Button::C)) keyboard_type(&k);       // C = type letter
-            if (g_pad->WasPressed(Button::B)) keyboard_backspace(&k);  // B = delete
+            if (pad_fired(Button::C)) keyboard_type(&k);       // C = type letter
+            if (pad_fired(Button::B)) keyboard_backspace(&k);  // B = delete
         }
 
         // Recompute the current word and its ranked suggestions from the input.
@@ -549,8 +579,8 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         };
 
         // L/R (shoulders) or keyboard Left/Right cycle through the suggestions.
-        bool cyc_prev = (pad && !pad_scroll_shift() && g_pad->WasPressed(Button::L)) || ke.kind == SATURN_KEY_LEFT;
-        bool cyc_next = (pad && !pad_scroll_shift() && g_pad->WasPressed(Button::R)) || ke.kind == SATURN_KEY_RIGHT;
+        bool cyc_prev = (pad && !pad_scroll_shift() && pad_fired(Button::L)) || ke.kind == SATURN_KEY_LEFT;
+        bool cyc_next = (pad && !pad_scroll_shift() && pad_fired(Button::R)) || ke.kind == SATURN_KEY_RIGHT;
         if (ncand > 0 && cyc_prev) sug_index = (sug_index - 1 + ncand) % ncand;
         if (ncand > 0 && cyc_next) sug_index = (sug_index + 1) % ncand;
         selected = ncand > 0 ? cands[sug_index] : nullptr;
@@ -565,7 +595,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
             if (ghost_len() > 0) accept(false);
             else if (a_press)    keyboard_submit(&k);
             ke.kind = SATURN_KEY_NONE;
-        } else if (pad && g_pad->WasPressed(Button::Y)) {
+        } else if (pad && pad_fired(Button::Y)) {
             accept(true);
         }
         if (pad && g_pad->WasPressed(Button::START)) keyboard_submit(&k);   // Start always submits
