@@ -7,6 +7,7 @@ extern "C" {
 #include "saturn_keyboard.h"
 #include "saturn_backup.h"
 #include "saturn_glue.h"
+#include "sound.h"
 #include "term.h"
 #include "net/net_connect.h"
 #include "typeahead.h"
@@ -456,6 +457,7 @@ static int is_reboot_command(const char *line) {
 // to the SMPC reset-button NMI.
 static void soft_reset_to_title(void) {
     net_connect_close();          // idempotent: drops the modem link if online
+    sound_stop_all();             // stop any playing/looping sound before we bail out
     if (g_title_jmp_armed) longjmp(g_title_jmp, 1);
     slNMIRequest();               // fallback only
     while (1) {}
@@ -692,6 +694,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         render_console();
         render_keyboard(k, selected, cw_len);
         SRL::Core::Synchronize();
+        sound_service();   // re-trigger looping sounds / reap finished one-shots
       }
       // Autocomplete-accept appends a trailing space; strip trailing spaces so the
       // parser, the reboot check, history, and the echo all see the clean command.
@@ -1651,7 +1654,7 @@ int main(void) {
         SRL::Cd::File f(game_file);
         int32_t bytes = f.Size.Bytes;
         int32_t ssz   = f.Size.SectorSize;
-        SRL::Debug::Print(2, 26, "loading %s...           ", game_file);
+        SRL::Debug::Print(1, 26, "loading %s...           ", game_file);
         if (ssz == 2048 && bytes > 0 && bytes <= 0x40000) {
             uint8_t *buf = (uint8_t *) SRL::Memory::HighWorkRam::Malloc((uint32_t) bytes);
             if (buf != nullptr && f.Open()) {
@@ -1666,6 +1669,14 @@ int main(void) {
     if (story == nullptr) { saturn_die("Could not load %s from CD",game_file); }
 
     mojo_boot(story, len, seed);   // initStory takes ownership; it frees this on the next boot
+
+    {   // enable sound if the game ships a sibling <base>.BLB
+        char blb[16]; int i = 0;
+        for (; g_story_filename[i] && g_story_filename[i] != '.' && i < 11; i++) blb[i] = g_story_filename[i];
+        blb[i] = '.'; blb[i+1] = 'B'; blb[i+2] = 'L'; blb[i+3] = 'B'; blb[i+4] = '\0';
+        sound_init(blb);
+    }
+
     mojo_run();
 
     // Game ended: keep the final screen up.
