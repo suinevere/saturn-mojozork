@@ -65,8 +65,13 @@ DictionaryWord* find_exact_word(TrieNode* root, const char* text);
 // `prev_word` context, ranked by descending weight (context matches first, then
 // trie completions by base weight). Returns how many were written. Used by the
 // UI to let the player cycle through suggestions.
+//
+// When `first_word` is set (the current word starts the command), verbs and
+// directions -- the only parts of speech that can begin a command -- are ranked
+// above nouns/prepositions/adjectives, so "o" offers "open" before "oil".
 int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
-                       const char* prefix, DictionaryWord** out, int max);
+                       const char* prefix, DictionaryWord** out, int max,
+                       int first_word);
 
 // Free an entire trie built by the above: every node, and each word's text and
 // next-word links. Each DictionaryWord is one node's word_data, so this frees

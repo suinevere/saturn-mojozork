@@ -508,7 +508,8 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
                 pw[pl] = '\0';
                 prev_word = find_exact_word(g_typeahead_root, pw);
             }
-            ncand = predict_candidates(g_typeahead_root, prev_word, current_word, cands, 24);
+            ncand = predict_candidates(g_typeahead_root, prev_word, current_word, cands, 24,
+                                       ws == 0);   // ws==0 -> current word starts the command
             bool same = true;                                // reset cycle if the word changed
             for (int i = 0; i <= cw_len; i++) if (current_word[i] != sug_last[i]) { same = false; break; }
             if (!same) { sug_index = 0; for (int i = 0; i <= cw_len; i++) sug_last[i] = current_word[i]; }
