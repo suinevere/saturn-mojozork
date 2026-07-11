@@ -172,6 +172,49 @@ static int word_hot(DictionaryWord* w) {
     return (g_hot_gen != 0 && w->hot_gen == g_hot_gen) ? SCREEN_BONUS : 0;
 }
 
+// Rank a direction word for clockwise-compass ordering: north, northeast, east,
+// ... northwest, then up, down, in, out. Higher sorts earlier. The full/6-char
+// spelling outranks its abbreviation (north above n). 0 if not a direction.
+// Covers v3 dictionary forms including 6-char truncations (northe = northeast).
+static int dir_rank(const char* t) {
+    int cv, pref;
+    if      (!strcmp(t, "north"))  { cv = 12; pref = 1; }
+    else if (!strcmp(t, "n"))      { cv = 12; pref = 0; }
+    else if (!strcmp(t, "northe") || !strcmp(t, "northeast")) { cv = 11; pref = 1; }
+    else if (!strcmp(t, "ne"))     { cv = 11; pref = 0; }
+    else if (!strcmp(t, "east"))   { cv = 10; pref = 1; }
+    else if (!strcmp(t, "e"))      { cv = 10; pref = 0; }
+    else if (!strcmp(t, "southe") || !strcmp(t, "southeast")) { cv = 9; pref = 1; }
+    else if (!strcmp(t, "se"))     { cv = 9;  pref = 0; }
+    else if (!strcmp(t, "south"))  { cv = 8;  pref = 1; }
+    else if (!strcmp(t, "s"))      { cv = 8;  pref = 0; }
+    else if (!strcmp(t, "southw") || !strcmp(t, "southwest")) { cv = 7; pref = 1; }
+    else if (!strcmp(t, "sw"))     { cv = 7;  pref = 0; }
+    else if (!strcmp(t, "west"))   { cv = 6;  pref = 1; }
+    else if (!strcmp(t, "w"))      { cv = 6;  pref = 0; }
+    else if (!strcmp(t, "northw") || !strcmp(t, "northwest")) { cv = 5; pref = 1; }
+    else if (!strcmp(t, "nw"))     { cv = 5;  pref = 0; }
+    else if (!strcmp(t, "up"))     { cv = 4;  pref = 1; }
+    else if (!strcmp(t, "u"))      { cv = 4;  pref = 0; }
+    else if (!strcmp(t, "down"))   { cv = 3;  pref = 1; }
+    else if (!strcmp(t, "d"))      { cv = 3;  pref = 0; }
+    else if (!strcmp(t, "in") || !strcmp(t, "inside") || !strcmp(t, "into")) { cv = 2; pref = 1; }
+    else if (!strcmp(t, "out"))    { cv = 1;  pref = 1; }
+    else return 0;
+    return cv * 2 + pref;
+}
+
+static int is_diagonal(const char* t) {
+    return !strcmp(t, "ne") || !strcmp(t, "nw") || !strcmp(t, "se") || !strcmp(t, "sw")
+        || !strcmp(t, "northe") || !strcmp(t, "northw") || !strcmp(t, "southe") || !strcmp(t, "southw")
+        || !strcmp(t, "northeast") || !strcmp(t, "northwest")
+        || !strcmp(t, "southeast") || !strcmp(t, "southwest");
+}
+
+// Base for a direction's compass weight -- keeps it in the verb tier so common
+// verbs still lead their prefix ("o" -> open, not out).
+#define DIR_BASE 40
+
 // Add `w` at `weight`, de-duplicating by pointer (keeping the higher weight).
 // When the arrays are full, keep the top CAND_MAX by weight -- evict the current
 // minimum if this candidate is heavier -- so a busy prefix never drops the
@@ -191,11 +234,13 @@ static int cand_add(DictionaryWord** cand, int* wt, int n, DictionaryWord* w, in
 static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n, int fw) {
     if (node->word_data) {
         DictionaryWord* w = node->word_data;
-        int weight = w->base_weight;
-        // On-screen objects lead anywhere; on-screen exits only where movement
-        // fits (the first word), so a visible exit can't hijack "take n...".
-        if (w->type == TYPE_NOUN) weight += word_hot(w);
-        else if (fw && w->type == TYPE_DIRECTION) weight += word_hot(w);
+        int weight;
+        if (w->type == TYPE_DIRECTION) {
+            weight = DIR_BASE + dir_rank(w->text);       // clockwise compass order
+            if (fw && !is_diagonal(w->text)) weight += 3;   // a lone "s" means south, not SE
+                                                            // (small: mustn't lift "out" over "open")
+        }
+        else { weight = w->base_weight; if (w->type == TYPE_NOUN) weight += word_hot(w); }
         if (fw && (w->type == TYPE_VERB || w->type == TYPE_DIRECTION))
             weight += FIRST_WORD_POS_BONUS;
         *n = cand_add(cand, wt, *n, w, weight);
@@ -215,12 +260,25 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
     // 1. Context matches (prev_word -> next) that start with the prefix. Bias them
     //    above trie completions so the context-aware suggestion sorts first.
     if (prev_word != NULL) {
+        // A movement verb (go/walk) links to many directions as its object; a verb
+        // that merely uses a direction word as a preposition ("drop it down") links
+        // to only one or two. Only the former should lead with the compass.
+        int ndir = 0;
+        for (NextWordLink* l = prev_word->next_words; l != NULL; l = l->next)
+            if (l->target_word->type == TYPE_DIRECTION) ndir++;
+        int movement = (ndir >= 4);
+
         for (NextWordLink* l = prev_word->next_words; l != NULL; l = l->next) {
             if (plen == 0 || strncmp(l->target_word->text, prefix, plen) == 0) {
-                // Only boost an on-screen object here; a direction in a verb's
-                // grammar is a preposition ("drop it down"), not a visible exit.
-                int hot = (l->target_word->type == TYPE_NOUN) ? word_hot(l->target_word) : 0;
-                n = cand_add(cand, wt, n, l->target_word, 10000 + l->transition_weight + hot);
+                DictionaryWord* tw = l->target_word;
+                int w;
+                if (tw->type == TYPE_DIRECTION && movement)
+                    w = 900 + dir_rank(tw->text);        // lead, clockwise around compass
+                else if (tw->type == TYPE_NOUN)
+                    w = l->transition_weight + word_hot(tw);
+                else
+                    w = l->transition_weight;            // preposition, or dir-as-prep
+                n = cand_add(cand, wt, n, tw, 10000 + w);
             }
         }
         // At an empty object slot, also surface on-screen nouns the verb's grammar
@@ -272,9 +330,10 @@ void typeahead_set_screen(TrieNode* root, const char* text) {
             if (tp > 0) {
                 tok[tp] = 0;
                 DictionaryWord* w = find_exact_word(root, tok);
-                // Objects and exits only: boosting prose function words like "with"
+                // Only objects (nouns): boosting prose function words like "with"
                 // in "with a boarded door" would wrongly top the suggestions.
-                if (w != NULL && (w->type == TYPE_NOUN || w->type == TYPE_DIRECTION)) {
+                // Directions cycle in fixed compass order, not by screen/frequency.
+                if (w != NULL && w->type == TYPE_NOUN) {
                     w->hot_gen = g_hot_gen;
                     int dup = 0;
                     for (int i = 0; i < g_nhot; i++) if (g_hot[i] == w) { dup = 1; break; }
