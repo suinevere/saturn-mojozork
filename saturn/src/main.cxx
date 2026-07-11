@@ -17,6 +17,12 @@ extern "C" {
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
 
+// Difficulty (Options menu). Easy = full typeahead + winning-path hints; Medium =
+// typeahead, grammar weights only; Hard = typeahead off. Defined here because
+// ensure_typeahead() below reads it. Persistence/UI live further down.
+enum { DIFF_EASY = 0, DIFF_MEDIUM = 1, DIFF_HARD = 2 };
+static int g_difficulty = DIFF_EASY;
+
 extern "C" void* typeahead_malloc(unsigned int size) {
     return SRL::Memory::HighWorkRam::Malloc(size);
 }
@@ -29,17 +35,20 @@ extern "C" void typeahead_free(void* ptr) {
 // dictionary and grammar on-device. Rebuilds (freeing the old trie) whenever the
 // loaded story changes, so switching games picks up the new vocabulary.
 static const uint8_t* g_ta_story = nullptr;
+static int g_ta_diff = -1;
 static void ensure_typeahead() {
     uint32_t len = 0;
     const uint8_t* story = saturn_story_data(&len);
-    if (g_typeahead_root && story == g_ta_story) return;   // already built for this story
+    if (g_typeahead_root && story == g_ta_story && g_ta_diff == g_difficulty) return;
     if (g_typeahead_root) { destroy_typeahead(g_typeahead_root); g_typeahead_root = nullptr; }
     g_typeahead_root = create_trie_node();
-    if (story != nullptr && len > 0) {
-        build_typeahead_from_story(g_typeahead_root, story, len);   // grammar layer
-        apply_solution_overlay(g_typeahead_root, story, len);       // winning-path boosts
+    if (story != nullptr && len > 0 && g_difficulty != DIFF_HARD) {
+        build_typeahead_from_story(g_typeahead_root, story, len);           // grammar layer
+        if (g_difficulty == DIFF_EASY)
+            apply_solution_overlay(g_typeahead_root, story, len);          // winning-path boosts
     }
     g_ta_story = story;
+    g_ta_diff = g_difficulty;
 }
 
 
@@ -147,6 +156,21 @@ static void note_input_device(const SaturnKeyEvent &ke) {
     if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;
     else if (g_pad->AnyPressed())   g_kbd_visible = true;
 }
+
+// ---- options / difficulty --------------------------------------------------
+// (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
+// typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
+// off. Defaults to Easy; only written to backup once the player changes it.
+static void options_load(void) {
+    uint8_t buf[16];
+    if (saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf) && buf[0] <= DIFF_HARD)
+        g_difficulty = (int) buf[0];
+}
+static void options_save(void) {
+    uint8_t buf[1] = { (uint8_t) g_difficulty };
+    saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, 1);
+}
+static void options_menu(void);   // defined below, near the other menus
 
 // ---- scrollback ------------------------------------------------------------
 
@@ -556,7 +580,6 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
     } else if (pad && pad_fired(Button::Y)) {
         accept(true);
     }
-    if (pad && g_pad->WasPressed(Button::START)) keyboard_submit(&k);   // Start always submits
 
     // Remaining keyboard events (typing a letter extends the prefix).
     if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
@@ -621,6 +644,14 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         bool pad = (ke.kind == SATURN_KEY_NONE);
         if (pad && g_pad->AnyPressed()) g_kbd_visible = true;    // gamepad in use: show the on-screen keyboard
         pad_repeat_update();   // tick held-button auto-repeat (D-pad, C, B, Y, L, R)
+
+        // Start (gamepad) or Esc (keyboard) opens the Options menu mid-game.
+        if ((pad && g_pad->WasPressed(Button::START)) || ke.kind == SATURN_KEY_ESCAPE) {
+            options_menu();
+            ensure_typeahead();          // rebuild if the difficulty changed
+            SRL::Core::Synchronize();    // consume the edge that closed the menu
+            continue;
+        }
 
         DictionaryWord* selected; int cw_len;
         typeahead_edit(k, g_typeahead_root, sug_index, sug_last, ke, pad, selected, cw_len);
@@ -734,6 +765,56 @@ static int menu_select(const char *title, const char *const *items, int count) {
         SRL::Debug::Print(2, 6 + VIS, "%s",
             hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
         SRL::Core::Synchronize();
+    }
+}
+
+// Options menu: a centered, bordered box with the difficulty slider. Left/Right
+// change it; A/Start/Enter/B/Esc close. The chosen difficulty is written to
+// backup only if the player actually changed it. Overlays whatever is behind
+// (mode menu or the frozen game console).
+static void options_menu(void) {
+    static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
+    static const char *const DESC[]  = { "Full typeahead + hints",
+                                         "Typeahead, no hints",
+                                         "Typeahead off" };
+    const int x0 = 6, y0 = 9, w = 28, h = 9;   // centered box
+    int diff = g_difficulty;
+    SRL::Core::Synchronize();   // consume the edge that opened this
+    for (;;) {
+        check_soft_reset();
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        bool close = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)
+                   || g_pad->WasPressed(Button::B) || g_pad->WasPressed(Button::C)
+                   || ke.kind == SATURN_KEY_ENTER || ke.kind == SATURN_KEY_ESCAPE
+                   || ke.kind == SATURN_KEY_BACKSPACE;
+        if (left  && diff > DIFF_EASY) diff--;
+        if (right && diff < DIFF_HARD) diff++;
+        if (close) break;
+
+        for (int r = 0; r < h; r++) {           // border + cleared interior
+            char line[40]; int p = 0;
+            for (int c = 0; c < w; c++)
+                line[p++] = (r == 0 || r == h - 1) ? ((c == 0 || c == w - 1) ? '+' : '-')
+                          : ((c == 0 || c == w - 1) ? '|' : ' ');
+            line[p] = '\0';
+            SRL::Debug::Print(x0, y0 + r, "%s", line);
+        }
+        SRL::Debug::Print(x0 + 10, y0 + 1, "OPTIONS");
+        SRL::Debug::Print(x0 + 3, y0 + 3, "Difficulty:");
+        SRL::Debug::Print(x0 + 5, y0 + 4, "%s %-8s %s",
+                          diff > DIFF_EASY ? "<" : " ", NAMES[diff],
+                          diff < DIFF_HARD ? ">" : " ");
+        SRL::Debug::Print(x0 + 3, y0 + 6, "%-22s", DESC[diff]);
+        SRL::Debug::Print(x0 + 3, y0 + 7, "%s",
+                          hint("<> change  A = done", "<> change  Enter=done"));
+        SRL::Core::Synchronize();
+    }
+    if (diff != g_difficulty) {   // persist only when the player changed it
+        g_difficulty = diff;
+        options_save();
     }
 }
 
@@ -1193,9 +1274,13 @@ static void online_settle_input(void) {
 // Built once, before dialing (so the CD isn't touched mid-connection); the story
 // bytes are freed afterward since the trie is self-contained.
 static TrieNode* g_online_ta = nullptr;
+static int g_online_diff = -1;
 static void ensure_online_typeahead(void) {
-    if (g_online_ta != nullptr) return;
+    if (g_online_ta != nullptr && g_online_diff == g_difficulty) return;
+    if (g_online_ta) { destroy_typeahead(g_online_ta); g_online_ta = nullptr; }
     g_online_ta = create_trie_node();
+    g_online_diff = g_difficulty;
+    if (g_difficulty == DIFF_HARD) return;      // typeahead off
     char names[1][16];
     if (scan_z3_folder(names, 1) < 0) return;   // no Z3 folder -> empty trie (no suggestions)
     uint8_t* story = nullptr; uint32_t len = 0;
@@ -1214,7 +1299,7 @@ static void ensure_online_typeahead(void) {
     }
     if (story != nullptr) {
         build_typeahead_from_story(g_online_ta, story, len);
-        apply_solution_overlay(g_online_ta, story, len);
+        if (g_difficulty == DIFF_EASY) apply_solution_overlay(g_online_ta, story, len);
         SRL::Memory::HighWorkRam::Free(story);
     }
 }
@@ -1350,6 +1435,7 @@ static void online_mode(void) {
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
     saturn_bup_init();
+    options_load();   // restore saved difficulty (defaults to Easy)
 
     static MultiPad pads;
     g_pad = &pads;
@@ -1373,10 +1459,11 @@ int main(void) {
     // Top-level mode choice. "Play Online" runs the multizork telnet terminal
     // and returns here on disconnect; "Play Local" falls through to the offline
     // Z-machine flow below.
-    static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)" };
+    static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)", "Options" };
     const char* game_file = nullptr;
     for (;;) {
-        int mode = menu_select("MojoZork", modes, 2);
+        int mode = menu_select("MojoZork", modes, 3);
+        if (mode == 2) { options_menu(); continue; }
         if (mode == 1) { online_mode(); continue; }
         // Play Local (or B at this top menu): pick a game. Pressing B on the game
         // menu returns nullptr, so we loop back to this mode menu instead of trying
