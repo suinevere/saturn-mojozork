@@ -135,6 +135,68 @@ DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, 
     return current_node->best_completion;
 }
 
+// ---- ranked candidate list (for cycling through suggestions) ----------------
+
+#define CAND_MAX 32
+
+// Add `w` to the candidate arrays, de-duplicating by pointer (keeping the higher
+// weight). Returns the new count.
+static int cand_add(DictionaryWord** cand, int* wt, int n, DictionaryWord* w, int weight) {
+    for (int i = 0; i < n; i++) {
+        if (cand[i] == w) { if (weight > wt[i]) wt[i] = weight; return n; }
+    }
+    if (n < CAND_MAX) { cand[n] = w; wt[n] = weight; return n + 1; }
+    return n;
+}
+
+// Depth-first collect every word in this subtree, weighted by its base_weight.
+static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n) {
+    if (*n >= CAND_MAX) return;
+    if (node->word_data)
+        *n = cand_add(cand, wt, *n, node->word_data, node->word_data->base_weight);
+    for (TrieNode* c = node->first_child; c != NULL && *n < CAND_MAX; c = c->next_sibling)
+        cand_collect(c, cand, wt, n);
+}
+
+int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
+                       const char* prefix, DictionaryWord** out, int max) {
+    DictionaryWord* cand[CAND_MAX];
+    int wt[CAND_MAX];
+    int n = 0;
+    int plen = prefix ? (int) strlen(prefix) : 0;
+
+    // 1. Context matches (prev_word -> next) that start with the prefix. Bias them
+    //    above trie completions so the context-aware suggestion sorts first.
+    if (prev_word != NULL) {
+        for (NextWordLink* l = prev_word->next_words; l != NULL; l = l->next) {
+            if (plen == 0 || strncmp(l->target_word->text, prefix, plen) == 0)
+                n = cand_add(cand, wt, n, l->target_word, 10000 + l->transition_weight);
+        }
+    }
+
+    // 2. Trie completions under the prefix (only when something has been typed).
+    if (plen > 0) {
+        TrieNode* node = root;
+        for (int i = 0; i < plen && node != NULL; i++) {
+            char c = (char) tolower((unsigned char) prefix[i]);
+            node = (c < 'a' || c > 'z') ? NULL : find_child(node, c);
+        }
+        if (node != NULL) cand_collect(node, cand, wt, &n);
+    }
+
+    // Selection-sort the top `max` by descending weight.
+    if (max > CAND_MAX) max = CAND_MAX;
+    int count = n < max ? n : max;
+    for (int i = 0; i < count; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++) if (wt[j] > wt[best]) best = j;
+        DictionaryWord* tw = cand[i]; cand[i] = cand[best]; cand[best] = tw;
+        int ti = wt[i]; wt[i] = wt[best]; wt[best] = ti;
+        out[i] = cand[i];
+    }
+    return count;
+}
+
 // Find exact dictionary word (used when user hits space)
 DictionaryWord* find_exact_word(TrieNode* root, const char* text) {
     TrieNode* current = root;
