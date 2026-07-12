@@ -63,25 +63,27 @@ extern "C" void sound_debug2(int* ssz, int* op, int* rd, int* ns, unsigned char*
 // would read from the wrong place. Cd::File::Seek()/Read() are documented
 // (and exercised elsewhere in SRL, e.g. WaveSound) as byte-precise, so we use
 // Open()+Seek()+Read() instead for both the parser's reads and the slice load.
+#define CD_SECTOR 2048
+// Random-access read of `len` bytes at byte offset `off`. SRL's Cd::File Seek()
+// does NOT reposition on-device (every Read starts at byte 0), so we use the
+// sector-addressed LoadBytes(sectorOffset, size, dest) instead: load the whole
+// sector span covering [off, off+len) into a scratch buffer, then copy out the
+// sub-range. `len` here is always small (<= parser window), so 2 sectors suffice.
+static unsigned char g_secbuf[CD_SECTOR * 2];
 static int cd_reader(unsigned int off, unsigned int len, unsigned char* out) {
-    // The CD file stat (GFS_GetFileSize, used by the Cd::File ctor) can report an
-    // uninitialized size on first access -- the story loader in main.cxx works
-    // around this by retrying until the size is sane. Mirror that here: retry
-    // until the file reports 2048-byte data sectors and opens, then seek+read.
-    for (int attempt = 0; attempt < 300; attempt++) {
+    if (len == 0) return 0;
+    unsigned int sec    = off / CD_SECTOR;
+    unsigned int secoff = off % CD_SECTOR;
+    unsigned int rbytes = ((secoff + len + CD_SECTOR - 1) / CD_SECTOR) * CD_SECTOR;
+    if (rbytes > sizeof g_secbuf) return 0;
+    for (int attempt = 0; attempt < 60; attempt++) {
         SRL::Cd::File f(g_blb);
-        int32_t ssz = f.Size.SectorSize;
-        if (off == 0 && attempt == 0) g_dbg_ssz = (int) ssz;   // initial stat
-        if (ssz == 2048 && f.Open()) {
-            if (off == 0) g_dbg_op = 1;
-            bool ok = f.Seek((int32_t) off) == (int32_t) off &&
-                      f.Read((int32_t) len, out) == (int32_t) len;
-            f.Close();
-            if (ok) {
-                if (off == 0) { g_dbg_rd = 1;
-                    for (unsigned i = 0; i < 4 && i < len; i++) g_dbg_h[i] = out[i]; }
-                return 1;
-            }
+        int32_t got = f.LoadBytes((size_t) sec, (int32_t) rbytes, g_secbuf);
+        if (got >= (int32_t)(secoff + len)) {
+            for (unsigned i = 0; i < len; i++) out[i] = g_secbuf[secoff + i];
+            if (off == 0) { g_dbg_ssz = 2048; g_dbg_op = 1; g_dbg_rd = 1;
+                for (unsigned i = 0; i < 4 && i < len; i++) g_dbg_h[i] = out[i]; }
+            return 1;
         }
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
@@ -89,19 +91,24 @@ static int cd_reader(unsigned int off, unsigned int len, unsigned char* out) {
 }
 
 static int8_t* load_slice(unsigned int off, unsigned int len) {
-    // slPCMOn won't play samples shorter than 0x900; pad with silence.
-    uint32_t n = len < 0x900 ? 0x900 : len;
-    int8_t* b = (int8_t*) SRL::Memory::HighWorkRam::Malloc(n);
+    // Same sector-addressed load as cd_reader (Seek() is broken on-device), but
+    // sized for a full PCM slice. Read the sector span covering [off, off+len)
+    // straight into the playback buffer, shift the sample down to the buffer
+    // start, then pad to slPCMOn's 0x900 minimum with silence.
+    uint32_t play   = len < 0x900 ? 0x900 : len;      // playable size (padded)
+    unsigned int sec    = off / CD_SECTOR;
+    unsigned int secoff = off % CD_SECTOR;
+    uint32_t rbytes = ((secoff + len + CD_SECTOR - 1) / CD_SECTOR) * CD_SECTOR;
+    uint32_t bufsz  = rbytes > play ? rbytes : play;  // hold the raw read AND padded PCM
+    int8_t* b = (int8_t*) SRL::Memory::HighWorkRam::Malloc(bufsz);
     if (!b) return nullptr;
-    for (uint32_t i = len; i < n; i++) b[i] = 0;
-
     for (int attempt = 0; attempt < 60; attempt++) {
         SRL::Cd::File f(g_blb);
-        if (f.Size.SectorSize == 2048 && f.Open()) {
-            bool ok = f.Seek((int32_t) off) == (int32_t) off &&
-                      f.Read((int32_t) len, (uint8_t*) b) == (int32_t) len;
-            f.Close();
-            if (ok) return b;
+        int32_t got = f.LoadBytes((size_t) sec, (int32_t) rbytes, (uint8_t*) b);
+        if (got >= (int32_t)(secoff + len)) {
+            if (secoff) for (uint32_t i = 0; i < len; i++) b[i] = b[secoff + i];  // shift to start
+            for (uint32_t i = len; i < play; i++) b[i] = 0;                       // pad silence
+            return b;
         }
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
