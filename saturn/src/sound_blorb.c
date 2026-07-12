@@ -66,30 +66,19 @@ static int parse_sound(sound_read_fn read, unsigned int start,
     return (*off != 0 && *rate != 0);
 }
 
-/* Diagnostic: where sound_blorb_open last bailed, and the resource count it read.
-   fail: 1 hdr-read, 2 not-FORM/IFRS, 3 RIdx-read, 4 not-RIdx, 5 nres-read,
-   6 nres-range, 0 = ran the whole resource loop. */
-int g_blorb_fail = -1;
-int g_blorb_nres = -1;
-int g_blorb_rtag = -1;   /* first 4 bytes of the offset-12 read, packed big-endian */
-
 int sound_blorb_open(sound_read_fn read) {
     unsigned char hdr[12];
-    g_count = 0; g_blorb_fail = -1; g_blorb_nres = -1; g_blorb_rtag = -1;
-    if (!read || !read(0, 12, hdr)) { g_blorb_fail = 1; return 0; }
-    if (!tag(hdr, "FORM") || !tag(hdr + 8, "IFRS")) { g_blorb_fail = 2; return 0; }
+    g_count = 0;
+    if (!read || !read(0, 12, hdr)) return 0;
+    if (!tag(hdr, "FORM") || !tag(hdr + 8, "IFRS")) return 0;
 
     /* RIdx is the first chunk after the FORM/IFRS header, at offset 12. */
     unsigned char rh[8];
-    if (!read(12, 8, rh)) { g_blorb_fail = 3; return 0; }
-    g_blorb_rtag = (int)((rh[0] << 24) | (rh[1] << 16) | (rh[2] << 8) | rh[3]);
-    if (!tag(rh, "RIdx")) { g_blorb_fail = 4; return 0; }
+    if (!read(12, 8, rh) || !tag(rh, "RIdx")) return 0;
     unsigned char nbuf[4];
-    if (!read(20, 4, nbuf)) { g_blorb_fail = 5; return 0; }
+    if (!read(20, 4, nbuf)) return 0;
     int nres = (int)be32(nbuf);
-    g_blorb_nres = nres;
-    if (nres < 0 || nres > 64) { g_blorb_fail = 6; return 0; }
-    g_blorb_fail = 0;
+    if (nres < 0 || nres > 64) return 0;
 
     unsigned int maxstart = 0;
     for (int i = 0; i < nres && g_count < MAXSND; i++) {
