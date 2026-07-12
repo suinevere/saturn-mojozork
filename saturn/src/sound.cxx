@@ -67,12 +67,29 @@ static void free_slot(Slot& s) {
     // member of SRL::Sound::Pcm (srl_sound.hpp), so it and raw slPCMOff()
     // aren't reachable from here. Pcm::StopSound(channel) is the public
     // wrapper that does the same slPCMOff(&Channels[channel]) call.
-    if (s.channel >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel);
+    //
+    // The s.number != 0 guard matters for g_slot's static zero-init state:
+    // statically zero-initialized Slots have channel == 0 (a valid-looking
+    // channel index, not the sentinel -1 that sound_init() normally assigns),
+    // so a bare "channel >= 0" check would issue a spurious StopSound(0) on
+    // an unplayed slot the very first time teardown runs. number is only
+    // ever non-zero while a slot is actually holding a live channel/buffer
+    // (see saturn_sound_effect), so gating on it keeps this safe on zeroed
+    // slots without changing behavior for any slot that was actually used.
+    if (s.number != 0 && s.channel >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel);
     if (s.buf) { SRL::Memory::Free(s.buf); s.buf = nullptr; }
     s.number = 0; s.channel = -1; s.loops = 0;
 }
 
 extern "C" void sound_init(const char* blbfile) {
+    // Tear down any slots a previous game left active before resetting
+    // bookkeeping: without this, a second sound_init() call (game switch)
+    // while channels are still playing would orphan their HighWorkRam
+    // buffers (never Free()'d) and leave looping sounds running on the SGL
+    // channel with no slot left to re-trigger or stop them. Safe to call on
+    // the very first, statically zero-initialized call too - see the
+    // s.number != 0 guard in free_slot() above.
+    sound_stop_all();
     for (int i = 0; i < NSLOT; i++) { g_slot[i].number = 0; g_slot[i].channel = -1; g_slot[i].buf = nullptr; }
     g_have = 0; g_blb[0] = '\0';
     if (!blbfile) return;
