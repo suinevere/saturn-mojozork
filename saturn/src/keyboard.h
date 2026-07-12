@@ -1,7 +1,7 @@
 #ifndef KEYBOARD_H
 #define KEYBOARD_H
 
-#define KB_COLS 10
+#define KB_COLS 13
 #define KB_ROWS 4
 #define KB_INPUT_MAX 64
 
@@ -10,10 +10,11 @@ extern "C" {
 #endif
 
 typedef struct {
-    int  cursor_col;
-    int  cursor_row;
+    int  cursor_col;    // on-screen keyboard grid column
+    int  cursor_row;    // on-screen keyboard grid row
     char input[KB_INPUT_MAX];
     int  input_len;
+    int  cursor;        // text caret within input (0..input_len)
     int  submitted;
 } KeyboardState;
 
@@ -22,12 +23,24 @@ extern const char KB_LAYOUT_UPPER[KB_ROWS][KB_COLS + 1];  /* uppercase / shifted
 
 void keyboard_reset(KeyboardState *k);
 void keyboard_move(KeyboardState *k, int dcol, int drow);
+// Move the text caret within the input line.
+void keyboard_caret_left(KeyboardState *k);
+void keyboard_caret_right(KeyboardState *k);
+void keyboard_caret_home(KeyboardState *k);
+void keyboard_caret_end(KeyboardState *k);
+// Delete the character at the caret (forward delete); caret stays put.
+void keyboard_delete_forward(KeyboardState *k);
 char keyboard_current_char(const KeyboardState *k);
 /* Character at (row,col) in the active layer (caps-aware). */
 char keyboard_char_at(int row, int col);
 /* CapsLock: when on, keys produce the KB_LAYOUT_UPPER layer. */
 void keyboard_set_caps(int on);
 int  keyboard_get_caps(void);
+/* Insert mode: when on, typing mid-line inserts (shifts the tail right) instead
+   of overwriting the character under the caret. Appending at the end is the same
+   either way. */
+void keyboard_set_insert(int on);
+int  keyboard_get_insert(void);
 void keyboard_type(KeyboardState *k);
 void keyboard_type_char(KeyboardState *k, char c);
 void keyboard_backspace(KeyboardState *k);

@@ -224,6 +224,11 @@ static int is_diagonal(const char* t) {
 // verbs still lead their prefix ("o" -> open, not out).
 #define DIR_BASE 40
 
+// Weight for a verb suggested mid-command (not the first word). Below the base
+// weight of prepositions/nouns/directions so they lead, but still present so the
+// player can cycle to it. Two verbs in a row is almost never a valid command.
+#define MIDCMD_VERB_WEIGHT 5
+
 // Add `w` at `weight`, de-duplicating by pointer (keeping the higher weight).
 // When the arrays are full, keep the top CAND_MAX by weight -- evict the current
 // minimum if this candidate is heavier -- so a busy prefix never drops the
@@ -249,9 +254,22 @@ static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n,
             if (fw && !is_diagonal(w->text)) weight += 3;   // a lone "s" means south, not SE
             if (fw && is_compass(w->text)) weight += 80;    // exits lead the verbs (in/out don't)
         }
-        else { weight = w->base_weight; if (w->type == TYPE_NOUN) weight += word_hot(w); }
+        else {
+            weight = w->base_weight;
+            if (w->type == TYPE_NOUN) {
+                int hot = word_hot(w);
+                weight += hot;
+                // An on-screen object in a mid-command slot leads even a grammar-
+                // listed off-screen object: lift it into the context tier (matches
+                // predict_candidates' empty-object-slot handling).
+                if (!fw && hot) weight += 10000;
+            }
+        }
         if (fw && (w->type == TYPE_VERB || w->type == TYPE_DIRECTION))
             weight += FIRST_WORD_POS_BONUS;
+        else if (!fw && w->type == TYPE_VERB)
+            weight = MIDCMD_VERB_WEIGHT;   // a 2nd verb rarely follows -> rank below
+                                           // prepositions/nouns ("turn o" -> on, not open)
         *n = cand_add(cand, wt, *n, w, weight);
     }
     for (TrieNode* c = node->first_child; c != NULL; c = c->next_sibling)
@@ -290,12 +308,15 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
                 n = cand_add(cand, wt, n, tw, 10000 + w);
             }
         }
-        // At an empty object slot, also surface on-screen nouns the verb's grammar
-        // may not list (e.g. "open " with the mailbox visible but no such link).
+        // At an empty object slot, surface on-screen nouns IN THE CONTEXT TIER so a
+        // thing the game just described leads, even over a grammar-listed object the
+        // player can't see (e.g. "turn on " -> the visible "computer", not "waxer").
+        // Same 10000+ base as the grammar links above, plus the on-screen bonus.
         if (plen == 0) {
             for (int i = 0; i < g_nhot; i++)
                 if (g_hot[i]->type == TYPE_NOUN)
-                    n = cand_add(cand, wt, n, g_hot[i], g_hot[i]->base_weight + word_hot(g_hot[i]));
+                    n = cand_add(cand, wt, n, g_hot[i],
+                                 10000 + g_hot[i]->base_weight + word_hot(g_hot[i]));
         }
     }
 
