@@ -143,6 +143,11 @@ static const int TOP_MARGIN = 1;
 // real-keyboard keypress hides it (more text room); a gamepad press shows it again.
 static bool g_kbd_visible = true;
 
+// Inline-edit mode: which arrows move the text caret vs cycle suggestions.
+// false (default): Ctrl+Left/Right move the caret, plain Left/Right cycle.
+// true:  plain Left/Right move the caret, Ctrl+Left/Right cycle. Toggled by Insert.
+static bool g_caret_arrows = false;
+
 // While the reboot confirm modal is up, the console shrinks to leave the bottom
 // rows for the prompt, so the console (including the freshly-echoed "reboot") stays
 // visible above it instead of being overwritten by the prompt band.
@@ -172,6 +177,30 @@ static void note_input_device(const SaturnKeyEvent &ke) {
     else if (g_pad->AnyPressed())   g_kbd_visible = true;
 }
 
+// ---- configurable controller mapping ---------------------------------------
+// Two tied groups the player can remap (Options > Controller > Configure):
+//   Group 1 (face buttons): Accept, Backspace/Cancel, Type-letter -- always a
+//     permutation of {A,B,C}; reassigning one swaps with whoever held that button
+//     ("alternate when changed").
+//   Group 2 (shift chords): Autocomplete, Recall, Home/End, Line, Cursor-move and
+//     Page -- each in one of seven slots {L/R, Z+Up/Dn, Z+L/R, Z+Left/Right,
+//     Y+Up/Dn, Y+Left/Right, Y+L/R}; reassigning to a used slot swaps, to the free
+//     spare just moves ("alternate iff already used").
+//   Fixed: A accept, X space/accept+space, C type, B backspace, L+R caps toggle.
+// Everything reads through face_button()/chord_fired() so both editors honor it.
+enum { FA_ACCEPT, FA_BACK, FA_TYPE, FA_N };
+enum { CA_AUTO, CA_RECALL, CA_HOMEEND, CA_LINE, CA_CURSOR, CA_PAGE, CA_N };
+// Directional chord slots. Y is the shift for line/home-end/page (it took over the
+// old X shift; X is now a normal button); Z carries recall/cursor. Suffix: "t" =
+// shoulder triggers L/R, "d" = D-pad Left/Right.
+enum { SL_LR, SL_ZUD, SL_ZLRt, SL_ZLRd, SL_YUD, SL_YLRd, SL_YLRt, SL_N };
+
+static int g_face_btn[FA_N]   = { 0, 1, 2 };   // 0=A 1=B 2=C (Accept/Back/Type)
+static int g_chord_slot[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt, SL_YLRt };
+static const int FACE_DEFAULT[FA_N]  = { 0, 1, 2 };
+static const int CHORD_DEFAULT[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt, SL_YLRt };
+// The spare directional slot is SL_ZLRd. Caps-toggle rides the fixed L+R combo.
+
 // ---- options / difficulty --------------------------------------------------
 // (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
 // typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
@@ -195,6 +224,14 @@ static void options_load(void) {
     // Byte just past the dial number's NUL is the sound flag: 1 = off; 0
     // (absent, old blob) or 2 = on.
     if (i + 1 < (int) sizeof(buf)) g_sound_on = (buf[i + 1] == 1) ? 0 : 1;
+    // Controller mapping follows: a format sentinel (2 = current: 3 face + 6 chord
+    // bytes) then the bytes. Older/absent blobs (0, or the day-one sentinel 1 whose
+    // slot ids no longer match) keep the compiled defaults.
+    int m = i + 2;
+    if (m + 1 + FA_N + CA_N <= (int) sizeof(buf) && buf[m] == 2) {
+        for (int a = 0; a < FA_N; a++) { int v = buf[m + 1 + a];        if (v < 3)    g_face_btn[a]   = v; }
+        for (int a = 0; a < CA_N; a++) { int v = buf[m + 1 + FA_N + a]; if (v < SL_N) g_chord_slot[a] = v; }
+    }
 }
 static void options_save(void) {
     uint8_t buf[64]; int n = 0;
@@ -202,6 +239,9 @@ static void options_save(void) {
     for (int i = 0; g_dialnum[i] && n < 62; i++) buf[n++] = (uint8_t) g_dialnum[i];
     buf[n++] = 0;
     buf[n++] = (uint8_t) (g_sound_on ? 2 : 1);   // 0 = absent (old blob) -> on
+    buf[n++] = 2;                                 // controller-mapping format sentinel
+    for (int a = 0; a < FA_N && n < 62; a++) buf[n++] = (uint8_t) g_face_btn[a];
+    for (int a = 0; a < CA_N && n < 62; a++) buf[n++] = (uint8_t) g_chord_slot[a];
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
@@ -234,49 +274,87 @@ static bool scroll_handle_key(const SaturnKeyEvent &ke) {
     }
 }
 
-// Gamepad scrollback, mirroring the keyboard's nav keys with press-and-hold
-// auto-repeat. The L/R triggers page up/down. Z acts as a shift so the D-pad
-// controls the history instead of the on-screen keyboard cursor: Z+Up/Down move
-// one line, Z+Left/Right jump to the oldest/newest line (Home/End). Call once per
-// input frame. The on-screen keyboard cursor moves on the plain D-pad (no Z).
 static const int PAD_SCROLL_DELAY = 30;   // frames before auto-repeat kicks in
 static const int PAD_SCROLL_RATE  = 4;    // frames between repeats while held
-static void pad_scroll_update(void) {
-    static int last_action = 0;
-    static int timer = 0;
 
-    // All scrolling lives under the Z shift now, so plain L/R is free to cycle
-    // typeahead suggestions. Z+L/R page, Z+Up/Down line, Z+Left/Right home/end.
-    int action = 0;
-    if (g_pad->IsHeld(Button::Z)) {
-        if      (g_pad->IsHeld(Button::L))     action = 1;  // page up  (older)
-        else if (g_pad->IsHeld(Button::R))     action = 2;  // page down (newer)
-        else if (g_pad->IsHeld(Button::Up))    action = 3;  // line up
-        else if (g_pad->IsHeld(Button::Down))  action = 4;  // line down
-        else if (g_pad->IsHeld(Button::Left))  action = 5;  // home (oldest)
-        else if (g_pad->IsHeld(Button::Right)) action = 6;  // end  (newest)
-    }
-    if (action == 0) { last_action = 0; timer = 0; return; }
-
-    bool emit;
-    if (action != last_action) { last_action = action; timer = PAD_SCROLL_DELAY; emit = true; }
-    else if (--timer <= 0)     { timer = PAD_SCROLL_RATE; emit = true; }
-    else                       { emit = false; }
-    if (!emit) return;
-
-    switch (action) {
-        case 1: g_scroll += SCROLL_PAGE; break;
-        case 2: g_scroll -= SCROLL_PAGE; break;
-        case 3: g_scroll += 1;           break;
-        case 4: g_scroll -= 1;           break;
-        case 5: g_scroll  = SCROLL_ALL;  break;
-        case 6: g_scroll  = 0;           break;
-    }
+// The A/B/C button carrying face-action `action` (FA_ACCEPT/BACK/TYPE).
+static Button face_button(int action) {
+    static const Button BTN[3] = { Button::A, Button::B, Button::C };
+    return BTN[g_face_btn[action]];
+}
+// Display names for the current mapping (SRL::Debug::Print has no width flags, so
+// callers align columns by printing the value at a fixed x).
+static const char *face_btn_name(int action) {
+    static const char *N[3] = { "A", "B", "C" };
+    return N[g_face_btn[action]];
+}
+static const char *slot_name(int slot) {
+    static const char *N[SL_N] = { "L/R", "Z+Up/Dn", "Z+L/R", "Z+Left/Right",
+                                   "Y+Up/Dn", "Y+Left/Right", "Y+L/R" };
+    return N[slot];
 }
 
-// True while the Z shift is held: the D-pad is driving scrollback, so callers
-// should not also move the on-screen keyboard cursor with it.
-static bool pad_scroll_shift(void) { return g_pad->IsHeld(Button::Z); }
+// Raw held direction of a chord slot this frame: -1 (neg: L / Up / Left),
+// +1 (pos: R / Down / Right), 0 (idle). Trigger slots yield nothing when both L+R
+// are held (that combo is the caps toggle), and plain L/R yields nothing under a
+// shift so it never clashes with the shifted trigger slots.
+static int slot_raw(int slot) {
+    bool z = g_pad->IsHeld(Button::Z), y = g_pad->IsHeld(Button::Y);
+    bool l = g_pad->IsHeld(Button::L), r = g_pad->IsHeld(Button::R);
+    bool up = g_pad->IsHeld(Button::Up),   dn = g_pad->IsHeld(Button::Down);
+    bool lt = g_pad->IsHeld(Button::Left), rt = g_pad->IsHeld(Button::Right);
+    switch (slot) {
+        case SL_LR:   if (z || y || (l && r)) return 0; return l ? -1 : r ? 1 : 0;
+        case SL_ZUD:  if (!z) return 0;                 return up ? -1 : dn ? 1 : 0;
+        case SL_ZLRt: if (!z || (l && r)) return 0;     return l ? -1 : r ? 1 : 0;
+        case SL_ZLRd: if (!z) return 0;                 return lt ? -1 : rt ? 1 : 0;
+        case SL_YUD:  if (!y) return 0;                 return up ? -1 : dn ? 1 : 0;
+        case SL_YLRd: if (!y) return 0;                 return lt ? -1 : rt ? 1 : 0;
+        case SL_YLRt: if (!y || (l && r)) return 0;     return l ? -1 : r ? 1 : 0;
+    }
+    return 0;
+}
+
+// The caps-toggle combo: L+R pressed together with no shift held. Rising edge only.
+static bool caps_combo_fired(void) {
+    static bool was = false;
+    bool now = g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R)
+             && !g_pad->IsHeld(Button::Z) && !g_pad->IsHeld(Button::Y);
+    bool fired = now && !was;
+    was = now;
+    return fired;
+}
+
+// Per-slot edge + hold-repeat, ticked once per input frame by chord_tick().
+static struct ChordRep { int dir; int timer; bool fired; } g_chordrep[SL_N];
+static void chord_tick(void) {
+    for (int s = 0; s < SL_N; s++) {
+        int d = slot_raw(s);
+        ChordRep &r = g_chordrep[s];
+        if (d == 0)              { r.dir = 0; r.timer = 0; r.fired = false; }
+        else if (d != r.dir)     { r.dir = d; r.timer = PAD_SCROLL_DELAY; r.fired = true; }
+        else if (--r.timer <= 0) { r.timer = PAD_SCROLL_RATE; r.fired = true; }
+        else                     { r.fired = false; }
+    }
+}
+// Did chord action `action` fire in direction `dir` (-1/+1) this frame?
+static bool chord_fired(int action, int dir) {
+    const ChordRep &r = g_chordrep[g_chord_slot[action]];
+    return r.fired && r.dir == dir;
+}
+
+// Gamepad scrollback via the configurable Line / Home-End / Page chords (defaults
+// Y+Up/Down, Y+Left/Right, Y+L/R), all sharing chord_tick's per-slot hold-repeat.
+// Requires chord_tick() this frame. Call once per input frame; the on-screen
+// keyboard cursor moves on the plain D-pad (no shift) in typeahead_edit.
+static void pad_scroll_update(void) {
+    if (chord_fired(CA_LINE,    -1)) g_scroll += 1;
+    if (chord_fired(CA_LINE,    +1)) g_scroll -= 1;
+    if (chord_fired(CA_HOMEEND, -1)) g_scroll  = SCROLL_ALL;
+    if (chord_fired(CA_HOMEEND, +1)) g_scroll  = 0;
+    if (chord_fired(CA_PAGE,    -1)) g_scroll += SCROLL_PAGE;
+    if (chord_fired(CA_PAGE,    +1)) g_scroll -= SCROLL_PAGE;
+}
 
 // ---- gamepad auto-repeat ----------------------------------------------------
 // The editing buttons (D-pad, C, B, Y, L, R) should repeat while held, like the
@@ -289,7 +367,8 @@ static struct PadRepeat { Button btn; int timer; bool fired; } g_padrep[] = {
     { Button::Up, 0, false }, { Button::Down, 0, false },
     { Button::Left, 0, false }, { Button::Right, 0, false },
     { Button::L, 0, false }, { Button::R, 0, false },
-    { Button::C, 0, false }, { Button::B, 0, false }, { Button::Y, 0, false },
+    { Button::A, 0, false }, { Button::C, 0, false },
+    { Button::B, 0, false }, { Button::X, 0, false },
 };
 
 static void pad_repeat_update(void) {
@@ -338,6 +417,7 @@ static void history_load(KeyboardState *k) {
     int n = 0; while (s[n] && n < KB_INPUT_MAX - 1) { k->input[n] = s[n]; n++; }
     k->input[n] = '\0';
     k->input_len = n;
+    k->cursor = n;             // caret to the end of the recalled line
 }
 
 // older != 0 -> previous (older) command; older == 0 -> newer, clearing past the
@@ -348,7 +428,7 @@ static void history_recall(KeyboardState *k, int older) {
         if (g_hist_browse < g_hist_count - 1) { g_hist_browse++; history_load(k); }
     } else {
         if (g_hist_browse > 0) { g_hist_browse--; history_load(k); }
-        else { g_hist_browse = -1; k->input_len = 0; k->input[0] = '\0'; }
+        else { g_hist_browse = -1; k->input_len = 0; k->input[0] = '\0'; k->cursor = 0; }
     }
 }
 
@@ -396,12 +476,27 @@ static void draw_input_line(int row, const KeyboardState &k,
                             DictionaryWord* prediction, int current_word_len,
                             bool block_on) {
     const char* suffix = "";
-    if (prediction && k.input_len < KB_INPUT_MAX - 1)
-        suffix = prediction->text + current_word_len;
+    char sbuf[64];
+    // The completion ghost only shows when the caret is at the end of the line
+    // (a mid-line caret means the player is editing, so typeahead is suppressed).
+    if (prediction && k.cursor == k.input_len && k.input_len < KB_INPUT_MAX - 1) {
+        const char* g = prediction->text + current_word_len;
+        // Match the case the player is typing: if the current word's last typed
+        // character is uppercase, show the completion (ghost) in uppercase too.
+        bool up = current_word_len > 0 && k.input_len > 0 &&
+                  k.input[k.input_len - 1] >= 'A' && k.input[k.input_len - 1] <= 'Z';
+        int i = 0;
+        for (; g[i] && i < (int) sizeof(sbuf) - 1; i++)
+            sbuf[i] = (up && g[i] >= 'a' && g[i] <= 'z') ? (char) (g[i] - 'a' + 'A') : g[i];
+        sbuf[i] = '\0';
+        suffix = sbuf;
+    }
     SRL::Debug::Print(0, row, "> %s%s", k.input, suffix);
 
-    int cursor_col = 2 + k.input_len;   // 2 = width of the "> " prompt
-    char under = suffix[0] ? suffix[0] : ' ';
+    int cursor_col = 2 + k.cursor;   // 2 = width of the "> " prompt; caret within line
+    // Char under the caret: the edited char when mid-line, else the ghost head/space.
+    char under = (k.cursor < k.input_len) ? k.input[k.cursor]
+                                          : (suffix[0] ? suffix[0] : ' ');
     if (block_on) SRL::Debug::Print(cursor_col, row, "%s", CURSOR_BLOCK_STR);
     else          SRL::Debug::Print(cursor_col, row, "%c", under);
 }
@@ -444,9 +539,11 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
         SRL::Debug::PrintClearLine(row + 1 + r);
         SRL::Debug::Print(2, row + 1 + r, "%s", rowbuf);
     }
-    // CapsLock indicator (X + D-pad Right = on, X + D-pad Left = off).
-    if (keyboard_get_caps()) SRL::Debug::Print(24, row + 1, "CAPS");
-    SRL::Debug::Print(0, row + 1 + KB_ROWS, "C=type A=accept Y=space L/R=cycle Start=go");
+    // CapsLock indicator, to the right of the (now wider) keyboard grid.
+    if (keyboard_get_caps()) SRL::Debug::Print(30, row + 1, "CAPS");
+    // Reflect the (remappable) face buttons; full mapping lives in Options>Controller.
+    SRL::Debug::Print(0, row + 1 + KB_ROWS, "%s=type %s=accept %s=del  X=space",
+                      face_btn_name(FA_TYPE), face_btn_name(FA_ACCEPT), face_btn_name(FA_BACK));
 }
 
 // ---- global reboot command -------------------------------------------------
@@ -547,19 +644,22 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
                            DictionaryWord *&selected_out, int &cw_len_out) {
     // On-screen keyboard editing (gamepad): move the picker, type, delete.
     if (pad) {
-        if (g_pad->IsHeld(Button::X)) {                 // X + Up/Down recalls history
-            if (pad_fired(Button::Up))    history_recall(&k, 1);
-            if (pad_fired(Button::Down))  history_recall(&k, 0);
-            if (pad_fired(Button::Right)) keyboard_set_caps(1);   // X + Right = CAPS on
-            if (pad_fired(Button::Left))  keyboard_set_caps(0);   // X + Left  = CAPS off
-        } else if (!pad_scroll_shift()) {               // plain D-pad moves the picker
+        if (caps_combo_fired()) keyboard_set_caps(!keyboard_get_caps());  // L+R toggles Caps
+        // Recall + text-caret move ride their configurable chords (defaults
+        // Z+Up/Down and Z+L/R).
+        if (chord_fired(CA_RECALL, -1)) history_recall(&k, 1);   // older
+        if (chord_fired(CA_RECALL, +1)) history_recall(&k, 0);   // newer
+        if (chord_fired(CA_CURSOR, -1)) keyboard_caret_left(&k);
+        if (chord_fired(CA_CURSOR, +1)) keyboard_caret_right(&k);
+        // Plain D-pad (no Z/Y shift held) moves the on-screen keyboard picker.
+        if (!g_pad->IsHeld(Button::Z) && !g_pad->IsHeld(Button::Y)) {
             if (pad_fired(Button::Up))    keyboard_move(&k, 0, -1);
             if (pad_fired(Button::Down))  keyboard_move(&k, 0,  1);
             if (pad_fired(Button::Left))  keyboard_move(&k, -1, 0);
             if (pad_fired(Button::Right)) keyboard_move(&k,  1, 0);
         }
-        if (pad_fired(Button::C)) keyboard_type(&k);       // C = type letter
-        if (pad_fired(Button::B)) keyboard_backspace(&k);  // B = delete
+        if (pad_fired(face_button(FA_TYPE))) keyboard_type(&k);       // type letter
+        if (pad_fired(face_button(FA_BACK))) keyboard_backspace(&k);  // backspace
     }
 
     char current_word[256]; int cw_len; DictionaryWord *prev_word;
@@ -595,42 +695,75 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
         return n > cw_len ? n - cw_len : 0;
     };
     auto accept = [&](bool add_space) {
+        // Match the case the player is typing (see draw_input_line): uppercase the
+        // completed suffix when the current word's last typed char is uppercase.
+        bool up = cw_len > 0 && k.input_len > 0 &&
+                  k.input[k.input_len - 1] >= 'A' && k.input[k.input_len - 1] <= 'Z';
         if (ghost_len() > 0)
-            for (int i = cw_len; selected->text[i] && k.input_len < KB_INPUT_MAX - 1; i++)
-                keyboard_type_char(&k, selected->text[i]);
+            for (int i = cw_len; selected->text[i] && k.input_len < KB_INPUT_MAX - 1; i++) {
+                char c = selected->text[i];
+                if (up && c >= 'a' && c <= 'z') c = (char) (c - 'a' + 'A');
+                keyboard_type_char(&k, c);
+            }
         if (add_space && k.input_len < KB_INPUT_MAX - 1) keyboard_type_char(&k, ' ');
         sug_index = 0;
     };
 
-    // L/R (shoulders) or keyboard Left/Right cycle through the suggestions.
-    bool cyc_prev = (pad && !pad_scroll_shift() && pad_fired(Button::L)) || ke.kind == SATURN_KEY_LEFT;
-    bool cyc_next = (pad && !pad_scroll_shift() && pad_fired(Button::R)) || ke.kind == SATURN_KEY_RIGHT;
-    if (ncand > 0 && cyc_prev) sug_index = (sug_index - 1 + ncand) % ncand;
-    if (ncand > 0 && cyc_next) sug_index = (sug_index + 1) % ncand;
-    selected = ncand > 0 ? cands[sug_index] : nullptr;
-    if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT) ke.kind = SATURN_KEY_NONE;
+    bool at_end = (k.cursor == k.input_len);   // typeahead is active only at line end
 
-    // Accept: A or Tab commit the ghost and append a space, so the next word's
-    // typeahead starts fresh. No ghost -> A submits. Gamepad Y also accepts+space.
-    bool a_press = pad && g_pad->WasPressed(Button::A);
-    if (a_press || ke.kind == SATURN_KEY_TAB) {
-        if (ghost_len() > 0) accept(true);
-        else if (a_press)    keyboard_submit(&k);
+    // Insert toggles which arrows move the caret vs cycle suggestions.
+    if (ke.kind == SATURN_KEY_INSERT) { g_caret_arrows = !g_caret_arrows; ke.kind = SATURN_KEY_NONE; }
+
+    // Text-caret movement: Ctrl+Left/Right by default, plain Left/Right when toggled.
+    bool caret_l = g_caret_arrows ? (ke.kind == SATURN_KEY_LEFT)  : (ke.kind == SATURN_KEY_CTRL_LEFT);
+    bool caret_r = g_caret_arrows ? (ke.kind == SATURN_KEY_RIGHT) : (ke.kind == SATURN_KEY_CTRL_RIGHT);
+    if (caret_l) keyboard_caret_left(&k);
+    if (caret_r) keyboard_caret_right(&k);
+
+    // Suggestion cycling: the Autocomplete chord (default L/R), or whichever arrows
+    // aren't moving the caret. Only when the caret is at the end of the line.
+    bool kb_prev = g_caret_arrows ? (ke.kind == SATURN_KEY_CTRL_LEFT)  : (ke.kind == SATURN_KEY_LEFT);
+    bool kb_next = g_caret_arrows ? (ke.kind == SATURN_KEY_CTRL_RIGHT) : (ke.kind == SATURN_KEY_RIGHT);
+    bool cyc_prev = (pad && chord_fired(CA_AUTO, -1)) || kb_prev;
+    bool cyc_next = (pad && chord_fired(CA_AUTO, +1)) || kb_next;
+    if (at_end && ncand > 0 && cyc_prev) sug_index = (sug_index - 1 + ncand) % ncand;
+    if (at_end && ncand > 0 && cyc_next) sug_index = (sug_index + 1) % ncand;
+    selected = (at_end && ncand > 0) ? cands[sug_index] : nullptr;
+    if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT ||
+        ke.kind == SATURN_KEY_CTRL_LEFT || ke.kind == SATURN_KEY_CTRL_RIGHT) ke.kind = SATURN_KEY_NONE;
+
+    // Accept (A): commit the ghost with NO trailing space; with no ghost, submit the
+    // line unless it already ends in a space (so a just-typed separator doesn't fire
+    // the command). X commits the ghost + a space, or -- no ghost -- types a space to
+    // begin the next word. Keyboard Tab keeps the classic accept + space.
+    bool a_press   = pad && g_pad->WasPressed(face_button(FA_ACCEPT));
+    bool x_press   = pad && pad_fired(Button::X);
+    bool has_ghost = selected && ghost_len() > 0;
+    if (a_press) {
+        if (has_ghost) accept(false);
+        else if (k.input_len == 0 || k.input[k.input_len - 1] != ' ') keyboard_submit(&k);
+    }
+    if (ke.kind == SATURN_KEY_TAB) {
+        if (has_ghost) accept(true);
         ke.kind = SATURN_KEY_NONE;
-    } else if (pad && pad_fired(Button::Y)) {
-        accept(true);
+    }
+    if (x_press) {
+        if (has_ghost) accept(true);
+        else           keyboard_type_char(&k, ' ');
     }
 
-    // Remaining keyboard events (typing a letter extends the prefix).
+    // Remaining keyboard events (typing a letter extends/overwrites at the caret).
     if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
     else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
+    else if (ke.kind == SATURN_KEY_DELETE)    keyboard_delete_forward(&k);
     else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
-    else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
+    else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; }  // Ctrl+C
     else if (ke.kind == SATURN_KEY_UP)        history_recall(&k, 1);
     else if (ke.kind == SATURN_KEY_DOWN)      history_recall(&k, 0);
     else                                      scroll_handle_key(ke);   // PgUp/Dn/Home/End
 
     refresh();             // reflect any edit before drawing
+    if (k.cursor != k.input_len) selected = nullptr;   // no typeahead unless caret at end
     selected_out = selected;
     cw_len_out = cw_len;
 }
@@ -673,6 +806,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
     // Start a fresh input line but preserve cursor_row/cursor_col.
     k.input_len = 0;
     k.input[0] = '\0';
+    k.cursor = 0;
     k.submitted = 0;
     // The interpreter runs between reads without refreshing input, so a button
     // still held from dismissing the title (or the previous command's submit) can
@@ -692,7 +826,8 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;   // real keyboard in use: hide the on-screen one
         bool pad = (ke.kind == SATURN_KEY_NONE);
         if (pad && g_pad->AnyPressed()) g_kbd_visible = true;    // gamepad in use: show the on-screen keyboard
-        pad_repeat_update();   // tick held-button auto-repeat (D-pad, C, B, Y, L, R)
+        pad_repeat_update();   // tick held-button auto-repeat (D-pad, A, C, B, Y, L, R)
+        chord_tick();          // tick the configurable shift-chord repeat
 
         // Start (gamepad) or Esc (keyboard) opens the Options menu mid-game.
         if ((pad && g_pad->WasPressed(Button::START)) || ke.kind == SATURN_KEY_ESCAPE) {
@@ -724,7 +859,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
       render_console();
       if (is_reboot_command(k.input)) {
           reboot_confirm_and_maybe_reset();   // soft-resets on Yes; returns on No
-          k.input_len = 0; k.input[0] = '\0'; k.submitted = 0;
+          k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; k.submitted = 0;
           SRL::Core::Synchronize();
           continue;   // declined reboot is not passed to the game
       }
@@ -846,7 +981,7 @@ static void config_page(void) {
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     accept = true;
         else if (ke.kind == SATURN_KEY_ESCAPE)    cancel = true;
-        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; }
+        else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; }
         else {
             if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
             if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
@@ -888,6 +1023,180 @@ static void config_page(void) {
     }
 }
 
+// Group 1 tie: give face action `a` button `b`, swapping with whoever held it so
+// the three actions always stay a permutation of {A,B,C}.
+static void face_assign(int a, int b) {
+    for (int o = 0; o < FA_N; o++) if (o != a && g_face_btn[o] == b) g_face_btn[o] = g_face_btn[a];
+    g_face_btn[a] = b;
+}
+// Group 2 tie: give chord action `a` slot `s`; swap if another action holds it,
+// otherwise (the free spare) just move.
+static void chord_assign(int a, int s) {
+    for (int o = 0; o < CA_N; o++) if (o != a && g_chord_slot[o] == s) g_chord_slot[o] = g_chord_slot[a];
+    g_chord_slot[a] = s;
+}
+
+static const char *const FACE_LABEL[FA_N]  = { "Accept", "Backspace/Cancel", "Type Letter" };
+static const char *const CHORD_LABEL[CA_N] = { "Autocomplete", "Recall", "Home/End",
+                                               "Line Up/Down", "Cursor Move", "Page Up/Down" };
+
+static void mapping_reset_defaults(void) {
+    for (int a = 0; a < FA_N; a++) g_face_btn[a]   = FACE_DEFAULT[a];
+    for (int a = 0; a < CA_N; a++) g_chord_slot[a] = CHORD_DEFAULT[a];
+}
+
+// Live remap editor: 3 face rows + 6 chord rows, then Reset and Done. Up/Down pick
+// a row, Left/Right cycle its button/slot (applying the tie rules), B/Esc saves+exits.
+static void configure_controls_page(void) {
+    SRL::Core::Synchronize();   // consume the edge that opened this
+    const int NASSIGN = FA_N + CA_N;   // assignable rows [0..NASSIGN)
+    const int R_RESET = NASSIGN;       // Reset to Defaults row
+    const int R_DONE  = NASSIGN + 1;   // Done row
+    int sel = 0;
+    for (;;) {
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        pad_repeat_update();
+        bool up    = g_pad->WasPressed(Button::Up)    || ke.kind == SATURN_KEY_UP;
+        bool down  = g_pad->WasPressed(Button::Down)  || ke.kind == SATURN_KEY_DOWN;
+        bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        bool act   = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+                   || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
+        bool back  = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
+                   || ke.kind == SATURN_KEY_BACKSPACE;
+        if (back) break;
+        if (up)   sel = (sel - 1 + R_DONE + 1) % (R_DONE + 1);
+        if (down) sel = (sel + 1) % (R_DONE + 1);
+        if (sel == R_DONE)  { if (act) break; }
+        else if (sel == R_RESET) { if (act) mapping_reset_defaults(); }
+        else if (left || right) {
+            if (sel < FA_N) {
+                int n = right ? (g_face_btn[sel] + 1) % 3 : (g_face_btn[sel] + 2) % 3;
+                face_assign(sel, n);
+            } else {
+                int a = sel - FA_N;
+                int n = right ? (g_chord_slot[a] + 1) % SL_N : (g_chord_slot[a] + SL_N - 1) % SL_N;
+                chord_assign(a, n);
+            }
+        }
+
+        menu_clear();
+        int x = 2, y = 1;
+        SRL::Debug::Print(x, y, "CONFIGURE CONTROLS"); y += 2;
+        SRL::Debug::Print(x, y++, "Left/Right change   B/Esc save");
+        y++;
+        for (int a = 0; a < FA_N; a++) {
+            SRL::Debug::Print(x, y, "%c %s", sel == a ? '>' : ' ', FACE_LABEL[a]);
+            SRL::Debug::Print(x + 20, y++, "%s", face_btn_name(a));
+        }
+        for (int a = 0; a < CA_N; a++) {
+            SRL::Debug::Print(x, y, "%c %s", sel == FA_N + a ? '>' : ' ', CHORD_LABEL[a]);
+            SRL::Debug::Print(x + 20, y++, "%s", slot_name(g_chord_slot[a]));
+        }
+        SRL::Debug::Print(x + 2, y, "Caps Toggle");
+        SRL::Debug::Print(x + 20, y++, "L+R (fixed)");
+        y++;
+        SRL::Debug::Print(x, y++, "%c Reset to Defaults", sel == R_RESET ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c Done", sel == R_DONE ? '>' : ' ');
+        SRL::Core::Synchronize();
+    }
+    options_save();
+    SRL::Core::Synchronize();
+}
+
+// Controller page: shows the live mapping and offers Configure (remap editor),
+// the on-screen keyboard's CapsLock toggle, and Done.
+static void controls_page(void) {
+    SRL::Core::Synchronize();   // consume the edge that opened this
+    int sel = 0;                // 0 = Configure, 1 = Caps, 2 = Done
+    for (;;) {
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        pad_repeat_update();
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel + 2) % 3;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % 3;
+        bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        bool act = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+                 || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
+        bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
+                  || ke.kind == SATURN_KEY_BACKSPACE;
+        if (back) break;
+        if (sel == 0 && act) configure_controls_page();
+        else if (sel == 1 && (left || right || act)) keyboard_set_caps(!keyboard_get_caps());
+        else if (sel == 2 && act) break;
+
+        menu_clear();
+        int x = 2, y = 1;
+        SRL::Debug::Print(x, y, "GAMEPAD CONTROLS"); y += 2;
+        for (int a = 0; a < FA_N; a++) {
+            SRL::Debug::Print(x, y, "%s", FACE_LABEL[a]);
+            SRL::Debug::Print(x + 18, y++, "%s", face_btn_name(a));
+        }
+        for (int a = 0; a < CA_N; a++) {
+            SRL::Debug::Print(x, y, "%s", CHORD_LABEL[a]);
+            SRL::Debug::Print(x + 18, y++, "%s", slot_name(g_chord_slot[a]));
+        }
+        SRL::Debug::Print(x, y, "Space / Accept+Sp");
+        SRL::Debug::Print(x + 18, y++, "X");
+        SRL::Debug::Print(x, y, "Caps Toggle");
+        SRL::Debug::Print(x + 18, y++, "L+R");
+        y++;
+        SRL::Debug::Print(x, y++, "%c Configure Mapping", sel == 0 ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c Keyboard Caps: %s", sel == 1 ? '>' : ' ',
+                          keyboard_get_caps() ? "On" : "Off");
+        SRL::Debug::Print(x, y++, "%c Done", sel == 2 ? '>' : ' ');
+        SRL::Core::Synchronize();
+    }
+    SRL::Core::Synchronize();
+}
+
+// Physical-keyboard settings page (shown in Options while a real keyboard is the
+// device in hand). Toggles: which arrows move the caret vs cycle suggestions (the
+// same flag the Insert key flips), insert-vs-overwrite typing, and CapsLock.
+static void keyboard_controls_page(void) {
+    SRL::Core::Synchronize();   // consume the edge that opened this
+    const int N = 4;            // 0 Arrows, 1 Insert, 2 Caps, 3 Done
+    int sel = 0;
+    for (;;) {
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        pad_repeat_update();
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + N) % N;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % N;
+        bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        bool act = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+                 || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
+        bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
+                  || ke.kind == SATURN_KEY_BACKSPACE;
+        if (back) break;
+        bool toggle = left || right || act;
+        if      (sel == 0 && toggle) g_caret_arrows = !g_caret_arrows;
+        else if (sel == 1 && toggle) keyboard_set_insert(!keyboard_get_insert());
+        else if (sel == 2 && toggle) keyboard_set_caps(!keyboard_get_caps());
+        else if (sel == 3 && act)    break;
+
+        menu_clear();
+        int x = 2, y = 1;
+        SRL::Debug::Print(x, y, "KEYBOARD CONTROLS"); y += 2;
+        SRL::Debug::Print(x, y++, "Insert key also flips Arrows;");
+        SRL::Debug::Print(x, y++, "Ctrl+Left/Right always move caret.");
+        y++;
+        SRL::Debug::Print(x, y, "%c Arrows move", sel == 0 ? '>' : ' ');
+        SRL::Debug::Print(x + 18, y++, "%s", g_caret_arrows ? "Caret" : "Suggestions");
+        SRL::Debug::Print(x, y, "%c Insert mode", sel == 1 ? '>' : ' ');
+        SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_insert() ? "On (insert)" : "Off (overwrite)");
+        SRL::Debug::Print(x, y, "%c Caps Lock", sel == 2 ? '>' : ' ');
+        SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_caps() ? "On" : "Off");
+        y++;
+        SRL::Debug::Print(x, y++, "%c Done", sel == 3 ? '>' : ' ');
+        SRL::Core::Synchronize();
+    }
+    SRL::Core::Synchronize();
+}
+
 // Options menu (centered box): a difficulty slider, a sound toggle, plus
 // actions. Up/Down select a row; on Difficulty or Sound, Left/Right change it
 // (Sound also toggles on A/Enter); A/Enter activate other rows; B/Esc close.
@@ -897,8 +1206,8 @@ static void options_menu(void) {
     static const char *const DESC[]  = { "Full typeahead + hints",
                                          "Typeahead, no hints",
                                          "Typeahead off" };
-    const int x0 = 5, y0 = 8, w = 30, h = 12;
-    const int NITEMS = 5;   // 0=Difficulty 1=Configure 2=Return to Title 3=Sound 4=Done
+    const int x0 = 5, y0 = 8, w = 30, h = 13;
+    const int NITEMS = 6;   // 0=Difficulty 1=Configure 2=Controls 3=Return 4=Sound 5=Done
     int diff = g_difficulty, sel = 0;
     int sound0 = g_sound_on;   // to detect a change at close, like diff below
     SRL::Core::Synchronize();   // consume the edge that opened this
@@ -916,17 +1225,18 @@ static void options_menu(void) {
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
         if (back) break;
-        if (sel == 3 && (left || right || act)) {
+        if (sel == 4 && (left || right || act)) {
             g_sound_on = !g_sound_on;   // Sound row: Left/Right/A/Enter all toggle
         } else if (act) {
             if (sel == 1) { config_page(); }
-            else if (sel == 2) {   // Return to Title Screen (soft reset; never returns on Yes)
+            else if (sel == 2) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); }
+            else if (sel == 3) {   // Return to Title Screen (soft reset; never returns on Yes)
                 if (menu_confirm("Return to the title screen?", "Are you sure?")) {
                     if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
                     soft_reset_to_title();
                 }
             }
-            else if (sel == 4) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+            else if (sel == 5) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
 
         for (int r = 0; r < h; r++) {
@@ -942,10 +1252,12 @@ static void options_menu(void) {
                           diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
         SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
         SRL::Debug::Print(x0 + 2, y0 + 6, "%c Configure MojoZork", sel == 1 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 7, "%c Return to Title Screen", sel == 2 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 8, "%c Sound: %s", sel == 3 ? '>' : ' ', g_sound_on ? "On" : "Off");
-        SRL::Debug::Print(x0 + 2, y0 + 9, "%c Done", sel == 4 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 10, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
+        SRL::Debug::Print(x0 + 2, y0 + 7, "%c %s", sel == 2 ? '>' : ' ',
+                          g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls");
+        SRL::Debug::Print(x0 + 2, y0 + 8, "%c Return to Title Screen", sel == 3 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 9, "%c Sound: %s", sel == 4 ? '>' : ' ', g_sound_on ? "On" : "Off");
+        SRL::Debug::Print(x0 + 2, y0 + 10, "%c Done", sel == 5 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 11, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
         SRL::Core::Synchronize();
     }
     bool diff_changed = (diff != g_difficulty);
@@ -1035,7 +1347,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
             bool submit = false;
             if (ke.kind == SATURN_KEY_ENTER) submit = true;
             else if (ke.kind == SATURN_KEY_ESCAPE) { editing = 0; SRL::Core::Synchronize(); continue; }
-            else if (ke.kind == SATURN_KEY_CLEAR) { k.input_len = 0; k.input[0] = '\0'; }  // Ctrl+C
+            else if (ke.kind == SATURN_KEY_CLEAR) { k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; }  // Ctrl+C
             else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
             else if (ke.kind == SATURN_KEY_CHAR) { if (k.input_len < maxchars) keyboard_type_char(&k, ke.ch); }
             else {
@@ -1044,7 +1356,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
                 if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
                 if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
                 if (g_pad->WasPressed(Button::C))     { if (k.input_len < maxchars) keyboard_type(&k); }
-                if (g_pad->WasPressed(Button::Y))     { if (k.input_len < maxchars) keyboard_type_char(&k, ' '); }
+                if (g_pad->WasPressed(Button::X))     { if (k.input_len < maxchars) keyboard_type_char(&k, ' '); }
                 if (g_pad->WasPressed(Button::B))     { editing = 0; SRL::Core::Synchronize(); continue; }
                 if (g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)) submit = true;
             }
@@ -1085,7 +1397,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
                 SRL::Debug::Print(4, 4 + SAVE_SLOTS + r, "%s", rowbuf);
             }
             SRL::Debug::Print(2, 5 + SAVE_SLOTS + KB_ROWS, "%s",
-                hint("C=type Y=space  B=back  A=OK", "type name  Esc=back  Enter=OK"));
+                hint("C=type X=space  B=back  A=OK", "type name  Esc=back  Enter=OK"));
         }
         SRL::Core::Synchronize();
     }
@@ -1586,7 +1898,8 @@ static void online_mode(void) {
         if (ke.kind != SATURN_KEY_NONE) g_kbd_visible = false;   // real keyboard in use: hide the on-screen one
         bool pad = (ke.kind == SATURN_KEY_NONE);
         if (pad && g_pad->AnyPressed()) g_kbd_visible = true;    // gamepad in use: show the on-screen keyboard
-        pad_repeat_update();   // held-button auto-repeat (D-pad, C, B, Y, L, R)
+        pad_repeat_update();   // held-button auto-repeat (D-pad, A, C, B, Y, L, R)
+        chord_tick();          // tick the configurable shift-chord repeat
 
         // Esc (keyboard) or a sustained L+R hold (gamepad) disconnects.
         bool lr = g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R);

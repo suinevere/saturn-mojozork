@@ -142,10 +142,13 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == 13)               { ev.kind = SATURN_KEY_TAB; return ev; }       // Tab (PS/2 set 2)
     if (code == 102)              { ev.kind = SATURN_KEY_BACKSPACE; return ev; }
     if (code == 118)              { ev.kind = SATURN_KEY_ESCAPE; return ev; }  // Esc
-    if (code == 134)              { ev.kind = SATURN_KEY_LEFT;  return ev; }   // arrow keys
-    if (code == 141)              { ev.kind = SATURN_KEY_RIGHT; return ev; }
+    if (code == 134)              { ev.kind = ctrl_down ? SATURN_KEY_CTRL_LEFT  : SATURN_KEY_LEFT;  return ev; }
+    if (code == 141)              { ev.kind = ctrl_down ? SATURN_KEY_CTRL_RIGHT : SATURN_KEY_RIGHT; return ev; }
     if (code == 137)              { ev.kind = SATURN_KEY_UP;    return ev; }
     if (code == 138)              { ev.kind = SATURN_KEY_DOWN;  return ev; }
+    if (code == 129)              { ev.kind = SATURN_KEY_INSERT;   return ev; }  // Insert
+    if (code == 133)              { ev.kind = SATURN_KEY_DELETE;   return ev; }  // Delete
+    if (code == 128)              { ev.kind = SATURN_KEY_CHAR; ev.ch = '/'; return ev; }  // numpad /
     if (code == 135)              { ev.kind = SATURN_KEY_HOME;     return ev; }  // nav cluster
     if (code == 136)              { ev.kind = SATURN_KEY_END;      return ev; }
     if (code == 139)              { ev.kind = SATURN_KEY_PAGEUP;   return ev; }
