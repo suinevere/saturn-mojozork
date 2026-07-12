@@ -7,6 +7,24 @@ const char KB_LAYOUT[KB_ROWS][KB_COLS + 1] = {
     "456789.,' "
 };
 
+/* Shifted layer (CapsLock on), QWERTY-style: uppercase letters plus the shifted
+   symbols of the number/punctuation keys. '$' is caps + the '4' cell. */
+const char KB_LAYOUT_UPPER[KB_ROWS][KB_COLS + 1] = {
+    "ABCDEFGHIJ",
+    "KLMNOPQRST",
+    "UVWXYZ)!@#",
+    "$%^&*(><\" "
+};
+
+static int g_caps = 0;
+
+void keyboard_set_caps(int on) { g_caps = on ? 1 : 0; }
+int  keyboard_get_caps(void)   { return g_caps; }
+
+char keyboard_char_at(int row, int col) {
+    return (g_caps ? KB_LAYOUT_UPPER : KB_LAYOUT)[row][col];
+}
+
 void keyboard_reset(KeyboardState *k) {
     k->cursor_col = 0;
     k->cursor_row = 0;
@@ -21,7 +39,7 @@ void keyboard_move(KeyboardState *k, int dcol, int drow) {
 }
 
 char keyboard_current_char(const KeyboardState *k) {
-    return KB_LAYOUT[k->cursor_row][k->cursor_col];
+    return keyboard_char_at(k->cursor_row, k->cursor_col);
 }
 
 void keyboard_type_char(KeyboardState *k, char c) {

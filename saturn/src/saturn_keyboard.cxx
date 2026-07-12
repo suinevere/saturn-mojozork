@@ -9,6 +9,9 @@
 #define KBD_COND_MAKE   0x08   // PER_KBD_MK (key-down this report)
 #define KBD_COND_BREAK  0x01   // PER_KBD_BR (key-up this report)
 #define KBD_CODE_LCTRL  0x14   // Left Ctrl scancode (unmapped in kbd_map)
+#define KBD_CODE_LSHIFT 0x12   // Left Shift  (PS/2 set 2)
+#define KBD_CODE_RSHIFT 0x59   // Right Shift
+#define KBD_CODE_CAPS   0x58   // CapsLock
 #define KBD_OFF_ID      0
 #define KBD_OFF_COND    8
 #define KBD_OFF_CODE    9
@@ -32,8 +35,29 @@ static const char kbd_map[128] = {
     /* 90 */ 0,  ']',  0,  '\\', 0,   0,   0,   0,   0,   0,
     /*100 */ 0,   0,   0,   0,   0,  '1',  0,  '4', '7',  0,
     /*110 */ 0,   0,  '0', '.', '2', '5', '6', '8',  0,   0,
-    /*120 */ 0,   0,  '3',  0,   0,  '9',  0,   0
+    /*120 */ 0,  '+', '3', '-', '*', '9',  0,   0   // 121/123/124 = numpad + - *
 };
+
+// Apply Shift/CapsLock to a base (unshifted, lowercase) ASCII character, US
+// layout. CapsLock affects letters only; Shift also selects the shifted symbol
+// of the number/punctuation keys.
+static char apply_mods(char c, int shift, int caps) {
+    if (c >= 'a' && c <= 'z') {
+        return (shift ^ caps) ? (char)(c - 'a' + 'A') : c;
+    }
+    if (shift) {
+        switch (c) {
+            case '1': return '!'; case '2': return '@'; case '3': return '#';
+            case '4': return '$'; case '5': return '%'; case '6': return '^';
+            case '7': return '&'; case '8': return '*'; case '9': return '(';
+            case '0': return ')'; case '`': return '~'; case '-': return '_';
+            case '=': return '+'; case '[': return '{'; case ']': return '}';
+            case '\\': return '|'; case ';': return ':'; case '\'': return '"';
+            case ',': return '<'; case '.': return '>'; case '/': return '?';
+        }
+    }
+    return c;
+}
 
 static int find_keyboard_port(void) {
     for (int p = 0; p < 12; p++) {
@@ -60,6 +84,9 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     static uint8_t last_code = 0;
     static int repeat_timer = 0;
     static int ctrl_down = 0;   // Ctrl is a held modifier tracked across reports
+    static int shift_down = 0;  // Shift is held; tracked from its own make/break
+    static int caps_lock = 0;   // CapsLock is a latched toggle
+    static int caps_held = 0;   // debounce: only toggle on CapsLock's rising edge
 
     SaturnKeyEvent ev;
     ev.kind = SATURN_KEY_NONE;
@@ -80,6 +107,17 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == KBD_CODE_LCTRL) {
         if (cond & KBD_COND_MAKE)  ctrl_down = 1;
         if (cond & KBD_COND_BREAK) ctrl_down = 0;
+    }
+    // Shift: same held-modifier tracking as Ctrl (both handled before the early
+    // out so we still see the break report, which has MAKE clear).
+    if (code == KBD_CODE_LSHIFT || code == KBD_CODE_RSHIFT) {
+        if (cond & KBD_COND_MAKE)  shift_down = 1;
+        if (cond & KBD_COND_BREAK) shift_down = 0;
+    }
+    // CapsLock: latched toggle, flipped once per physical press (rising edge).
+    if (code == KBD_CODE_CAPS) {
+        if (cond & KBD_COND_MAKE)  { if (!caps_held) { caps_lock = !caps_lock; caps_held = 1; } }
+        if (cond & KBD_COND_BREAK) { caps_held = 0; }
     }
 
     // No key currently down: clear the held-key state.
@@ -116,7 +154,7 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (ctrl_down && code < 128 && kbd_map[code] == 'c') { ev.kind = SATURN_KEY_CLEAR; return ev; }
     if (code < 128 && kbd_map[code] != 0) {
         ev.kind = SATURN_KEY_CHAR;
-        ev.ch = kbd_map[code];
+        ev.ch = apply_mods(kbd_map[code], shift_down, caps_lock);
     }
     return ev;
 }

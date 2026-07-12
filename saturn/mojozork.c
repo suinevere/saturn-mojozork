@@ -1352,10 +1352,15 @@ static void opcode_read(void)
     dbg("input string from user is '%s'\n", (const char *) input);
     {
         char *ptr;
+        // Lowercase normal input (the historical interpreter behavior: games
+        // compare the raw text buffer against lowercase, e.g. passwords like
+        // "uhlersoth"). EXCEPTION: lines beginning with '$' are interpreter/game
+        // commands (e.g. The Lurking Horror's $SOUND) matched case-sensitively
+        // and typically uppercase, so those we leave as typed. Dictionary
+        // tokenizing lowercases independently in tokenizeUserInput().
+        const int preserve_case = (input[0] == '$');
         for (ptr = (char *) input; *ptr; ptr++) {
-            if ((*ptr >= 'A') && (*ptr <= 'Z')) {
-                *ptr -= 'A' - 'a';  // make it lowercase.
-            } else if ((*ptr == '\n') || (*ptr == '\r')) {
+            if ((*ptr == '\n') || (*ptr == '\r')) {
                 *ptr = '\0';
                 break;
             } else if (!preserve_case && (*ptr >= 'A') && (*ptr <= 'Z')) {
