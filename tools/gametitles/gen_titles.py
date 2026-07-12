@@ -18,6 +18,7 @@ import argparse, glob, os, re
 # Kept concise so they fit the ~36-char selection menu. Games not listed (test
 # harnesses etc.) are skipped and fall back to the filename in the UI.
 TITLES = {
+    "advent":           "Colossal Cave Adventure (1977)",
     "amfv":             "A Mind Forever Voyaging",
     "ballyhoo":         "Ballyhoo",
     "cutthroats":       "Cutthroats",
@@ -52,6 +53,7 @@ TITLES = {
 # Category id per short name (matches GAME_CAT_* in game_titles.h). Anything not
 # listed (amfv, minizork, sampler, hypochondriac, ...) falls into Other (5).
 CATEGORY = {
+    "advent": 0,
     "zork1": 0, "zork2": 0, "zork3": 0, "enchanter": 0, "sorcerer": 0, "spellbreaker": 0,
     "planetfall": 1, "stationfall": 1,
     "deadline": 2, "witness": 2, "suspect": 2, "moonmist": 2,
@@ -60,6 +62,12 @@ CATEGORY = {
     "starcross": 4, "suspended": 4, "lurkinghorror": 4,
 }
 CAT_OTHER = 5
+
+# Games that ship on a disc but have no file in the reference collection, keyed
+# by (release, serial) so a regenerate keeps them. Merged over the scan results.
+MANUAL = {
+    (1, "151001"): ("Colossal Cave Adventure (1977)", 0),  # ADVENT.Z3
+}
 
 
 def scan(refdir):
@@ -139,6 +147,7 @@ def main():
     ap.add_argument("--out", required=True, help="output C file")
     args = ap.parse_args()
     entries = scan(args.ref)
+    entries.update(MANUAL)   # disc-only games with no reference file
     emit(entries, args.out)
     print(f"{len(entries)} (release,serial) title entries -> {args.out}")
 

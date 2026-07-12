@@ -205,6 +205,7 @@ static void options_save(void) {
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
+static bool menu_confirm(const char *line1, const char *line2);  // defined below
 
 // ---- scrollback ------------------------------------------------------------
 
@@ -609,11 +610,11 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
     selected = ncand > 0 ? cands[sug_index] : nullptr;
     if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT) ke.kind = SATURN_KEY_NONE;
 
-    // Accept: A or Tab commit the ghost (Tab only on a keyboard; space is literal
-    // there). No ghost -> A submits. Gamepad Y accepts then appends a space.
+    // Accept: A or Tab commit the ghost and append a space, so the next word's
+    // typeahead starts fresh. No ghost -> A submits. Gamepad Y also accepts+space.
     bool a_press = pad && g_pad->WasPressed(Button::A);
     if (a_press || ke.kind == SATURN_KEY_TAB) {
-        if (ghost_len() > 0) accept(false);
+        if (ghost_len() > 0) accept(true);
         else if (a_press)    keyboard_submit(&k);
         ke.kind = SATURN_KEY_NONE;
     } else if (pad && pad_fired(Button::Y)) {
@@ -711,6 +712,9 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         SRL::Core::Synchronize();
         sound_service();   // re-trigger looping sounds / reap finished one-shots
       }
+      // Autocomplete-accept appends a trailing space; strip trailing spaces so the
+      // parser, the reboot check, history, and the echo all see the clean command.
+      while (k.input_len > 0 && k.input[k.input_len - 1] == ' ') k.input[--k.input_len] = '\0';
       g_scroll = 0;   // a submitted line returns the view to the live bottom
       history_push(k.input);   // remember the command for Up/Down recall
       // Echo the entered command onto the game's "> " prompt line so it stays in the
@@ -916,9 +920,11 @@ static void options_menu(void) {
             g_sound_on = !g_sound_on;   // Sound row: Left/Right/A/Enter all toggle
         } else if (act) {
             if (sel == 1) { config_page(); }
-            else if (sel == 2) {   // Return to Title Screen (never returns)
-                if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
-                soft_reset_to_title();
+            else if (sel == 2) {   // Return to Title Screen (soft reset; never returns on Yes)
+                if (menu_confirm("Return to the title screen?", "Are you sure?")) {
+                    if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
+                    soft_reset_to_title();
+                }
             }
             else if (sel == 4) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
@@ -1281,23 +1287,20 @@ static int scan_z3_folder(char out[][16], int max) {
 // display title (NULL if unknown/unreadable) and sets *cat to its category
 // (GAME_CAT_OTHER if unknown). Reads one sector.
 static const char* read_game_info(const char* filename, int* cat) {
-    static uint8_t hdr[2048];
+    static uint8_t hdr[64];
     *cat = GAME_CAT_OTHER;
+    // One sector-addressed LoadBytes instead of Size-stat + Open + Read + Close:
+    // fewer GFS calls per file (faster over ~25 games) and it sidesteps the
+    // flaky first-access GFS_GetFileSize the old Size check had to retry around.
     for (int attempt = 0; attempt < 8; attempt++) {
         SRL::Cd::File f(filename);
-        int32_t bytes = f.Size.Bytes, ssz = f.Size.SectorSize;
-        if (ssz == 2048 && bytes >= 0x1a) {
-            if (f.Open()) {
-                int32_t got = f.Read(2048, hdr);
-                f.Close();
-                if (got >= 0x1a && hdr[0] == 3) {
-                    unsigned short rel = (unsigned short)((hdr[2] << 8) | hdr[3]);
-                    const char* serial = (const char*)(hdr + 0x12);
-                    *cat = game_category(rel, serial);
-                    return game_title(rel, serial);
-                }
-                return nullptr;
-            }
+        int32_t got = f.LoadBytes(0, (int32_t) sizeof(hdr), hdr);   // header lives in sector 0
+        if (got >= 0x1a) {
+            if (hdr[0] != 3) return nullptr;                        // read ok, not a v3 story
+            unsigned short rel = (unsigned short)((hdr[2] << 8) | hdr[3]);
+            const char* serial = (const char*)(hdr + 0x12);
+            *cat = game_category(rel, serial);
+            return game_title(rel, serial);
         }
         for (int i = 0; i < 4; i++) SRL::Core::Synchronize();
     }
@@ -1309,12 +1312,40 @@ static const char *const CAT_NAMES[GAME_CAT_COUNT] = {
     "Tales of Adventure & Fantasy", "Sci-Fi & Horror", "Comedy", "Other",
 };
 
+// Release year parsed from a label's trailing "(YYYY)" (e.g. "Zork I (1980)").
+// Returns 9999 when there's no 4-digit year, so undated games sort after dated
+// ones (then alphabetically among themselves) per the menu's sort order.
+// Lexicographic compare, <0 / 0 / >0 like strcmp (avoids a <string.h> dependency).
+static int label_cmp(const char* a, const char* b) {
+    while (*a && (*a == *b)) { a++; b++; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+static int label_year(const char* s) {
+    int n = 0; while (s[n]) n++;
+    if (n >= 6 && s[n-6] == '(' && s[n-1] == ')') {
+        int y = 0;
+        for (int k = n-5; k <= n-2; k++) {
+            if (s[k] < '0' || s[k] > '9') return 9999;
+            y = y * 10 + (s[k] - '0');
+        }
+        return y;
+    }
+    return 9999;
+}
+
 const char* game_select() {
     const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
     static char names[MAX_GAMES][16];   // static so the returned pointer stays valid
     static char labels[MAX_GAMES][40];  // display titles (or filename fallback)
     static int  cats[MAX_GAMES];
     const char *items[MAX_GAMES];
+
+    // Reading each game's header off the CD takes a moment; show a notice first.
+    menu_clear();
+    SRL::Debug::Print(2, 2, "Loading games...");
+    SRL::Core::Synchronize();
+
     int count = scan_z3_folder(names, MAX_GAMES);
 
     int sel = 0;
@@ -1366,7 +1397,20 @@ const char* game_select() {
         if (cs < 0) return nullptr;   // B/Esc at categories: back to the mode menu
 
         int gmap[MAX_GAMES], ng = 0;   // menu index -> game index
-        for (int i = 0; i < count; i++) if (cats[i] == catmap[cs]) { items[ng] = labels[i]; gmap[ng] = i; ng++; }
+        for (int i = 0; i < count; i++) if (cats[i] == catmap[cs]) gmap[ng++] = i;
+        // Sort within the category by release year (from the label's "(YYYY)"),
+        // then alphabetically by title (also breaks ties among undated games).
+        for (int a = 1; a < ng; a++) {
+            int key = gmap[a], ya = label_year(labels[key]);
+            int b = a - 1;
+            while (b >= 0) {
+                int yb = label_year(labels[gmap[b]]);
+                if (yb < ya || (yb == ya && label_cmp(labels[gmap[b]], labels[key]) <= 0)) break;
+                gmap[b+1] = gmap[b]; b--;
+            }
+            gmap[b+1] = key;
+        }
+        for (int i = 0; i < ng; i++) items[i] = labels[gmap[i]];
         int gs = menu_select(CAT_NAMES[catmap[cs]], items, ng);
         if (gs < 0) { if (ncat == 1) return nullptr; else continue; }   // back to categories
         return names[gmap[gs]];       // the caller loads by filename, not the label
