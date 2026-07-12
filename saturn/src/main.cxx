@@ -25,6 +25,10 @@ static TrieNode* g_typeahead_root = nullptr;
 enum { DIFF_EASY = 0, DIFF_MEDIUM = 1, DIFF_HARD = 2 };
 static int g_difficulty = DIFF_EASY;
 
+// Sound (Options menu). On by default; persisted in MOJOOPTS alongside
+// difficulty and the dial number. See options_load/options_save below.
+static int g_sound_on = 1;
+
 // Online dial number (editable in Options -> Configure MojoZork; persisted).
 static char g_dialnum[24] = "199403";
 
@@ -172,24 +176,32 @@ static void note_input_device(const SaturnKeyEvent &ke) {
 // (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
 // typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
 // off. Defaults to Easy; only written to backup once the player changes it.
-// Persisted blob: difficulty(1) + dial number(NUL-terminated). Older 1-byte saves
-// (difficulty only) load fine: the zeroed tail leaves the dial number at default.
+// Persisted blob: difficulty(1) + dial number(NUL-terminated) + sound flag(1).
+// Older saves (difficulty only, or difficulty+dial with a zeroed tail) load
+// fine: the sound byte reads as 0 (absent), which the flag encoding below
+// treats as "on" so pre-existing saves aren't silently muted.
 static void options_load(void) {
     uint8_t buf[64];
     for (int z = 0; z < (int) sizeof(buf); z++) buf[z] = 0;
     if (!saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf)) return;
     if (buf[0] <= DIFF_HARD) g_difficulty = (int) buf[0];
+    int i = 1;   // tracks the offset of the dial number's terminating NUL
     if (buf[1]) {
         int j;
         for (j = 0; buf[1 + j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = (char) buf[1 + j];
         g_dialnum[j] = '\0';
+        i = 1 + j;
     }
+    // Byte just past the dial number's NUL is the sound flag: 1 = off; 0
+    // (absent, old blob) or 2 = on.
+    if (i + 1 < (int) sizeof(buf)) g_sound_on = (buf[i + 1] == 1) ? 0 : 1;
 }
 static void options_save(void) {
     uint8_t buf[64]; int n = 0;
     buf[n++] = (uint8_t) g_difficulty;
     for (int i = 0; g_dialnum[i] && n < 62; i++) buf[n++] = (uint8_t) g_dialnum[i];
     buf[n++] = 0;
+    buf[n++] = (uint8_t) (g_sound_on ? 2 : 1);   // 0 = absent (old blob) -> on
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
@@ -868,17 +880,19 @@ static void config_page(void) {
     }
 }
 
-// Options menu (centered box): a difficulty slider plus actions. Up/Down select
-// a row; on Difficulty, Left/Right change it; A/Enter activate; B/Esc close.
-// The difficulty is written to backup only if the player changed it.
+// Options menu (centered box): a difficulty slider, a sound toggle, plus
+// actions. Up/Down select a row; on Difficulty or Sound, Left/Right change it
+// (Sound also toggles on A/Enter); A/Enter activate other rows; B/Esc close.
+// Difficulty/sound are written to backup only if the player changed them.
 static void options_menu(void) {
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
     static const char *const DESC[]  = { "Full typeahead + hints",
                                          "Typeahead, no hints",
                                          "Typeahead off" };
-    const int x0 = 5, y0 = 8, w = 30, h = 11;
-    const int NITEMS = 4;
+    const int x0 = 5, y0 = 8, w = 30, h = 12;
+    const int NITEMS = 5;   // 0=Difficulty 1=Configure 2=Return to Title 3=Sound 4=Done
     int diff = g_difficulty, sel = 0;
+    int sound0 = g_sound_on;   // to detect a change at close, like diff below
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
@@ -894,13 +908,15 @@ static void options_menu(void) {
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
         if (back) break;
-        if (act) {
+        if (sel == 3 && (left || right || act)) {
+            g_sound_on = !g_sound_on;   // Sound row: Left/Right/A/Enter all toggle
+        } else if (act) {
             if (sel == 1) { config_page(); }
             else if (sel == 2) {   // Return to Title Screen (never returns)
                 if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
                 soft_reset_to_title();
             }
-            else if (sel == 3) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+            else if (sel == 4) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
 
         for (int r = 0; r < h; r++) {
@@ -917,11 +933,15 @@ static void options_menu(void) {
         SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
         SRL::Debug::Print(x0 + 2, y0 + 6, "%c Configure MojoZork", sel == 1 ? '>' : ' ');
         SRL::Debug::Print(x0 + 2, y0 + 7, "%c Return to Title Screen", sel == 2 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 8, "%c Done", sel == 3 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 9, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
+        SRL::Debug::Print(x0 + 2, y0 + 8, "%c Sound: %s", sel == 3 ? '>' : ' ', g_sound_on ? "On" : "Off");
+        SRL::Debug::Print(x0 + 2, y0 + 9, "%c Done", sel == 4 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 10, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
         SRL::Core::Synchronize();
     }
-    if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
+    bool diff_changed = (diff != g_difficulty);
+    g_difficulty = diff;
+    if (diff_changed || g_sound_on != sound0) options_save();
+    sound_set_enabled(g_sound_on);
 }
 
 // Per-game backup filename for a slot: the story's base name (uppercased, up to
@@ -1631,6 +1651,7 @@ int main(void) {
         for (; g_story_filename[i] && g_story_filename[i] != '.' && i < 11; i++) blb[i] = g_story_filename[i];
         blb[i] = '.'; blb[i+1] = 'B'; blb[i+2] = 'L'; blb[i+3] = 'B'; blb[i+4] = '\0';
         sound_init(blb);
+        sound_set_enabled(g_sound_on);   // honor a saved "off" from the first prompt
     }
 
     mojo_run();
