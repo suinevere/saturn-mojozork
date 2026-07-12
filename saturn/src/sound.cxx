@@ -40,6 +40,19 @@ extern "C" void sound_debug_get(int* calls, int* num, int* eff, int* vol, int* o
     if (out)   *out   = g_dbg_out;
 }
 
+// Second diagnostic: why sound_init failed. ssz=SectorSize seen, op=Open ok,
+// rd=Read ok, ns=sound_blorb_open() return, h0..3=first header bytes (FORM?).
+static int g_dbg_ssz = -99, g_dbg_op = -1, g_dbg_rd = -1, g_dbg_ns = -99;
+static unsigned char g_dbg_h[4] = {0, 0, 0, 0};
+extern "C" const char* sound_debug_name(void) { return g_blb; }
+extern "C" void sound_debug2(int* ssz, int* op, int* rd, int* ns, unsigned char* h4) {
+    if (ssz) *ssz = g_dbg_ssz;
+    if (op)  *op  = g_dbg_op;
+    if (rd)  *rd  = g_dbg_rd;
+    if (ns)  *ns  = g_dbg_ns;
+    if (h4)  { for (int i = 0; i < 4; i++) h4[i] = g_dbg_h[i]; }
+}
+
 // CD reader for the parser: open the .BLB and read a slice.
 //
 // Deviation from the brief: SRL::Cd::File::LoadBytes()'s first parameter is
@@ -57,11 +70,18 @@ static int cd_reader(unsigned int off, unsigned int len, unsigned char* out) {
     // until the file reports 2048-byte data sectors and opens, then seek+read.
     for (int attempt = 0; attempt < 300; attempt++) {
         SRL::Cd::File f(g_blb);
-        if (f.Size.SectorSize == 2048 && f.Open()) {
+        int32_t ssz = f.Size.SectorSize;
+        if (off == 0 && attempt == 0) g_dbg_ssz = (int) ssz;   // initial stat
+        if (ssz == 2048 && f.Open()) {
+            if (off == 0) g_dbg_op = 1;
             bool ok = f.Seek((int32_t) off) == (int32_t) off &&
                       f.Read((int32_t) len, out) == (int32_t) len;
             f.Close();
-            if (ok) return 1;
+            if (ok) {
+                if (off == 0) { g_dbg_rd = 1;
+                    for (unsigned i = 0; i < 4 && i < len; i++) g_dbg_h[i] = out[i]; }
+                return 1;
+            }
         }
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
@@ -121,7 +141,8 @@ extern "C" void sound_init(const char* blbfile) {
     g_have = 0; g_blb[0] = '\0';
     if (!blbfile) return;
     int j = 0; for (; blbfile[j] && j < 15; j++) g_blb[j] = blbfile[j]; g_blb[j] = '\0';
-    if (sound_blorb_open(cd_reader) > 0) g_have = 1;
+    g_dbg_ns = sound_blorb_open(cd_reader);
+    if (g_dbg_ns > 0) g_have = 1;
 }
 
 extern "C" void sound_stop_all(void) {
