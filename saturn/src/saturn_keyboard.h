@@ -20,7 +20,11 @@ typedef enum {
     SATURN_KEY_PAGEUP,
     SATURN_KEY_PAGEDOWN,
     SATURN_KEY_TAB,         /* Tab: accept the typeahead completion */
-    SATURN_KEY_CLEAR        /* Ctrl+C: clear the current input line */
+    SATURN_KEY_CLEAR,       /* Ctrl+C: clear the current input line */
+    SATURN_KEY_CTRL_LEFT,   /* Ctrl+Left: move the text caret left */
+    SATURN_KEY_CTRL_RIGHT,  /* Ctrl+Right: move the text caret right */
+    SATURN_KEY_INSERT,      /* Insert: toggle arrow-key vs Ctrl+arrow roles */
+    SATURN_KEY_DELETE       /* Delete: remove the character at the caret */
 } SaturnKeyKind;
 
 typedef struct {
