@@ -408,6 +408,9 @@ static void draw_input_line(int row, const KeyboardState &k,
 // Half-period, in frames, of the cursor blink (~0.33s at 60fps -> ~1.5Hz).
 #define CURSOR_BLINK_FRAMES 20
 
+// Parser diagnostic globals (defined in the C file sound_blorb.c).
+extern "C" { extern int g_blorb_fail; extern int g_blorb_nres; }
+
 static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, int current_word_len) {
     // One-time: install the solid-block glyph the cursor prints. Done here (not
     // at boot) so VDP2/the font are guaranteed up by the first render.
@@ -424,8 +427,7 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
     int base = TOP_MARGIN + console_height();   // first row below the console
     // Temporary sound diagnostic (top-left). calls>0 means the game issued a
     // sound_effect opcode; out= is where playback ended (0=playing).
-    { extern "C" int g_blorb_fail, g_blorb_nres;
-      int c=0,n=0,e=0,v=0,o=-1; sound_debug_get(&c,&n,&e,&v,&o);
+    { int c=0,n=0,e=0,v=0,o=-1; sound_debug_get(&c,&n,&e,&v,&o);
       int ssz=-99,op=-1,rd=-1,ns=-99; unsigned char h[4]={0,0,0,0}; sound_debug2(&ssz,&op,&rd,&ns,h);
       // Single safe row (row 0 sits above the console, so it isn't overwritten).
       // %d only -- the minimal Debug::Print lacks %x/%s/width flags.
