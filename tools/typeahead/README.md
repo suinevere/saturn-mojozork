@@ -38,7 +38,7 @@ python gen_typeahead.py --story ../../saturn/cd/data/Z3/ZORK1.Z3 --dump
 # Regenerate the compiled-in vocabulary (Zork I + walkthrough):
 python gen_typeahead.py \
     --story  ../../saturn/cd/data/Z3/ZORK1.Z3 \
-    --script zork1_walkthrough.txt \
+    --script ZORK1.WIN \
     --out    ../../saturn/src/typeahead_zork.c
 
 # Then rebuild the client:
@@ -66,7 +66,7 @@ one or more of these into `saturn/src/typeahead_solution.c`:
 
 ```sh
 python gen_solution.py \
-    --game ../../saturn/cd/data/Z3/ZORK1.Z3:zork1_walkthrough.txt \
+    --game ../../saturn/cd/data/Z3/ZORK1.Z3:ZORK1.WIN \
     --out  ../../saturn/src/typeahead_solution.c
 # add more with repeated --game STORY:SCRIPT
 ```

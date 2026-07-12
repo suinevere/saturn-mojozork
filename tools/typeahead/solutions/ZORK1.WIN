@@ -1,7 +1,4 @@
-# Zork I winning walkthrough -- one command per line.
-# Source: MIT Zork transcript (full playthrough, all treasures cased).
-# Used by gen_typeahead.py to weight completion and build context transitions.
-# Replace or extend this with your own winning script to tune "easy mode".
+# Source : https://web.mit.edu/marleigh/www/portfolio/Files/zork/transcript.html
 open mailbox
 read leaflet
 drop leaflet
