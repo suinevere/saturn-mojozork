@@ -1652,7 +1652,7 @@ int main(void) {
         SRL::Cd::File f(game_file);
         int32_t bytes = f.Size.Bytes;
         int32_t ssz   = f.Size.SectorSize;
-        SRL::Debug::Print(2, 26, "loading %s...           ", game_file);
+        SRL::Debug::Print(1, 26, "loading %s...           ", game_file);
         if (ssz == 2048 && bytes > 0 && bytes <= 0x40000) {
             uint8_t *buf = (uint8_t *) SRL::Memory::HighWorkRam::Malloc((uint32_t) bytes);
             if (buf != nullptr && f.Open()) {

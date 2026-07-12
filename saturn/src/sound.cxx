@@ -14,12 +14,24 @@ public:
 };
 
 #define NSLOT 4                     // matches SRL's 4 PCM channels
+#define SND_FPS  60                 // Synchronize cadence (NTSC); loop timing base
+#define SND_LEAD 3                  // frames of overlap before a loop channel ends
+
+// A looping sound plays "ping-pong": to avoid the ~1-frame silent gap that a
+// same-channel re-trigger leaves, we start the sample on a second channel a few
+// frames before the current one ends, so the seam overlaps instead of dropping
+// out. `channel` is the current (leading) channel; `channel2` is the previous
+// one still finishing its tail. One-shots use `channel` only (channel2 = -1).
 struct Slot {
     int      number;               // Z sound number, 0 = free
-    int      channel;              // SRL PCM channel, -1 = none
-    int      loops;
+    int      loops;                // 1 = looping (ping-pong)
     int8_t*  buf;
     SlicePcm pcm;
+    uint8_t  vol;                  // playback volume (re-used for loop hand-off)
+    int      channel;              // leading channel, -1 = none
+    int      channel2;             // loop's previous (overlapping) channel, -1 = none
+    int      period;               // sample length in frames (loops only)
+    int      countdown;            // frames until the next hand-off (loops only)
 };
 
 static char  g_blb[16];
@@ -27,58 +39,73 @@ static int   g_have;               // 1 if the index loaded
 static int   g_enabled = 1;        // Options toggle
 static Slot  g_slot[NSLOT];
 
-// CD reader for the parser: open the .BLB and read a slice.
-//
-// Deviation from the brief: SRL::Cd::File::LoadBytes()'s first parameter is
-// documented in srl_cd.hpp as "sectorOffset - Number of sectors to skip at
-// the start" (it forwards straight to GFS_Load's `ofs`, which is sector
-// granularity), not a byte offset. sound_blorb_get() hands back byte offsets
-// into the .BLB (per sound_blorb.h), so passing them straight to LoadBytes
-// would read from the wrong place. Cd::File::Seek()/Read() are documented
-// (and exercised elsewhere in SRL, e.g. WaveSound) as byte-precise, so we use
-// Open()+Seek()+Read() instead for both the parser's reads and the slice load.
+#define CD_SECTOR 2048
+// Random-access read of `len` bytes at byte offset `off`. SRL's Cd::File Seek()
+// does NOT reposition on-device (every Read starts at byte 0), so we use the
+// sector-addressed LoadBytes(sectorOffset, size, dest) instead: load the whole
+// sector span covering [off, off+len) into a scratch buffer, then copy out the
+// sub-range. `len` here is always small (<= parser window), so 2 sectors suffice.
+static unsigned char g_secbuf[CD_SECTOR * 2];
 static int cd_reader(unsigned int off, unsigned int len, unsigned char* out) {
-    SRL::Cd::File f(g_blb);
-    if (!f.Exists() || !f.Open()) return 0;
-    bool ok = f.Seek((int32_t) off) == (int32_t) off &&
-              f.Read((int32_t) len, out) == (int32_t) len;
-    f.Close();
-    return ok ? 1 : 0;
+    if (len == 0) return 0;
+    unsigned int sec    = off / CD_SECTOR;
+    unsigned int secoff = off % CD_SECTOR;
+    unsigned int rbytes = ((secoff + len + CD_SECTOR - 1) / CD_SECTOR) * CD_SECTOR;
+    if (rbytes > sizeof g_secbuf) return 0;
+    for (int attempt = 0; attempt < 60; attempt++) {
+        SRL::Cd::File f(g_blb);
+        int32_t got = f.LoadBytes((size_t) sec, (int32_t) rbytes, g_secbuf);
+        if (got >= (int32_t)(secoff + len)) {
+            for (unsigned i = 0; i < len; i++) out[i] = g_secbuf[secoff + i];
+            return 1;
+        }
+        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
+    }
+    return 0;
 }
 
 static int8_t* load_slice(unsigned int off, unsigned int len) {
-    // slPCMOn won't play samples shorter than 0x900; pad with silence.
-    uint32_t n = len < 0x900 ? 0x900 : len;
-    int8_t* b = (int8_t*) SRL::Memory::HighWorkRam::Malloc(n);
+    // Same sector-addressed load as cd_reader (Seek() is broken on-device), but
+    // sized for a full PCM slice. Read the sector span covering [off, off+len)
+    // straight into the playback buffer, shift the sample down to the buffer
+    // start, then pad to slPCMOn's 0x900 minimum with silence.
+    uint32_t play   = len < 0x900 ? 0x900 : len;      // playable size (padded)
+    unsigned int sec    = off / CD_SECTOR;
+    unsigned int secoff = off % CD_SECTOR;
+    uint32_t rbytes = ((secoff + len + CD_SECTOR - 1) / CD_SECTOR) * CD_SECTOR;
+    uint32_t bufsz  = rbytes > play ? rbytes : play;  // hold the raw read AND padded PCM
+    int8_t* b = (int8_t*) SRL::Memory::HighWorkRam::Malloc(bufsz);
     if (!b) return nullptr;
-    for (uint32_t i = len; i < n; i++) b[i] = 0;
-
-    SRL::Cd::File f(g_blb);
-    bool ok = f.Exists() && f.Open() &&
-              f.Seek((int32_t) off) == (int32_t) off &&
-              f.Read((int32_t) len, (uint8_t*) b) == (int32_t) len;
-    f.Close();
-    if (!ok) { SRL::Memory::Free(b); return nullptr; }
-    return b;
+    for (int attempt = 0; attempt < 60; attempt++) {
+        SRL::Cd::File f(g_blb);
+        int32_t got = f.LoadBytes((size_t) sec, (int32_t) rbytes, (uint8_t*) b);
+        if (got >= (int32_t)(secoff + len)) {
+            if (secoff) for (uint32_t i = 0; i < len; i++) b[i] = b[secoff + i];  // shift to start
+            for (uint32_t i = len; i < play; i++) b[i] = 0;                       // pad silence
+            return b;
+        }
+        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
+    }
+    SRL::Memory::Free(b);
+    return nullptr;
 }
 
 static void free_slot(Slot& s) {
-    // Deviation from the brief: SRL::Sound::Pcm::Channels[] is a private
-    // member of SRL::Sound::Pcm (srl_sound.hpp), so it and raw slPCMOff()
-    // aren't reachable from here. Pcm::StopSound(channel) is the public
-    // wrapper that does the same slPCMOff(&Channels[channel]) call.
+    // Pcm::StopSound(channel) is the public wrapper for slPCMOff(&Channels[ch])
+    // (Channels[] itself is private in srl_sound.hpp).
     //
     // The s.number != 0 guard matters for g_slot's static zero-init state:
     // statically zero-initialized Slots have channel == 0 (a valid-looking
     // channel index, not the sentinel -1 that sound_init() normally assigns),
     // so a bare "channel >= 0" check would issue a spurious StopSound(0) on
-    // an unplayed slot the very first time teardown runs. number is only
-    // ever non-zero while a slot is actually holding a live channel/buffer
-    // (see saturn_sound_effect), so gating on it keeps this safe on zeroed
-    // slots without changing behavior for any slot that was actually used.
-    if (s.number != 0 && s.channel >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel);
+    // an unplayed slot the very first time teardown runs. number is only ever
+    // non-zero while a slot actually holds a live channel/buffer.
+    if (s.number != 0) {
+        if (s.channel  >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel);
+        if (s.channel2 >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel2);
+    }
     if (s.buf) { SRL::Memory::Free(s.buf); s.buf = nullptr; }
-    s.number = 0; s.channel = -1; s.loops = 0;
+    s.number = 0; s.channel = -1; s.channel2 = -1; s.loops = 0;
 }
 
 extern "C" void sound_init(const char* blbfile) {
@@ -90,7 +117,9 @@ extern "C" void sound_init(const char* blbfile) {
     // the very first, statically zero-initialized call too - see the
     // s.number != 0 guard in free_slot() above.
     sound_stop_all();
-    for (int i = 0; i < NSLOT; i++) { g_slot[i].number = 0; g_slot[i].channel = -1; g_slot[i].buf = nullptr; }
+    for (int i = 0; i < NSLOT; i++) {
+        g_slot[i].number = 0; g_slot[i].channel = -1; g_slot[i].channel2 = -1; g_slot[i].buf = nullptr;
+    }
     g_have = 0; g_blb[0] = '\0';
     if (!blbfile) return;
     int j = 0; for (; blbfile[j] && j < 15; j++) g_blb[j] = blbfile[j]; g_blb[j] = '\0';
@@ -116,7 +145,7 @@ extern "C" void saturn_sound_effect(int number, int effect, int volume) {
         return;
     }
     if (effect != 2 && effect != 1) return;      // only start / prepare handled
-    if (effect == 1) return;                     // prepare: on-demand load is fast enough
+    if (effect == 1) return;                      // prepare: on-demand load is fast enough
 
     // start: if this looping sound is already active, leave it be.
     for (int i = 0; i < NSLOT; i++) if (g_slot[i].number == number && g_slot[i].channel >= 0) return;
@@ -126,25 +155,55 @@ extern "C" void saturn_sound_effect(int number, int effect, int volume) {
 
     int8_t* buf = load_slice(off, len);
     if (!buf) return;
+    uint32_t play = len < 0x900 ? 0x900 : len;
     Slot& s = g_slot[free];
     s.number = number; s.loops = loops; s.buf = buf;
-    s.pcm.set(buf, len < 0x900 ? 0x900 : len, rate);
-    uint8_t vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
-    s.channel = s.pcm.Play(vol);
-    if (s.channel < 0) free_slot(s);              // no channel: undo
+    s.channel2 = -1;
+    s.pcm.set(buf, play, rate);
+    s.vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
+    s.channel = s.pcm.Play(s.vol);
+    if (s.channel < 0) { free_slot(s); return; }  // no channel: undo
+    if (loops) {
+        // Frames the sample occupies a channel (8-bit mono -> 1 byte per sample).
+        uint32_t p = ((uint32_t) play * SND_FPS) / (rate ? rate : 1);
+        s.period = (int) p;
+        if (s.period < SND_LEAD + 2) s.period = SND_LEAD + 2;  // guard very short loops
+        s.countdown = s.period - SND_LEAD;
+    }
 }
 
 extern "C" void sound_service(void) {
     if (!g_enabled) return;
     for (int i = 0; i < NSLOT; i++) {
         Slot& s = g_slot[i];
-        if (s.number == 0 || s.channel < 0) continue;
-        // Deviation from the brief: same reason as free_slot() above -
-        // Pcm::IsChannelFree(channel) is the public wrapper for
-        // !slPCMStat(&Channels[channel]), since Channels[] is private.
-        if (SRL::Sound::Pcm::IsChannelFree((uint8_t) s.channel)) {   // finished
-            if (s.loops) s.pcm.PlayOnChannel((uint8_t) s.channel, 100);  // re-trigger
-            else free_slot(s);
+        if (s.number == 0) continue;
+
+        if (!s.loops) {                     // one-shot: reap when it finishes
+            if (s.channel >= 0 && SRL::Sound::Pcm::IsChannelFree((uint8_t) s.channel))
+                free_slot(s);
+            continue;
+        }
+
+        // Looping: ping-pong hand-off a few frames before the leading channel
+        // ends, so a fresh copy is already sounding when this one goes silent.
+        if (s.countdown > 0) s.countdown--;
+        if (s.countdown <= 0) {
+            int nb = s.pcm.Play(s.vol);     // start the next copy on a free channel
+            if (nb >= 0) {
+                if (s.channel2 >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel2);
+                s.channel2 = s.channel;     // old leading becomes the finishing tail
+                s.channel  = nb;            // new leading
+            }
+            s.countdown = s.period - SND_LEAD;
+            if (s.countdown < 1) s.countdown = 1;
+        }
+        // Safety net: if we fell behind (e.g. no free channel, or the game held
+        // the CPU past the hand-off) and the leading channel already went silent,
+        // restart it in place so the loop recovers rather than staying dead.
+        if (s.channel >= 0 && SRL::Sound::Pcm::IsChannelFree((uint8_t) s.channel)) {
+            s.pcm.PlayOnChannel((uint8_t) s.channel, s.vol);
+            s.countdown = s.period - SND_LEAD;
+            if (s.countdown < 1) s.countdown = 1;
         }
     }
 }
