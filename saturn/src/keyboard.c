@@ -4,7 +4,7 @@ const char KB_LAYOUT[KB_ROWS][KB_COLS + 1] = {
     "abcdefghij",
     "klmnopqrst",
     "uvwxyz0123",
-    "456789.,' "
+    "456789.,$ "
 };
 
 void keyboard_reset(KeyboardState *k) {
