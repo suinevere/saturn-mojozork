@@ -14,12 +14,24 @@ public:
 };
 
 #define NSLOT 4                     // matches SRL's 4 PCM channels
+#define SND_FPS  60                 // Synchronize cadence (NTSC); loop timing base
+#define SND_LEAD 3                  // frames of overlap before a loop channel ends
+
+// A looping sound plays "ping-pong": to avoid the ~1-frame silent gap that a
+// same-channel re-trigger leaves, we start the sample on a second channel a few
+// frames before the current one ends, so the seam overlaps instead of dropping
+// out. `channel` is the current (leading) channel; `channel2` is the previous
+// one still finishing its tail. One-shots use `channel` only (channel2 = -1).
 struct Slot {
     int      number;               // Z sound number, 0 = free
-    int      channel;              // SRL PCM channel, -1 = none
-    int      loops;
+    int      loops;                // 1 = looping (ping-pong)
     int8_t*  buf;
     SlicePcm pcm;
+    uint8_t  vol;                  // playback volume (re-used for loop hand-off)
+    int      channel;              // leading channel, -1 = none
+    int      channel2;             // loop's previous (overlapping) channel, -1 = none
+    int      period;               // sample length in frames (loops only)
+    int      countdown;            // frames until the next hand-off (loops only)
 };
 
 static char  g_blb[16];
@@ -79,22 +91,21 @@ static int8_t* load_slice(unsigned int off, unsigned int len) {
 }
 
 static void free_slot(Slot& s) {
-    // Deviation from the brief: SRL::Sound::Pcm::Channels[] is a private
-    // member of SRL::Sound::Pcm (srl_sound.hpp), so it and raw slPCMOff()
-    // aren't reachable from here. Pcm::StopSound(channel) is the public
-    // wrapper that does the same slPCMOff(&Channels[channel]) call.
+    // Pcm::StopSound(channel) is the public wrapper for slPCMOff(&Channels[ch])
+    // (Channels[] itself is private in srl_sound.hpp).
     //
     // The s.number != 0 guard matters for g_slot's static zero-init state:
     // statically zero-initialized Slots have channel == 0 (a valid-looking
     // channel index, not the sentinel -1 that sound_init() normally assigns),
     // so a bare "channel >= 0" check would issue a spurious StopSound(0) on
-    // an unplayed slot the very first time teardown runs. number is only
-    // ever non-zero while a slot is actually holding a live channel/buffer
-    // (see saturn_sound_effect), so gating on it keeps this safe on zeroed
-    // slots without changing behavior for any slot that was actually used.
-    if (s.number != 0 && s.channel >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel);
+    // an unplayed slot the very first time teardown runs. number is only ever
+    // non-zero while a slot actually holds a live channel/buffer.
+    if (s.number != 0) {
+        if (s.channel  >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel);
+        if (s.channel2 >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel2);
+    }
     if (s.buf) { SRL::Memory::Free(s.buf); s.buf = nullptr; }
-    s.number = 0; s.channel = -1; s.loops = 0;
+    s.number = 0; s.channel = -1; s.channel2 = -1; s.loops = 0;
 }
 
 extern "C" void sound_init(const char* blbfile) {
@@ -106,7 +117,9 @@ extern "C" void sound_init(const char* blbfile) {
     // the very first, statically zero-initialized call too - see the
     // s.number != 0 guard in free_slot() above.
     sound_stop_all();
-    for (int i = 0; i < NSLOT; i++) { g_slot[i].number = 0; g_slot[i].channel = -1; g_slot[i].buf = nullptr; }
+    for (int i = 0; i < NSLOT; i++) {
+        g_slot[i].number = 0; g_slot[i].channel = -1; g_slot[i].channel2 = -1; g_slot[i].buf = nullptr;
+    }
     g_have = 0; g_blb[0] = '\0';
     if (!blbfile) return;
     int j = 0; for (; blbfile[j] && j < 15; j++) g_blb[j] = blbfile[j]; g_blb[j] = '\0';
@@ -142,25 +155,55 @@ extern "C" void saturn_sound_effect(int number, int effect, int volume) {
 
     int8_t* buf = load_slice(off, len);
     if (!buf) return;
+    uint32_t play = len < 0x900 ? 0x900 : len;
     Slot& s = g_slot[free];
     s.number = number; s.loops = loops; s.buf = buf;
-    s.pcm.set(buf, len < 0x900 ? 0x900 : len, rate);
-    uint8_t vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
-    s.channel = s.pcm.Play(vol);
-    if (s.channel < 0) free_slot(s);              // no channel: undo
+    s.channel2 = -1;
+    s.pcm.set(buf, play, rate);
+    s.vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
+    s.channel = s.pcm.Play(s.vol);
+    if (s.channel < 0) { free_slot(s); return; }  // no channel: undo
+    if (loops) {
+        // Frames the sample occupies a channel (8-bit mono -> 1 byte per sample).
+        uint32_t p = ((uint32_t) play * SND_FPS) / (rate ? rate : 1);
+        s.period = (int) p;
+        if (s.period < SND_LEAD + 2) s.period = SND_LEAD + 2;  // guard very short loops
+        s.countdown = s.period - SND_LEAD;
+    }
 }
 
 extern "C" void sound_service(void) {
     if (!g_enabled) return;
     for (int i = 0; i < NSLOT; i++) {
         Slot& s = g_slot[i];
-        if (s.number == 0 || s.channel < 0) continue;
-        // Deviation from the brief: same reason as free_slot() above -
-        // Pcm::IsChannelFree(channel) is the public wrapper for
-        // !slPCMStat(&Channels[channel]), since Channels[] is private.
-        if (SRL::Sound::Pcm::IsChannelFree((uint8_t) s.channel)) {   // finished
-            if (s.loops) s.pcm.PlayOnChannel((uint8_t) s.channel, 100);  // re-trigger
-            else free_slot(s);
+        if (s.number == 0) continue;
+
+        if (!s.loops) {                     // one-shot: reap when it finishes
+            if (s.channel >= 0 && SRL::Sound::Pcm::IsChannelFree((uint8_t) s.channel))
+                free_slot(s);
+            continue;
+        }
+
+        // Looping: ping-pong hand-off a few frames before the leading channel
+        // ends, so a fresh copy is already sounding when this one goes silent.
+        if (s.countdown > 0) s.countdown--;
+        if (s.countdown <= 0) {
+            int nb = s.pcm.Play(s.vol);     // start the next copy on a free channel
+            if (nb >= 0) {
+                if (s.channel2 >= 0) SRL::Sound::Pcm::StopSound((uint8_t) s.channel2);
+                s.channel2 = s.channel;     // old leading becomes the finishing tail
+                s.channel  = nb;            // new leading
+            }
+            s.countdown = s.period - SND_LEAD;
+            if (s.countdown < 1) s.countdown = 1;
+        }
+        // Safety net: if we fell behind (e.g. no free channel, or the game held
+        // the CPU past the hand-off) and the leading channel already went silent,
+        // restart it in place so the loop recovers rather than staying dead.
+        if (s.channel >= 0 && SRL::Sound::Pcm::IsChannelFree((uint8_t) s.channel)) {
+            s.pcm.PlayOnChannel((uint8_t) s.channel, s.vol);
+            s.countdown = s.period - SND_LEAD;
+            if (s.countdown < 1) s.countdown = 1;
         }
     }
 }
