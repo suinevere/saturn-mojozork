@@ -51,12 +51,21 @@ extern "C" void sound_debug_get(int* calls, int* num, int* eff, int* vol, int* o
 // (and exercised elsewhere in SRL, e.g. WaveSound) as byte-precise, so we use
 // Open()+Seek()+Read() instead for both the parser's reads and the slice load.
 static int cd_reader(unsigned int off, unsigned int len, unsigned char* out) {
-    SRL::Cd::File f(g_blb);
-    if (!f.Exists() || !f.Open()) return 0;
-    bool ok = f.Seek((int32_t) off) == (int32_t) off &&
-              f.Read((int32_t) len, out) == (int32_t) len;
-    f.Close();
-    return ok ? 1 : 0;
+    // The CD file stat (GFS_GetFileSize, used by the Cd::File ctor) can report an
+    // uninitialized size on first access -- the story loader in main.cxx works
+    // around this by retrying until the size is sane. Mirror that here: retry
+    // until the file reports 2048-byte data sectors and opens, then seek+read.
+    for (int attempt = 0; attempt < 300; attempt++) {
+        SRL::Cd::File f(g_blb);
+        if (f.Size.SectorSize == 2048 && f.Open()) {
+            bool ok = f.Seek((int32_t) off) == (int32_t) off &&
+                      f.Read((int32_t) len, out) == (int32_t) len;
+            f.Close();
+            if (ok) return 1;
+        }
+        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
+    }
+    return 0;
 }
 
 static int8_t* load_slice(unsigned int off, unsigned int len) {
@@ -66,13 +75,18 @@ static int8_t* load_slice(unsigned int off, unsigned int len) {
     if (!b) return nullptr;
     for (uint32_t i = len; i < n; i++) b[i] = 0;
 
-    SRL::Cd::File f(g_blb);
-    bool ok = f.Exists() && f.Open() &&
-              f.Seek((int32_t) off) == (int32_t) off &&
-              f.Read((int32_t) len, (uint8_t*) b) == (int32_t) len;
-    f.Close();
-    if (!ok) { SRL::Memory::Free(b); return nullptr; }
-    return b;
+    for (int attempt = 0; attempt < 60; attempt++) {
+        SRL::Cd::File f(g_blb);
+        if (f.Size.SectorSize == 2048 && f.Open()) {
+            bool ok = f.Seek((int32_t) off) == (int32_t) off &&
+                      f.Read((int32_t) len, (uint8_t*) b) == (int32_t) len;
+            f.Close();
+            if (ok) return b;
+        }
+        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
+    }
+    SRL::Memory::Free(b);
+    return nullptr;
 }
 
 static void free_slot(Slot& s) {
