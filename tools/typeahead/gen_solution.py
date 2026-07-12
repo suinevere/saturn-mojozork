@@ -15,7 +15,7 @@ Input (per game): a walkthrough text file -- one command per line, '#' comments.
 
 Usage:
   python gen_solution.py \
-      --game ../../saturn/cd/data/Z3/ZORK1.Z3:zork1_walkthrough.txt \
+      --game ../../saturn/cd/data/Z3/ZORK1.Z3:ZORK1.WIN \
       --out  ../../saturn/src/typeahead_solution.c
 """
 

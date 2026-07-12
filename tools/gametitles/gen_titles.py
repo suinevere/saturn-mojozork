@@ -60,13 +60,14 @@ CATEGORY = {
     "infidel": 3, "cutthroats": 3, "seastalker": 3, "wishbringer": 3,
     "ballyhoo": 3, "hollywoodhijinx": 3, "plunderedhearts": 3,
     "starcross": 4, "suspended": 4, "lurkinghorror": 4,
+    "hitchhiker": 5, "leathergoddesses": 5
 }
 CAT_OTHER = 5
 
 # Games that ship on a disc but have no file in the reference collection, keyed
 # by (release, serial) so a regenerate keeps them. Merged over the scan results.
 MANUAL = {
-    (1, "151001"): ("Colossal Cave Adventure (1977)", 0),  # ADVENT.Z3
+    #(6, "151001"): ("Colossal Cave Adventure (1977)", 0)
 }
 
 
