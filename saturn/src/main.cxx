@@ -437,12 +437,14 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
         int p = 0;
         for (int c = 0; c < KB_COLS; c++) {
             rowbuf[p++] = (r == k.cursor_row && c == k.cursor_col) ? '[' : ' ';
-            rowbuf[p++] = KB_LAYOUT[r][c];
+            rowbuf[p++] = keyboard_char_at(r, c);
         }
         rowbuf[p] = '\0';
         SRL::Debug::PrintClearLine(row + 1 + r);
         SRL::Debug::Print(2, row + 1 + r, "%s", rowbuf);
     }
+    // CapsLock indicator (X + D-pad Right = on, X + D-pad Left = off).
+    if (keyboard_get_caps()) SRL::Debug::Print(24, row + 1, "CAPS");
     SRL::Debug::Print(0, row + 1 + KB_ROWS, "C=type A=accept Y=space L/R=cycle Start=go");
 }
 
@@ -547,6 +549,8 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
         if (g_pad->IsHeld(Button::X)) {                 // X + Up/Down recalls history
             if (pad_fired(Button::Up))    history_recall(&k, 1);
             if (pad_fired(Button::Down))  history_recall(&k, 0);
+            if (pad_fired(Button::Right)) keyboard_set_caps(1);   // X + Right = CAPS on
+            if (pad_fired(Button::Left))  keyboard_set_caps(0);   // X + Left  = CAPS off
         } else if (!pad_scroll_shift()) {               // plain D-pad moves the picker
             if (pad_fired(Button::Up))    keyboard_move(&k, 0, -1);
             if (pad_fired(Button::Down))  keyboard_move(&k, 0,  1);

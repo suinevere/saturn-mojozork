@@ -1352,10 +1352,15 @@ static void opcode_read(void)
     dbg("input string from user is '%s'\n", (const char *) input);
     {
         char *ptr;
+        // Preserve the case of the input as typed: the parse buffer is
+        // lowercased for dictionary lookup inside tokenizeUserInput(), but the
+        // text buffer the game reads must keep its original case. Some V3 games
+        // (e.g. The Lurking Horror) match interpreter commands like $SOUND
+        // case-sensitively against the raw text, so force-lowercasing here would
+        // make those commands impossible to type. We still trim a trailing
+        // newline/carriage-return.
         for (ptr = (char *) input; *ptr; ptr++) {
-            if ((*ptr >= 'A') && (*ptr <= 'Z')) {
-                *ptr -= 'A' - 'a';  // make it lowercase.
-            } else if ((*ptr == '\n') || (*ptr == '\r')) {
+            if ((*ptr == '\n') || (*ptr == '\r')) {
                 *ptr = '\0';
                 break;
             }
