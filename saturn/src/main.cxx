@@ -425,10 +425,11 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
     // Temporary sound diagnostic (top-left). calls>0 means the game issued a
     // sound_effect opcode; out= is where playback ended (0=playing).
     { int c=0,n=0,e=0,v=0,o=-1; sound_debug_get(&c,&n,&e,&v,&o);
-      SRL::Debug::Print(0, 0, "SND c%d n%d e%d v%d o%d ", c, n, e, v, o); }
-    { int ssz=-99,op=-1,rd=-1,ns=-99; unsigned char h[4]={0,0,0,0}; sound_debug2(&ssz,&op,&rd,&ns,h);
-      SRL::Debug::Print(0, 1, "SI ssz%d op%d rd%d ns%d h%02x%02x%02x%02x [%s] ",
-                        ssz, op, rd, ns, h[0], h[1], h[2], h[3], sound_debug_name()); }
+      int ssz=-99,op=-1,rd=-1,ns=-99; unsigned char h[4]={0,0,0,0}; sound_debug2(&ssz,&op,&rd,&ns,h);
+      // Single safe row (row 0 sits above the console, so it isn't overwritten).
+      // %d only -- the minimal Debug::Print lacks %x/%s/width flags. FORM=70,79,82,77.
+      SRL::Debug::Print(0, 0, "o%d c%d ssz%d op%d rd%d ns%d h%d.%d.%d.%d ",
+                        o, c, ssz, op, rd, ns, h[0], h[1], h[2], h[3]); }
     if (!g_kbd_visible) {
         int row = base - 1;                     // over the console's last (prompt) line
         SRL::Debug::PrintClearLine(base);
