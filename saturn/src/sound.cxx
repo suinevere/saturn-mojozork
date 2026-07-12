@@ -27,6 +27,19 @@ static int   g_have;               // 1 if the index loaded
 static int   g_enabled = 1;        // Options toggle
 static Slot  g_slot[NSLOT];
 
+// --- temporary debug instrumentation: observe sound_effect activity ---
+// outcome: -1 none, 0 played, 1 disabled, 2 no-data(g_have=0), 3 unknown-number,
+// 4 load-fail, 5 no-slot, 6 stop/finish, 7 prepare, 8 other-effect,
+// 9 already-active, 10 no-channel.
+static int g_dbg_calls = 0, g_dbg_num = 0, g_dbg_eff = 0, g_dbg_vol = 0, g_dbg_out = -1;
+extern "C" void sound_debug_get(int* calls, int* num, int* eff, int* vol, int* out) {
+    if (calls) *calls = g_dbg_calls;
+    if (num)   *num   = g_dbg_num;
+    if (eff)   *eff   = g_dbg_eff;
+    if (vol)   *vol   = g_dbg_vol;
+    if (out)   *out   = g_dbg_out;
+}
+
 // CD reader for the parser: open the .BLB and read a slice.
 //
 // Deviation from the brief: SRL::Cd::File::LoadBytes()'s first parameter is
@@ -107,31 +120,34 @@ extern "C" void sound_set_enabled(int on) {
 }
 
 extern "C" void saturn_sound_effect(int number, int effect, int volume) {
-    if (!g_enabled || !g_have) return;
+    g_dbg_calls++; g_dbg_num = number; g_dbg_eff = effect; g_dbg_vol = volume; g_dbg_out = -1;
+    if (!g_enabled) { g_dbg_out = 1; return; }
+    if (!g_have)    { g_dbg_out = 2; return; }
     unsigned int off, len; unsigned short rate; int loops;
-    if (!sound_blorb_get(number, &off, &len, &rate, &loops)) return;
+    if (!sound_blorb_get(number, &off, &len, &rate, &loops)) { g_dbg_out = 3; return; }
 
     if (effect == 3 || effect == 4) {           // stop / finish
         for (int i = 0; i < NSLOT; i++) if (g_slot[i].number == number) free_slot(g_slot[i]);
-        return;
+        g_dbg_out = 6; return;
     }
-    if (effect != 2 && effect != 1) return;      // only start / prepare handled
-    if (effect == 1) return;                     // prepare: on-demand load is fast enough
+    if (effect != 2 && effect != 1) { g_dbg_out = 8; return; }  // only start / prepare handled
+    if (effect == 1) { g_dbg_out = 7; return; }                 // prepare: on-demand load is fast enough
 
     // start: if this looping sound is already active, leave it be.
-    for (int i = 0; i < NSLOT; i++) if (g_slot[i].number == number && g_slot[i].channel >= 0) return;
+    for (int i = 0; i < NSLOT; i++) if (g_slot[i].number == number && g_slot[i].channel >= 0) { g_dbg_out = 9; return; }
 
     int free = -1; for (int i = 0; i < NSLOT; i++) if (g_slot[i].number == 0) { free = i; break; }
-    if (free < 0) return;                         // all channels busy: drop it
+    if (free < 0) { g_dbg_out = 5; return; }      // all channels busy: drop it
 
     int8_t* buf = load_slice(off, len);
-    if (!buf) return;
+    if (!buf) { g_dbg_out = 4; return; }
     Slot& s = g_slot[free];
     s.number = number; s.loops = loops; s.buf = buf;
     s.pcm.set(buf, len < 0x900 ? 0x900 : len, rate);
     uint8_t vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
     s.channel = s.pcm.Play(vol);
-    if (s.channel < 0) free_slot(s);              // no channel: undo
+    if (s.channel < 0) { free_slot(s); g_dbg_out = 10; return; }  // no channel: undo
+    g_dbg_out = 0;                                 // playing
 }
 
 extern "C" void sound_service(void) {

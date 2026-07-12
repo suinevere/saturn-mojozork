@@ -422,6 +422,10 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
     // ">" prompt, so draw the input over it instead of on a separate row below --
     // otherwise the prompt shows twice. Clear the now-unused row underneath.
     int base = TOP_MARGIN + console_height();   // first row below the console
+    // Temporary sound diagnostic (top-left). calls>0 means the game issued a
+    // sound_effect opcode; out= is where playback ended (0=playing).
+    { int c=0,n=0,e=0,v=0,o=-1; sound_debug_get(&c,&n,&e,&v,&o);
+      SRL::Debug::Print(0, 0, "SND c%d n%d e%d v%d o%d ", c, n, e, v, o); }
     if (!g_kbd_visible) {
         int row = base - 1;                     // over the console's last (prompt) line
         SRL::Debug::PrintClearLine(base);

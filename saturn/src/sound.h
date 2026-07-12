@@ -21,6 +21,9 @@ void sound_stop_all(void);
 /* Options toggle. Disabling stops everything. */
 void sound_set_enabled(int on);
 
+/* Temporary debug: last sound_effect call + outcome (see sound.cxx for codes). */
+void sound_debug_get(int* calls, int* num, int* eff, int* vol, int* out);
+
 #ifdef __cplusplus
 }
 #endif
