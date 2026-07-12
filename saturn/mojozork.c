@@ -129,6 +129,7 @@ typedef struct ZMachineState
     #else
     void (*die)(const char *fmt, ...);
     #endif
+    void (*sound_effect)(int number, int effect, int volume);  /* NULL = silent */
 } ZMachineState;
 
 static ZMachineState *GState = NULL;
@@ -1534,6 +1535,16 @@ static void opcode_save(void)
     doBranch(okay ? 1 : 0);
 }
 
+static void opcode_sound_effect(void)
+{
+    const uint16 number = GState->operand_count > 0 ? GState->operands[0] : 0;
+    const uint16 effect = GState->operand_count > 1 ? GState->operands[1] : 2;
+    const uint16 volume = GState->operand_count > 2 ? GState->operands[2] : 255;
+    if (GState->sound_effect) {
+        GState->sound_effect((int) number, (int) effect, (int) volume);
+    }
+}
+
 static void opcode_restore(void)
 {
 #if defined(MOJOZORK_SATURN)
@@ -1983,7 +1994,7 @@ static void inititialOpcodeTableSetup(void)
     OPCODE(235, set_window);
     OPCODE_WRITEME(243, output_stream);
     OPCODE_WRITEME(244, input_stream);
-    OPCODE_WRITEME(245, sound_effect);
+    OPCODE(245, sound_effect);
 
     if (GState->header.version < 4) {
         return;  // we're done.
