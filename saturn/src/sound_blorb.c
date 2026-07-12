@@ -50,8 +50,16 @@ static int parse_sound(sound_read_fn read, unsigned int start,
     while (p + 8 <= endw && p < 8 + formlen) {
         const unsigned char* c = b + p;
         unsigned int clen = be32(c + 4);
-        if (tag(c, "COMM")) *rate = ext_rate(c + 16);        /* rate at COMM+16 */
-        else if (tag(c, "SSND")) { *off = start + p + 16; *len = clen - 8; }
+        if (tag(c, "COMM")) {
+            /* COMM+16 is an 18-byte extended float; only read it if it fits the window. */
+            if (p + 26 <= endw) *rate = ext_rate(c + 16);
+        } else if (tag(c, "SSND")) {
+            if (p + 16 <= endw) {
+                /* SSND body starts with a 4-byte offset field (big-endian) before the PCM data. */
+                *off = start + p + 16 + be32(c + 8);
+                *len = clen - 8;
+            }
+        }
         p += 8 + clen + (clen & 1);
         if (*rate && *off) break;        /* got both */
     }
