@@ -91,6 +91,16 @@ typedef struct {
 """
 
 C_APPLY = """
+// A purely a-z token can be inserted into the (alphabetic) trie; anything with a
+// digit or punctuation cannot (insert_trie skips non-letters, which would corrupt
+// a shorter word's node), so such tokens are left out.
+static int sol_word_is_alpha(const char* s) {
+    if (!s || !*s) return 0;
+    for (const char* p = s; *p; p++)
+        if (*p < 'a' || *p > 'z') return 0;
+    return 1;
+}
+
 void apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned int len) {
     if (len < 0x1a) return;
     unsigned short release = (unsigned short)((story[2] << 8) | story[3]);
@@ -99,9 +109,16 @@ void apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned
         if (SOLUTIONS[i].release != release) continue;
         if (memcmp(SOLUTIONS[i].serial, serial, 6) != 0) continue;
         for (int j = 0; j < SOLUTIONS[i].nwords; j++) {
-            DictionaryWord* w = find_exact_word(root, SOLUTIONS[i].words[j].w);
-            if (w && SOLUTIONS[i].words[j].wt > w->base_weight)
-                w->base_weight = SOLUTIONS[i].words[j].wt;
+            const char* sw = SOLUTIONS[i].words[j].w;
+            DictionaryWord* w = find_exact_word(root, sw);
+            if (w) {
+                if (SOLUTIONS[i].words[j].wt > w->base_weight)
+                    w->base_weight = SOLUTIONS[i].words[j].wt;
+            } else if (sol_word_is_alpha(sw)) {
+                // Walkthrough vocabulary the parser dictionary lacks (e.g. the
+                // Lurking Horror password): insert it so typeahead can suggest it.
+                insert_trie(root, create_word(sw, TYPE_UNKNOWN, SOLUTIONS[i].words[j].wt));
+            }
         }
         for (int j = 0; j < SOLUTIONS[i].nlinks; j++) {
             DictionaryWord* a = find_exact_word(root, SOLUTIONS[i].links[j].a);

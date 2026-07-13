@@ -177,6 +177,14 @@ static void note_input_device(const SaturnKeyEvent &ke) {
     else if (g_pad->AnyPressed())   g_kbd_visible = true;
 }
 
+// One menu frame: keep looping PCM sounds alive while a modal menu is open (the
+// ping-pong hand-off needs sound_service() every frame, or the loop starves and
+// goes silent). Menu loops call this in place of a bare Synchronize.
+static void menu_sync(void) {
+    sound_service();
+    SRL::Core::Synchronize();
+}
+
 // ---- configurable controller mapping ---------------------------------------
 // Two tied groups the player can remap (Options > Controller > Configure):
 //   Group 1 (face buttons): Accept, Backspace/Cancel, Type-letter -- always a
@@ -1019,7 +1027,7 @@ static void config_page(void) {
         if (err[0]) SRL::Debug::Print(2, 11, "%s", err);
         SRL::Debug::Print(2, 13, "%s",
             hint("C=type B=del  A=save  Start=cancel", "type number  Enter=save  Esc=cancel"));
-        SRL::Core::Synchronize();
+        menu_sync();
     }
 }
 
@@ -1099,7 +1107,7 @@ static void configure_controls_page(void) {
         y++;
         SRL::Debug::Print(x, y++, "%c Reset to Defaults", sel == R_RESET ? '>' : ' ');
         SRL::Debug::Print(x, y++, "%c Done", sel == R_DONE ? '>' : ' ');
-        SRL::Core::Synchronize();
+        menu_sync();
     }
     options_save();
     SRL::Core::Synchronize();
@@ -1147,7 +1155,7 @@ static void controls_page(void) {
         SRL::Debug::Print(x, y++, "%c Keyboard Caps: %s", sel == 1 ? '>' : ' ',
                           keyboard_get_caps() ? "On" : "Off");
         SRL::Debug::Print(x, y++, "%c Done", sel == 2 ? '>' : ' ');
-        SRL::Core::Synchronize();
+        menu_sync();
     }
     SRL::Core::Synchronize();
 }
@@ -1192,7 +1200,7 @@ static void keyboard_controls_page(void) {
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_caps() ? "On" : "Off");
         y++;
         SRL::Debug::Print(x, y++, "%c Done", sel == 3 ? '>' : ' ');
-        SRL::Core::Synchronize();
+        menu_sync();
     }
     SRL::Core::Synchronize();
 }
@@ -1258,12 +1266,17 @@ static void options_menu(void) {
         SRL::Debug::Print(x0 + 2, y0 + 9, "%c Sound: %s", sel == 4 ? '>' : ' ', g_sound_on ? "On" : "Off");
         SRL::Debug::Print(x0 + 2, y0 + 10, "%c Done", sel == 5 ? '>' : ' ');
         SRL::Debug::Print(x0 + 2, y0 + 11, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
-        SRL::Core::Synchronize();
+        menu_sync();
     }
     bool diff_changed = (diff != g_difficulty);
     g_difficulty = diff;
     if (diff_changed || g_sound_on != sound0) options_save();
     sound_set_enabled(g_sound_on);
+    // Wait for the closing button to be released so it doesn't leak into the
+    // editor (B would backspace, A/C/Start would submit) the moment we return.
+    while (g_pad->IsHeld(Button::B) || g_pad->IsHeld(Button::A) ||
+           g_pad->IsHeld(Button::C) || g_pad->IsHeld(Button::START))
+        menu_sync();
 }
 
 // Per-game backup filename for a slot: the story's base name (uppercased, up to
@@ -1424,7 +1437,7 @@ static bool menu_confirm(const char *line1, const char *line2) {
         if (line2 && line2[0]) SRL::Debug::Print(2, 4, "%s", line2);
         SRL::Debug::Print(2, 6, "%s",
             hint("A / C = Yes     B = No", "Enter = Yes     Esc = No"));
-        SRL::Core::Synchronize();
+        menu_sync();
     }
 }
 
