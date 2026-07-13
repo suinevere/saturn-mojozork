@@ -123,6 +123,7 @@ typedef struct ZMachineState
     void (*set_window)(const uint16 oldval, const uint16 newval);
 
     void (*writestr)(const char *str, const uintptr slen);
+    void (*readline)(char *buf, int maxlen);
     #if defined(__GNUC__) || defined(__clang__)
     void (*die)(const char *fmt, ...) __attribute__((noreturn));
     #else
@@ -230,7 +231,11 @@ static void opcode_call(void)
         sint8 i;
         if (GState->header.version <= 4) {
             for (i = 0; i < numlocals; i++, routine += sizeof (uint16)) {
-                *(GState->sp++) = *((uint16 *) routine);  // leave it byteswapped when moving to the stack.
+                // SH-2 faults on unaligned *(uint16*). Copy the two story bytes
+                // directly, preserving the big-endian order the stack/READUI16 expect.
+                ((uint8 *) GState->sp)[0] = routine[0];
+                ((uint8 *) GState->sp)[1] = routine[1];
+                GState->sp++;
             }
         } else {
             for (i = 0; i < numlocals; i++) {
@@ -504,12 +509,14 @@ static void opcode_load(void)
 
 static void opcode_loadw(void)
 {
-    uint16 *store = (uint16 *) varAddress(*(GState->pc++), 1, 0);
+    uint8 *store = varAddress(*(GState->pc++), 1, 0);
     FIXME("can only read from dynamic or static memory (not highmem).");
     FIXME("how does overflow work here? Do these wrap around?");
     const uint16 offset = (GState->operands[0] + (GState->operands[1] * 2));
-    const uint16 *src = (const uint16 *) get_virtualized_mem_ptr(offset);
-    *store = *src;  // copy from bigendian to bigendian: no byteswap.
+    const uint8 *src = get_virtualized_mem_ptr(offset);
+    // copy 16 bits bigendian->bigendian byte-wise; SH-2 faults on unaligned *(uint16*)
+    store[0] = src[0];
+    store[1] = src[1];
 }
 
 static void opcode_loadb(void)
@@ -1110,7 +1117,11 @@ static uint16 doRandom(const sint16 range)
 {
     uint16 result = 0;
     if (range == 0) {  // reseed in "most random way"
+#if defined(MOJOZORK_SATURN)
+        random_seed = 0x2A6D;   /* entropy comes from the title-screen frame count */
+#else
         random_seed = (int) time(NULL);
+#endif
     } else if (range < 0) {  // reseed with specific value
         random_seed = -range;
     } else {
@@ -1300,10 +1311,14 @@ static void opcode_read(void)
         GState->startup_script = NULL;
         printf("%s", (const char *) input);
     } else if (script == NULL) {
+#if defined(MOJOZORK_SATURN)
+        GState->readline((char *) input, (int) inputlen);
+#else
         FIXME("fgets isn't really the right solution here.");
         if (!fgets((char *) input, inputlen, stdin)) {
             GState->die("EOF or error on stdin during read");
         }
+#endif
     } else {
         uint8 i;
         char *scriptptr = script;
@@ -1414,14 +1429,35 @@ static void opcode_set_window(void)
 }
 
 static void loadStory(const char *fname);
+#if defined(MOJOZORK_SATURN)
+static void initStory(const char *fname, uint8 *story, const uint32 storylen);
+#endif
 
 static void opcode_restart(void)
 {
+#if defined(MOJOZORK_SATURN)
+    {
+        extern int saturn_read_story_file(uint8 *buf, uint32 len);
+        const uint32 len = (uint32) GState->story_len;
+        uint8 *fresh = (uint8 *) malloc((size_t) len);
+        if ((fresh != NULL) && saturn_read_story_file(fresh, len)) {
+            initStory(NULL, fresh, len);   /* frees the old (dirty) buffer, adopts the fresh one */
+        } else if (fresh != NULL) {
+            free(fresh);                   /* reload failed: keep current state instead of hanging */
+        }
+        return;
+    }
+#else
     loadStory(GState->story_filename);
+#endif
 }
 
 static void opcode_save(void)
 {
+#if defined(MOJOZORK_SATURN)
+    doBranch(0);   /* saving not supported yet on Saturn */
+    return;
+#endif
     FIXME("this should write Quetzal format; this is temporary.");
     const uint32 addr = (uint32) (GState->pc-GState->story);
     const uint32 sp = (uint32) (GState->sp-GState->stack);
@@ -1442,6 +1478,10 @@ static void opcode_save(void)
 
 static void opcode_restore(void)
 {
+#if defined(MOJOZORK_SATURN)
+    doBranch(0);   /* no save to restore on Saturn */
+    return;
+#endif
     FIXME("this should read Quetzal format; this is temporary.");
     FILE *io = fopen("save.dat", "rb");
     int okay = 1;
@@ -2091,7 +2131,7 @@ static void loadStory(const char *fname)
 }
 
 
-#if !defined(MULTIZORK) && !defined(MOJOZORK_LIBRETRO)
+#if !defined(MULTIZORK) && !defined(MOJOZORK_LIBRETRO) && !defined(MOJOZORK_SATURN)
 
 #if defined(__GNUC__) || defined(__clang__)
 static void die(const char *fmt, ...) __attribute__((noreturn));
