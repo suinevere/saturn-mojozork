@@ -41,6 +41,11 @@ int  keyboard_get_caps(void);
    either way. */
 void keyboard_set_insert(int on);
 int  keyboard_get_insert(void);
+/* NumLock: shared state for the numpad. When off, the physical numpad's digit
+   keys are suppressed. Defaults on. Synced to the physical NumLock key and the
+   Options Keyboard Controls page. */
+void keyboard_set_num(int on);
+int  keyboard_get_num(void);
 void keyboard_type(KeyboardState *k);
 void keyboard_type_char(KeyboardState *k, char c);
 void keyboard_backspace(KeyboardState *k);
