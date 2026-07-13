@@ -21,11 +21,14 @@ const char KB_LAYOUT_UPPER[KB_ROWS][KB_COLS + 1] = {
 
 static int g_caps = 0;
 static int g_insert = 0;
+static int g_num = 1;   /* NumLock defaults on (numpad produces digits) */
 
 void keyboard_set_caps(int on) { g_caps = on ? 1 : 0; }
 int  keyboard_get_caps(void)   { return g_caps; }
 void keyboard_set_insert(int on) { g_insert = on ? 1 : 0; }
 int  keyboard_get_insert(void)   { return g_insert; }
+void keyboard_set_num(int on) { g_num = on ? 1 : 0; }
+int  keyboard_get_num(void)   { return g_num; }
 
 char keyboard_char_at(int row, int col) {
     return (g_caps ? KB_LAYOUT_UPPER : KB_LAYOUT)[row][col];

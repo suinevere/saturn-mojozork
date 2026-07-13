@@ -752,7 +752,11 @@ static void typeahead_edit(KeyboardState &k, TrieNode *root,
         else if (k.input_len == 0 || k.input[k.input_len - 1] != ' ') keyboard_submit(&k);
     }
     if (ke.kind == SATURN_KEY_TAB) {
-        if (has_ghost) accept(true);
+        // Tab completes the suggestion with NO trailing space; if there's nothing
+        // left to complete (already at the end of a word), it adds a space.
+        if (has_ghost) accept(false);
+        else if (at_end && k.input_len > 0 && k.input[k.input_len - 1] != ' ')
+            keyboard_type_char(&k, ' ');
         ke.kind = SATURN_KEY_NONE;
     }
     if (x_press) {
@@ -1165,7 +1169,7 @@ static void controls_page(void) {
 // same flag the Insert key flips), insert-vs-overwrite typing, and CapsLock.
 static void keyboard_controls_page(void) {
     SRL::Core::Synchronize();   // consume the edge that opened this
-    const int N = 4;            // 0 Arrows, 1 Insert, 2 Caps, 3 Done
+    const int N = 5;            // 0 Arrows, 1 Insert, 2 Caps, 3 Num, 4 Done
     int sel = 0;
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
@@ -1184,7 +1188,8 @@ static void keyboard_controls_page(void) {
         if      (sel == 0 && toggle) g_caret_arrows = !g_caret_arrows;
         else if (sel == 1 && toggle) keyboard_set_insert(!keyboard_get_insert());
         else if (sel == 2 && toggle) keyboard_set_caps(!keyboard_get_caps());
-        else if (sel == 3 && act)    break;
+        else if (sel == 3 && toggle) keyboard_set_num(!keyboard_get_num());
+        else if (sel == 4 && act)    break;
 
         menu_clear();
         int x = 2, y = 1;
@@ -1198,8 +1203,10 @@ static void keyboard_controls_page(void) {
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_insert() ? "On (insert)" : "Off (overwrite)");
         SRL::Debug::Print(x, y, "%c Caps Lock", sel == 2 ? '>' : ' ');
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_caps() ? "On" : "Off");
+        SRL::Debug::Print(x, y, "%c Num Lock", sel == 3 ? '>' : ' ');
+        SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_num() ? "On" : "Off");
         y++;
-        SRL::Debug::Print(x, y++, "%c Done", sel == 3 ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c Done", sel == 4 ? '>' : ' ');
         menu_sync();
     }
     SRL::Core::Synchronize();
