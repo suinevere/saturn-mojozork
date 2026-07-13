@@ -472,40 +472,43 @@ def emit_c(base, transitions, out_path, story, script):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--story", required=True, help="path to a Z-machine v3 (.z3) story file")
-    ap.add_argument("--script", help="winning command walkthrough (one command per line)")
+    ap.add_argument("--game", action="append", required=True, metavar="STORY:SCRIPT",
+                    help="a story file and its walkthrough, colon-separated (repeatable)")
     ap.add_argument("--out", help="output C file (default: print a summary only)")
     ap.add_argument("--dump", action="store_true", help="print the decoded dictionary and exit")
     ap.add_argument("--no-fullwords", action="store_true",
                     help="keep 6-char dictionary forms instead of recovering full spellings")
     args = ap.parse_args()
 
-    data = open(args.story, "rb").read()
-    dict_words = extract_dictionary(data)
+    for spec in args.game:
+        story, script = spec.rsplit(":", 1)
 
-    fullmap = {} if args.no_fullwords else full_word_map(dict_words, harvest_full_words(data))
-
-    if args.dump:
-        for w in dict_words:
-            print(fullmap.get(w, w))
-        print(f"\n{len(dict_words)} dictionary entries; "
-              f"{len(fullmap)} expanded to full words", file=sys.stderr)
-        return
-
-    freq, bigrams = (Counter(), Counter())
-    if args.script:
-        freq, bigrams = parse_script(args.script)
-
-    base, transitions = build_model(data, dict_words, freq, bigrams, fullmap)
-    print(f"dictionary words: {len(dict_words)}   full-word expansions: {len(fullmap)}")
-    print(f"script words: {len(freq)}   bigrams: {len(bigrams)}")
-    print(f"vocabulary: {len(base)}   transitions: {len(transitions)}")
-
-    if args.out:
-        emit_c(base, transitions, args.out, args.story, args.script)
-        print(f"wrote {args.out}")
-    else:
-        print("(no --out; nothing written)")
+        data = open(story, "rb").read()
+        dict_words = extract_dictionary(data)
+    
+        fullmap = {} if args.no_fullwords else full_word_map(dict_words, harvest_full_words(data))
+    
+        if args.dump:
+            for w in dict_words:
+                print(fullmap.get(w, w))
+            print(f"\n{len(dict_words)} dictionary entries; "
+                  f"{len(fullmap)} expanded to full words", file=sys.stderr)
+            return
+    
+        freq, bigrams = (Counter(), Counter())
+        if script:
+            freq, bigrams = parse_script(script)
+    
+        base, transitions = build_model(data, dict_words, freq, bigrams, fullmap)
+        print(f"dictionary words: {len(dict_words)}   full-word expansions: {len(fullmap)}")
+        print(f"script words: {len(freq)}   bigrams: {len(bigrams)}")
+        print(f"vocabulary: {len(base)}   transitions: {len(transitions)}")
+    
+        if args.out:
+            emit_c(base, transitions, args.out, story, script)
+            print(f"wrote {args.out}")
+        else:
+            print("(no --out; nothing written)")
 
 
 if __name__ == "__main__":
