@@ -29,8 +29,42 @@ toward the winning move ("easy mode").
 `saturn/src/typeahead_zork.c` is **generated** — do not hand-edit it; change the
 inputs and regenerate.
 
-## Usage
+# Usage
 
+## Build All
+```sh
+
+# Regenerates all in ../../saturn/cd/data/Z3 folder
+Get-ChildItem -Path "../../saturn/cd/data/Z3/*.Z3" | ForEach-Object {
+    $filename =$_.BaseName
+
+    python gen_typeahead.py `
+    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" `
+    --out "../../saturn/src/typeahead_extract_$filename.c"
+    
+    python gen_solution.py `
+    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" `
+    --out "../../saturn/src/typeahead_solution_$filename.c"
+}
+#OR
+
+#!/bin/bash
+for file in ../../saturn/cd/data/Z3/*.Z3; do
+    filename=$(basename "$file" .Z3)
+    python gen_typeahead.py \
+    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" \
+    --out "../../saturn/src/typeahead_solution_$filename.c"
+    
+    python gen_solution.py \
+    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" \
+    --out "../../saturn/src/typeahead_solution_$filename.c"
+done
+
+# Then rebuild the client:
+cd ../../saturn && ./compile.bat
+```
+
+## Build Single
 ```sh
 # Inspect the raw dictionary of any Z3 game:
 python gen_typeahead.py --story ../../saturn/cd/data/Z3/ZORK1.Z3 --dump
