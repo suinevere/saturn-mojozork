@@ -28,6 +28,3 @@ SaturnRingLib/Compiler/
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# Reference Infocom game files used only to generate game_titles.c
-allgamefiles/
