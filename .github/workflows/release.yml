@@ -1,0 +1,147 @@
+name: Build & release Saturn disc
+
+# Tag pushes (v*) build, package, and attach the cue/bin to a release —
+# creating the release if one does not exist yet. Manual runs build and
+# upload the package as a workflow artifact for testing without cutting a
+# release.
+on:
+  push:
+    # Match both v-prefixed (v1.0.0) and bare semver (1.0.0) tags.
+    tags: ['v*', '[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create / upload to releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with SaturnRingLib submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host tools
+        # xorriso provides xorrisofs (ISO authoring); the rest are for the
+        # toolchain fetch scripts and packaging. No ffmpeg: this disc has no
+        # CDDA audio track.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso wget unzip zip
+
+      # Cache the fetched SH-2 gcc + iso2raw so we don't re-download ~hundreds
+      # of MB every run. Keyed on the tool versions below.
+      - name: Cache SaturnRingLib toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            SaturnRingLib/Compiler
+            SaturnRingLib/tools/bin
+          key: srl-toolchain-gcc14.2.0-iso2raw0.2.2
+
+      - name: Fetch SH-2 toolchain + iso2raw
+        # Only on a cache miss: the fetch scripts prompt interactively if their
+        # target dirs already exist, which would hang CI.
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        working-directory: SaturnRingLib
+        run: |
+          set -e
+          bash tools/scripts/getcompiler.sh 14.2.0
+          bash tools/scripts/getiso2raw.sh v0.2.2
+
+      - name: Build Saturn disc (release)
+        working-directory: saturn
+        run: |
+          set -e
+          export SRL_INSTALL_ROOT=../SaturnRingLib
+          bash ../SaturnRingLib/tools/scripts/make.sh release ../SaturnRingLib/Compiler
+          ls -la BuildDrop
+
+      - name: Package release zip
+        id: package
+        run: |
+          set -e
+          # Tag-driven runs use the tag as the release id; manual runs use the SHA.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VER="${GITHUB_REF_NAME}"
+          else
+            VER="${GITHUB_SHA::7}"
+          fi
+          NAME="Zaturn (USA) (Netlink Edition)"
+          # Stage the burnable disc files flat: cue + MODE1/2352 raw track.
+          # The Makefile's CD_NAME already produces these names, so this is a
+          # straight copy; the cue's FILE line is normalized anyway so a future
+          # CD_NAME change can't ship a cue pointing outside the zip.
+          STAGE="$RUNNER_TEMP/release-stage"
+          mkdir -p "$STAGE"
+          cp "saturn/BuildDrop/${NAME}.bin" "$STAGE/${NAME}.bin"
+          sed -E 's/^([[:space:]]*FILE[[:space:]]+")[^"]*(")/\1'"${NAME}"'.bin\2/' \
+            "saturn/BuildDrop/${NAME}.cue" > "$STAGE/${NAME}.cue"
+          grep -q "FILE \"${NAME}.bin\" BINARY" "$STAGE/${NAME}.cue"
+          # One zip, files at its root -- unzip yields the files directly:
+          # no nested zip, no wrapper folder. The .zip is the release asset;
+          # the workflow-artifact upload uses the same staged folder.
+          mkdir -p "$RUNNER_TEMP/${NAME}"
+          (cd "$STAGE" && zip -r "$RUNNER_TEMP/${NAME}/${NAME} - ${VER}.zip" .)
+          echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${NAME} - ${VER}"             >> "$GITHUB_OUTPUT"
+          echo "zip_path=$RUNNER_TEMP/${NAME}/${NAME} - ${VER}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Package build-it-yourself kit
+        id: kit
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
+          # Stage the kit contents flat at the zip root (no wrapper folder).
+          STAGE="$RUNNER_TEMP/kit-stage"
+          
+          # Original iso + raw track, in the folder CONFIG.ME's BASE_ISO expects.
+          DISC="Zaturn (USA) (Netlink Edition)"
+          mkdir -p "$STAGE/$DISC"
+          cp "saturn/BuildDrop/${DISC}.iso" "$STAGE/$DISC/${DISC}.iso"
+          cp "saturn/BuildDrop/${DISC}.bin" "$STAGE/$DISC/${DISC}.bin"
+          
+          # Scripts + libs + bundled tools + config + docs + empty working dirs.
+          cp -r tools/assets/. "$STAGE/"
+          rm -rf "$STAGE/png"
+          rm -rf "$STAGE/tests"
+          
+          # Ensure working dirs exist but are empty save for .gitkeep.
+          for d in game audio output; do mkdir -p "$STAGE/$d"; find "$STAGE/$d" -type f ! -name .gitkeep -delete; done
+          NAME="Zaturn Complete Patch (${VER})"
+
+          (cd "$STAGE" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
+          echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      # Manual runs: surface the build as a workflow artifact for inspection.
+      - name: Upload as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.stage_dir }}
+
+      - name: Upload kit as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kit.outputs.artifact_name }}
+          path: ${{ steps.kit.outputs.stage_dir }}
+
+      # Tag runs: attach to a release, creating it if missing.
+      - name: Attach to GitHub release (tag runs)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "Automated Saturn disc build from $TAG. Burn/mount cue/bin. See README for setup."
+          fi
+          gh release upload "$TAG" "${{ steps.package.outputs.zip_path }}" --clobber
+          gh release upload "$TAG" "${{ steps.kit.outputs.zip_path }}" --clobber

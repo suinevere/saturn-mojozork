@@ -1,0 +1,18 @@
+services:
+  multizork:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: multizorkd:latest
+    container_name: multizork
+    restart: unless-stopped
+    ports:
+      - "23:2323"
+      - "2323:2323"
+    volumes:
+      - multizork-data:/data
+    stdin_open: true
+    tty: true
+
+volumes:
+  multizork-data:

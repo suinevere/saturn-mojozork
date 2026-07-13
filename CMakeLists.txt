@@ -1,84 +1,99 @@
 cmake_minimum_required(VERSION 3.16)
-project(mojozork)
+project(saturn_mojozork)
 
-set(MOJOZORK_STANDALONE_DEFAULT ON)
-set(MOJOZORK_MULTIZORK_DEFAULT ON)
-set(MOJOZORK_LIBRETRO_DEFAULT ON)
-set(MOJOZORK_SDL3_DEFAULT ON)
+# This CMakeLists.txt exists purely so CLion (and other CMake-aware IDEs) can
+# resolve #includes and navigate the Sega Saturn port under saturn/src and the
+# SaturnRingLib SDK submodule. It is NOT the real build: the bootable Saturn
+# disc is produced by the SH-2 cross-compiler makefile via saturn/compile.bat
+# (see saturn/makefile and SaturnRingLib/saturnringlib/shared.mk). The target
+# below is a SOURCES-only add_custom_target, so CLion indexes the files
+# without ever trying to invoke a host compiler on SH-2/Saturn-specific code.
+#
+# saturn/CMakeLists.txt is a separate, genuinely buildable project (the
+# upstream desktop mojozork/multizorkd/mojozork-sdl3 targets) and is
+# untouched by this file.
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-  set(EMSCRIPTEN TRUE)
-endif()
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_C_STANDARD 17)
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-    set(ANDROID TRUE)
-endif()
+set(SATURN_ROOT  "${CMAKE_SOURCE_DIR}/saturn")
+set(SRL_ROOT     "${CMAKE_SOURCE_DIR}/SaturnRingLib")
+set(SRL_MODULES  "${SRL_ROOT}/modules")
 
-
-if(MSVC OR EMSCRIPTEN)   # the daemon is pretty Unixy.
-    set(MOJOZORK_MULTIZORK_DEFAULT OFF)
-endif()
-
-# Building as part of RetroArch? Turn off everything but the libretro plugin by default.
-if(LIBRETRO)
-    set(MOJOZORK_STANDALONE_DEFAULT OFF)
-    set(MOJOZORK_MULTIZORK_DEFAULT OFF)
-    set(MOJOZORK_SDL3_DEFAULT OFF)
-endif()
-
-option(MOJOZORK_STANDALONE "Build the MojoZork standalone app" ${MOJOZORK_STANDALONE_DEFAULT})
-option(MOJOZORK_MULTIZORK "Build the Multizork server" ${MOJOZORK_MULTIZORK_DEFAULT})
-option(MOJOZORK_LIBRETRO "Build the MojoZork libretro core" ${MOJOZORK_LIBRETRO_DEFAULT})
-option(MOJOZORK_SDL3 "Build the MojoZork standalone SDL3 app" ${MOJOZORK_SDL3_DEFAULT})
-
-if(MSVC)
-    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-    add_definitions(-D_CRT_SECURE_NO_DEPRECATE)
-    add_definitions(-D_CRT_NONSTDC_NO_DEPRECATE)
-else()  # This assumes you have GCC or Clang at the moment.
-    add_definitions(-Wall)
-endif()
-
-if(MOJOZORK_STANDALONE)
-    add_executable(mojozork mojozork.c)
-endif()
-
-if(MOJOZORK_MULTIZORK)
-    add_executable(multizorkd multizorkd.c)
-    target_link_libraries(multizorkd -lsqlite3)
-endif()
-
-if(MOJOZORK_LIBRETRO)
-    add_library(mojozork_libretro SHARED mojozork-libretro.c)
-    if(ANDROID)  # Android builds of libretro cores need specific names.
-        set_target_properties(mojozork_libretro PROPERTIES LIBRARY_OUTPUT_NAME mojozork_libretro_android)
+# --- Include paths -----------------------------------------------------------
+# Mirrors saturn/makefile's `-I$(shell find src -type d)`: every subfolder
+# under saturn/src (engine/video/sound/net/input/menu/system, plus any added
+# later) goes on the include path so the project's bare #include "foo.h"
+# resolves across folders exactly like the real build does.
+file(GLOB_RECURSE SATURN_SRC_ENTRIES LIST_DIRECTORIES true "${SATURN_ROOT}/src/*")
+foreach(entry ${SATURN_SRC_ENTRIES})
+    if(IS_DIRECTORY ${entry})
+        include_directories(${entry})
     endif()
-    set_target_properties(mojozork_libretro PROPERTIES PREFIX "")
+endforeach()
+include_directories(${SATURN_ROOT}/src)
+include_directories(${SATURN_ROOT}/tests)
+include_directories(${SATURN_ROOT}/tests/net)
+
+# SaturnRingLib SDK headers actually on shared.mk's CCFLAGS -I list
+# (DUMMYIDIR/SATURNMATHPPDIR/SGLIDIR/STDDIR/SDK_ROOT).
+include_directories(${SRL_ROOT}/saturnringlib)
+include_directories(${SRL_MODULES}/dummy)
+include_directories(${SRL_MODULES}/SaturnMathPP)
+include_directories(${SRL_MODULES}/sgl/INC)
+include_directories(${SRL_MODULES}/tlsf)
+
+# The SH-2 cross-compiler's own bundled libc/libstdc++ headers (<stdint.h>,
+# <string>, ...). SaturnRingLib/Compiler ships a prebuilt toolchain per host
+# OS (linux/, mac/, and a bare sh2eb-elf/ for Windows); only the one
+# setup_compiler.bat actually installed for THIS host has real content, so
+# only that tree is added -- adding all three used to shadow this host's
+# headers with another platform's copy, which is what broke #include
+# resolution here before. Enumerated by globbing (not a hand-written list) so
+# a future GCC version bump (currently 14.2.0) can't go stale the way the old
+# hardcoded add_executable() source list did.
+if(WIN32)
+    set(SRL_HOST_COMPILER_DIR "${SRL_ROOT}/Compiler/sh2eb-elf")
+elseif(APPLE)
+    set(SRL_HOST_COMPILER_DIR "${SRL_ROOT}/Compiler/mac/sh2eb-elf")
+else()
+    set(SRL_HOST_COMPILER_DIR "${SRL_ROOT}/Compiler/linux/sh2eb-elf")
+endif()
+if(EXISTS ${SRL_HOST_COMPILER_DIR})
+    file(GLOB_RECURSE SRL_COMPILER_ENTRIES LIST_DIRECTORIES true "${SRL_HOST_COMPILER_DIR}/*")
+    foreach(entry ${SRL_COMPILER_ENTRIES})
+        if(IS_DIRECTORY ${entry})
+            include_directories(${entry})
+        endif()
+    endforeach()
 endif()
 
-if(MOJOZORK_SDL3)
-    find_package(SDL3 QUIET)
-    if (NOT SDL3_FOUND)
-        message(STATUS "SDL3 not available, will download a copy and build it.")
-        # FetchContent downloads and configures dependencies
-        include(FetchContent)
-        FetchContent_Declare(
-            SDL3
-            GIT_REPOSITORY "https://github.com/libsdl-org/SDL.git"
-            GIT_TAG "main"
-            EXCLUDE_FROM_ALL
-        )
-        FetchContent_MakeAvailable(SDL3)
-    endif()
+# --- Indexing-only target -----------------------------------------------------
+# CONFIGURE_DEPENDS re-globs on the next CMake reload whenever a file is
+# added/moved/removed, so this list (unlike the old hardcoded one) can't
+# silently drift out of sync with saturn/src's actual layout again.
+#
+# This MUST be add_library(... OBJECT ...), not add_custom_target(SOURCES ...):
+# CMake's File API (what CLion reads for #include resolution) only emits a
+# "compile group" -- the actual per-target include-path/flags set -- for
+# targets it considers genuinely compilable. add_custom_target's SOURCES are
+# just IDE-tree entries with no compile group at all, which is why every file
+# here previously showed an empty search path. EXCLUDE_FROM_ALL keeps it out
+# of the default "Build Project" action; OBJECT means it never links, so
+# nothing here is ever meant to actually produce a usable binary -- it exists
+# purely so CMake computes a real compile group for CLion to resolve against.
+file(GLOB_RECURSE SATURN_MOJOZORK_SOURCES CONFIGURE_DEPENDS
+    "${SATURN_ROOT}/src/*.c"
+    "${SATURN_ROOT}/src/*.cxx"
+    "${SATURN_ROOT}/src/*.h"
+    "${SATURN_ROOT}/tests/*.c"
+    "${SATURN_ROOT}/tests/*.h"
+    "${SATURN_ROOT}/*.c"
+    "${SATURN_ROOT}/*.cxx"
+    "${SATURN_ROOT}/*.h"
+)
+file(GLOB SRL_HEADERS CONFIGURE_DEPENDS "${SRL_ROOT}/saturnringlib/*.hpp")
 
-    add_executable(mojozork_sdl3 mojozork-sdl3.c)
-    set_target_properties(mojozork_sdl3 PROPERTIES OUTPUT_NAME "mojozork-sdl3")
-    set_target_properties(mojozork_sdl3 PROPERTIES WIN32_EXECUTABLE TRUE)  # safe to set this on non-Windows platforms, too.
-    target_link_libraries(mojozork_sdl3 SDL3::SDL3)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-        set_target_properties(mojozork_sdl3 PROPERTIES LINK_FLAGS "-s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s ASSERTIONS=0 -lidbfs.js")
-    endif()
-endif()
+add_library(saturn_mojozork OBJECT EXCLUDE_FROM_ALL ${SATURN_MOJOZORK_SOURCES} ${SRL_HEADERS})
 
 # end of CMakeLists.txt ...
-

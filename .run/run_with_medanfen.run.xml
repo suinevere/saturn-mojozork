@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="run_with_medanfen" type="BatchConfigurationType" factoryName="Batch">
+    <module name="saturn-mojozork" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="WORKING_DIRECTORY" value="./saturn" />
+    <option name="PARENT_ENVS" value="true" />
+    <option name="SCRIPT_NAME" value="run_with_mednafen.bat" />
+    <option name="PARAMETERS" value="" />
+    <method v="2" />
+  </configuration>
+</component>

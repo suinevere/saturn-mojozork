@@ -1,2 +1,49 @@
-buildbot
-cmake-build
+# Fork .gitignore  —  rename to ".gitignore" at the root of zaturn.
+# (SaturnRingLib and zork-netlink are SUBMODULES here, so they are NOT ignored,
+#  unlike in the staging repo where they were plain untracked clones.)
+
+# --- Saturn build output -----------------------------------------------------
+saturn/BuildDrop/
+**/*.o
+**/*.elf
+**/*.iso
+**/*.cue
+**/*.bin.tmp
+
+# --- Host test binaries ------------------------------------------------------
+**/*.exe
+saturn/tests/**/*.out
+# Bundled Windows tool binaries used by the asset pipeline (dd/xorriso/iso2raw)
+!tools/assets/bin/win/*.exe
+
+# --- multizork-server build --------------------------------------------------
+server/build/
+server/**/*.o
+*.sqlite
+*.sqlite3
+
+# --- Cross-compiler (fetched into the SDK submodule, never committed) --------
+SaturnRingLib/Compiler/
+
+# --- IDE / OS ----------------------------------------------------------------
+/.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Non-open-source game files ---------------------------------------------
+# Fetched by tools/assets/games.bat; never committed. Only Zork 1/2/3 are
+# open-sourced (Activision/Microsoft) and kept in the repo.
+saturn/cd/data/Z3/*.Z3
+saturn/cd/data/Z3/*.z3
+saturn/cd/data/Z3/*.BLB
+saturn/cd/data/Z3/*.blb
+!saturn/cd/data/Z3/ZORK1.Z3
+!saturn/cd/data/Z3/ZORK2.Z3
+!saturn/cd/data/Z3/ZORK3.Z3
+
+# --- Asset-tool Python environment -------------------------------------------
+# Provisioned on demand by tools/convert-backgrounds.sh; never committed.
+tools/.venv/
+**/__pycache__/
+*.pyc

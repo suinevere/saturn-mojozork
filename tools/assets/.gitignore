@@ -1,0 +1,11 @@
+# Downloaded / produced artifacts — never committed.
+/game/*
+/audio/*
+/output/*
+/base/*
+/Z3/
+*.zip
+!*/.gitkeep
+
+# Stray artifact from the old games.bat quoting bug; keep it from coming back.
+Matched

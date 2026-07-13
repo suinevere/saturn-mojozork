@@ -1,0 +1,30 @@
+# Fork .gitignore  —  rename to ".gitignore" at the root of zaturn.
+# (SaturnRingLib and zork-netlink are SUBMODULES here, so they are NOT ignored,
+#  unlike in the staging repo where they were plain untracked clones.)
+
+# --- Saturn build output -----------------------------------------------------
+saturn/BuildDrop/
+**/*.o
+**/*.elf
+**/*.iso
+**/*.cue
+**/*.bin.tmp
+
+# --- Host test binaries ------------------------------------------------------
+**/*.exe
+saturn/tests/**/*.out
+
+# --- multizork-server build --------------------------------------------------
+server/build/
+server/**/*.o
+*.sqlite
+*.sqlite3
+
+# --- Cross-compiler (fetched into the SDK submodule, never committed) --------
+SaturnRingLib/Compiler/
+
+# --- IDE / OS ----------------------------------------------------------------
+/.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

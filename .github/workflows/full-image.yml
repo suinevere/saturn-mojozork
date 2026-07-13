@@ -1,0 +1,79 @@
+name: Build full disc image (games + audio)
+
+# Manual only: this build downloads copyrighted games + audio and uploads the
+# result as a workflow ARTIFACT. It is never attached to a public release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso wget unzip zip curl
+
+      - name: Cache SaturnRingLib toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            SaturnRingLib/Compiler
+            SaturnRingLib/tools/bin
+          key: srl-toolchain-gcc14.2.0-iso2raw0.2.2
+
+      - name: Fetch SH-2 toolchain + iso2raw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        working-directory: SaturnRingLib
+        run: |
+          set -e
+          bash tools/scripts/getcompiler.sh 14.2.0
+          bash tools/scripts/getiso2raw.sh v0.2.2
+
+      - name: Build base Saturn disc
+        working-directory: saturn
+        run: |
+          set -e
+          export SRL_INSTALL_ROOT=../SaturnRingLib
+          bash ../SaturnRingLib/tools/scripts/make.sh release ../SaturnRingLib/Compiler
+          ls -la BuildDrop
+
+      - name: Stage base ISO for the asset kit
+        run: |
+          set -e
+          DISC="Zaturn (USA) (Netlink Edition)"
+          mkdir -p "tools/assets/$DISC"
+          cp "saturn/BuildDrop/${DISC}.iso" "tools/assets/$DISC/${DISC}.iso"
+
+      - name: Download games + inject
+        working-directory: tools/assets
+        run: bash games.bat
+
+      - name: Download audio + split + merge
+        working-directory: tools/assets
+        run: bash music.bat
+
+      - name: Sanity-check output cue
+        working-directory: tools/assets
+        run: |
+          set -e
+          cue="Zaturn - Complete (USA) (Netlink Edition)/Zaturn - Complete (USA) (Netlink Edition).cue"
+          echo "=== $cue ==="; cat "$cue"
+          grep -q 'TRACK 01 MODE1/2352' "$cue"
+          audio=$(grep -c 'TRACK .* AUDIO' "$cue")
+          echo "audio tracks: $audio"
+          [ "$audio" -ge 1 ]
+
+      # Upload the disc folder's contents directly: one zip, files at its root
+      # (no output/ layer, no .gitkeep) -- unzip yields the disc files directly.
+      - name: Upload full disc artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zaturn-complete-${{ github.sha }}
+          path: tools/assets/Zaturn - Complete (USA) (Netlink Edition)/
