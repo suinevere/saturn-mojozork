@@ -229,6 +229,27 @@ static void cand_collect(TrieNode* node, DictionaryWord** cand, int* wt, int* n,
         cand_collect(c, cand, wt, n, fw);
 }
 
+// Prediction mode, set from the difficulty (typeahead_set_easy):
+//  - easy: restrict context suggestions to the solution overlay's winning path.
+//  - normal: full grammar, but filter out invalid command shapes (see below).
+// Both need the overlay applied so solution links are known; have_solution says
+// whether the loaded game actually has one (if not, easy behaves like normal).
+static int g_pred_easy = 0;
+static int g_have_solution = 0;
+void typeahead_set_easy(int easy, int have_solution) {
+    g_pred_easy = easy ? 1 : 0;
+    g_have_solution = have_solution ? 1 : 0;
+}
+
+// Does `prev` link to `target`? Returns 1 if so and sets *sol when any such link
+// is a solution-overlay (winning-path) link.
+static int prev_links_to(DictionaryWord* prev, DictionaryWord* target, int* sol) {
+    *sol = 0; int found = 0;
+    for (NextWordLink* l = prev->next_words; l; l = l->next)
+        if (l->target_word == target) { found = 1; if (l->solution) { *sol = 1; return 1; } }
+    return found;
+}
+
 int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
                        const char* prefix, DictionaryWord** out, int max,
                        int first_word) {
@@ -236,6 +257,9 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
     int wt[CAND_MAX];
     int n = 0;
     int plen = prefix ? (int) strlen(prefix) : 0;
+    // Easy mode restricts context suggestions to the winning path, but only for an
+    // actual continuation (a prev word) of a game that has a solution overlay.
+    int easy_here = g_pred_easy && g_have_solution && prev_word != NULL;
 
     // 1. Context matches (prev_word -> next) that start with the prefix. Bias them
     //    above trie completions so the context-aware suggestion sorts first.
@@ -249,6 +273,7 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
         int movement = (ndir >= 4);
 
         for (NextWordLink* l = prev_word->next_words; l != NULL; l = l->next) {
+            if (easy_here && !l->solution) continue;   // easy: winning-path words only
             if (plen == 0 || strncmp(l->target_word->text, prefix, plen) == 0) {
                 DictionaryWord* tw = l->target_word;
                 int w;
@@ -268,7 +293,7 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
         // thing the game just described leads, even over a grammar-listed object the
         // player can't see (e.g. "turn on " -> the visible "computer", not "waxer").
         // Same 10000+ base as the grammar links above, plus the on-screen bonus.
-        if (plen == 0) {
+        if (plen == 0 && !easy_here) {
             for (int i = 0; i < g_nhot; i++)
                 if (g_hot[i]->type == TYPE_NOUN)
                     n = cand_add(cand, wt, n, g_hot[i],
@@ -277,13 +302,33 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
     }
 
     // 2. Trie completions under the prefix (only when something has been typed).
-    if (plen > 0) {
+    if (plen > 0 && !easy_here) {
         TrieNode* node = root;
         for (int i = 0; i < plen && node != NULL; i++) {
             char c = (char) tolower((unsigned char) prefix[i]);
             node = (c < 'a' || c > 'z') ? NULL : find_child(node, c);
         }
         if (node != NULL) cand_collect(node, cand, wt, &n, first_word);
+    }
+
+    // Normal-mode grammar filter: drop candidates that would form an invalid
+    // command shape -- a verb after a verb ("turn exit"), a noun after a noun
+    // ("turn pc signs"), or a verb + a noun that isn't one of its objects --
+    // unless the pair is an explicit solution-overlay link.
+    if (!easy_here && prev_word != NULL) {
+        int w2 = 0;
+        for (int i = 0; i < n; i++) {
+            int sol = 0, has = prev_links_to(prev_word, cand[i], &sol);
+            int drop = 0;
+            if (!sol) {
+                WordType pt = prev_word->type, ct = cand[i]->type;
+                if      (pt == TYPE_VERB && ct == TYPE_VERB) drop = 1;
+                else if (pt == TYPE_NOUN && ct == TYPE_NOUN) drop = 1;
+                else if (pt == TYPE_VERB && ct == TYPE_NOUN && !has) drop = 1;
+            }
+            if (!drop) { cand[w2] = cand[i]; wt[w2] = wt[i]; w2++; }
+        }
+        n = w2;
     }
 
     // Selection-sort the top `max` by descending weight.

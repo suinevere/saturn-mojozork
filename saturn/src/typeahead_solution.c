@@ -105,8 +105,8 @@ static int sol_word_is_alpha(const char* s) {
     return 1;
 }
 
-void apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned int len) {
-    if (len < 0x1a) return;
+int apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned int len) {
+    if (len < 0x1a) return 0;
     unsigned short release = (unsigned short)((story[2] << 8) | story[3]);
     const char* serial = (const char*) (story + 0x12);
     for (int i = 0; i < (int)(sizeof(SOLUTIONS) / sizeof(SOLUTIONS[0])); i++) {
@@ -129,6 +129,7 @@ void apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned
             DictionaryWord* b = find_exact_word(root, SOLUTIONS[i].links[j].b);
             if (a && b) add_solution_link(a, b, SOLUTIONS[i].links[j].wt);
         }
-        return;
+        return 1;
     }
+    return 0;
 }
