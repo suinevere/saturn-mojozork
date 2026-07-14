@@ -89,59 +89,6 @@ void insert_trie(TrieNode* root, DictionaryWord* word) {
     current->word_data = word;
 }
 
-// Context-aware prediction combining prefix and previous word
-DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, const char* prefix) {
-    if (prefix == NULL || strlen(prefix) == 0) {
-        // Just predict based on context if no prefix
-        if (prev_word && prev_word->next_words) {
-            DictionaryWord* best = NULL;
-            int best_w = -1;
-            for (NextWordLink* curr = prev_word->next_words; curr != NULL; curr = curr->next) {
-                if (curr->transition_weight > best_w) {
-                    best_w = curr->transition_weight;
-                    best = curr->target_word;
-                }
-            }
-            return best;
-        }
-        return NULL;
-    }
-
-    int prefix_len = strlen(prefix);
-    DictionaryWord* best_context_word = NULL;
-    int best_context_weight = -1;
-
-    // 1. Check context (next_words) first
-    if (prev_word != NULL) {
-        NextWordLink* current = prev_word->next_words;
-        while (current != NULL) {
-            if (strncmp(current->target_word->text, prefix, prefix_len) == 0) {
-                if (current->transition_weight > best_context_weight) {
-                    best_context_weight = current->transition_weight;
-                    best_context_word = current->target_word;
-                }
-            }
-            current = current->next;
-        }
-    }
-
-    // Return the best context match if we found one
-    if (best_context_word != NULL) {
-        return best_context_word;
-    }
-
-    // 2. Fallback to Trie base_weight prediction
-    TrieNode* current_node = root;
-    for (int i = 0; i < prefix_len; i++) {
-        char c = (char)tolower((unsigned char)prefix[i]);
-        if (c < 'a' || c > 'z') return NULL;
-        current_node = find_child(current_node, c);
-        if (current_node == NULL) return NULL; // No matches
-    }
-
-    return current_node->best_completion;
-}
-
 // Recursively free the trie, plus each word's links and text. A DictionaryWord
 // is the word_data of exactly one node, so every allocation is freed once.
 void destroy_typeahead(TrieNode* node) {

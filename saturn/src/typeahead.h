@@ -63,7 +63,6 @@ void add_next_word(DictionaryWord* source, DictionaryWord* target, int weight);
 void add_solution_link(DictionaryWord* source, DictionaryWord* target, int weight);
 TrieNode* create_trie_node();
 void insert_trie(TrieNode* root, DictionaryWord* word);
-DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, const char* prefix);
 DictionaryWord* find_exact_word(TrieNode* root, const char* text);
 
 // Fill `out` (capacity `max`) with candidate completions for `prefix` given the
