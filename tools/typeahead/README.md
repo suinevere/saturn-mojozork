@@ -1,132 +1,96 @@
 # Typeahead vocabulary pipeline
 
-Generates the Saturn client's typeahead dictionary straight from a Z-machine v3
-story file, weighted by a winning walkthrough so completion nudges the player
-toward the winning move ("easy mode").
+The Saturn client's typeahead (autocomplete) helps the player enter commands,
+weighted so completion nudges them toward the winning move ("easy mode").
 
-## What it does
+## Where the vocabulary comes from
 
-1. **Words** — decodes the story's own parser dictionary (the exact set of words
-   the game accepts). Z3 stores each word truncated to 6 characters (v4+ store
-   9); that's all the parser ever compares, so these forms are authoritative.
-   To show full spellings anyway, truncated entries are matched against clean
-   words harvested from the story's own **object short-names** and
-   **abbreviations table** (e.g. `screwd` -> `screwdriver`, `lanter` ->
-   `lantern`). Pass `--no-fullwords` to keep the raw 6-char forms.
-2. **Grammar (no walkthrough needed)** — decodes the story's part-of-speech flags
-   and verb grammar table to build context transitions automatically: verb→the
-   prepositions it accepts (`put`→`in`/`on`/`under`, `kill`→`with`, `tie`→`to`),
-   and verb/preposition→the *object class* it expects, resolved against object
-   attributes (`eat`→food, `open`→openables, `attack…with`→weapons, `climb`→
-   tree/ladder/stairs). This is the game designers' own semantic model.
-3. **Weights + combinations (refinement)** — a walkthrough (one command per line)
-   sets base completion weights by word frequency and boosts the specific
-   winning-path pairings on top of the grammar baseline
-   (`kill`→`troll`, `dig`→`sand`).
-4. **Codegen** — emits `saturn/src/typeahead_zork.c`, a table-driven
-   `build_zork_typeahead()` compiled into the client.
+Two layers, built very differently:
 
-`saturn/src/typeahead_zork.c` is **generated** — do not hand-edit it; change the
-inputs and regenerate.
+1. **Dictionary + grammar — decoded at RUNTIME, on the device, for any v3 game.**
+   `saturn/src/typeahead_extract.c` (`build_typeahead_from_story`) decodes the
+   loaded story's own parser dictionary and verb-grammar table at load time:
+   - the exact words the parser accepts (Z3 truncates to 6 chars; full spellings
+     are recovered from object short-names and the abbreviations table, e.g.
+     `screwd` -> `screwdriver`),
+   - context transitions from the game's grammar: verb -> the prepositions it
+     accepts (`put`->`in`/`on`/`under`), and verb/prep -> the object *class* it
+     expects (`eat`->food, `open`->openables, `attack…with`->weapons).
 
-# Usage
+   **No table is baked into the build for this layer.** It works for every v3
+   story with zero per-game files.
 
-## Build All
-```sh
+2. **Winning-path "solution" overlay — the only build-time artifact.**
+   `gen_solution.py` turns per-game walkthroughs (`solutions/*.WIN`) into ONE
+   generated C file, `saturn/src/typeahead_solution.c`, keyed by each story's
+   release number + serial. At load, `apply_solution_overlay()` layers it on top
+   of the runtime grammar build.
 
-# Regenerates all in ../../saturn/cd/data/Z3 folder
-Get-ChildItem -Path "../../saturn/cd/data/Z3/*.Z3" | ForEach-Object {
-    $filename =$_.BaseName
+## Regenerating the solution overlay
 
-    python gen_typeahead.py `
-    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" `
-    --out "../../saturn/src/typeahead_extract_$filename.c"
-    
-    python gen_solution.py `
-    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" `
-    --out "../../saturn/src/typeahead_solution_$filename.c"
-}
-#OR
+`solutions/<GAME>.WIN` is a walkthrough: one command per line, `#` for comments
+(the first line is usually `# source: <url>`). Directions can be omitted — the
+runtime grammar already handles them.
 
-#!/bin/bash
-for file in ../../saturn/cd/data/Z3/*.Z3; do
-    filename=$(basename "$file" .Z3)
-    python gen_typeahead.py \
-    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" \
-    --out "../../saturn/src/typeahead_solution_$filename.c"
-    
-    python gen_solution.py \
-    --game "../../saturn/cd/data/Z3/$filename.Z3:./solutions/$filename.WIN" \
-    --out "../../saturn/src/typeahead_solution_$filename.c"
-done
+Regenerate the overlay for **all** games in one shot (from `tools/typeahead/`):
 
-# Then rebuild the client:
-cd ../../saturn && ./compile.bat
+```powershell
+./gen_all.ps1                       # -> saturn/src/typeahead_solution.c (all games)
+cd ../../saturn ; ./compile.bat     # rebuild the client
 ```
 
-## Build Single
-```sh
-# Inspect the raw dictionary of any Z3 game:
-python gen_typeahead.py --story ../../saturn/cd/data/Z3/ZORK1.Z3 --dump
+`gen_all.ps1` enumerates `saturn/cd/data/Z3/*.Z3`, skips games with no non-empty
+`.WIN`, and calls `gen_solution.py` **once** with every game.
 
-# Regenerate the compiled-in vocabulary (Zork I + walkthrough):
-python gen_typeahead.py \
-    --story  ../../saturn/cd/data/Z3/ZORK1.Z3 \
-    --script ZORK1.WIN \
-    --out    ../../saturn/src/typeahead_zork.c
+> It must be one file with all games, not one file per game. The overlay is
+> dispatched at runtime by story release+serial, so a single
+> `apply_solution_overlay` + `SOLUTIONS[]` table is the whole mechanism.
+> Emitting one file per game would redefine those symbols and fail to link.
 
-# Then rebuild the client:
-cd ../../saturn && ./compile.bat
-```
-
-Omit `--script` to get the full dictionary with flat weights and no transitions.
-
-## Runtime vs. build-time
-
-The device now decodes the loaded game's dictionary + grammar **at runtime**
-(`saturn/src/typeahead_extract.c`), so every v3 game gets the grammar layer with
-no baked-in table. `gen_typeahead.py` remains useful for inspecting/prototyping
-output on the host (`--dump`, `--out`), but its emitted table is no longer
-compiled in.
-
-The winning-path "easy mode" ships as a compiled **solution overlay** applied on
-top of the runtime grammar layer.
-
-## Solution overlay (easy mode)
-
-A *solution file* is the winning walkthrough: plain text, **one command per
-line**, `#` for comments (e.g. `zork1_walkthrough.txt`). `gen_solution.py` turns
-one or more of these into `saturn/src/typeahead_solution.c`:
+To (re)generate for a single game or a hand-picked set, call `gen_solution.py`
+directly with one or more `--game STORY:SCRIPT` pairs:
 
 ```sh
 python gen_solution.py \
-    --game ../../saturn/cd/data/Z3/ZORK1.Z3:ZORK1.WIN \
+    --game ../../saturn/cd/data/Z3/ZORK1.Z3:solutions/ZORK1.WIN \
     --out  ../../saturn/src/typeahead_solution.c
-# add more with repeated --game STORY:SCRIPT
 ```
 
-- Each overlay is keyed by the story's **release number + serial** (Z-machine
-  header 0x02 / 0x12), so it only applies to the exact game it was built for;
-  other games fall back to the grammar layer.
-- It carries **base-weight boosts** (word frequency in the solve) and
-  **transition boosts** (command word-bigrams), emitted in the runtime's own
-  spelling so they resolve against the on-device trie.
-- At load, `apply_solution_overlay()` raises those base weights and adds the
-  winning-path transitions on top of the grammar build.
+## What the overlay carries
 
-## Tuning "easy mode"
+- **Base-weight boosts** from word frequency in the solve.
+- **Winning-path transitions** from command word-bigrams. These are marked as
+  solution links so they rank *above* on-screen words at runtime, and are
+  weighted by first-appearance order so they surface in walkthrough order
+  (after `turn pc`: `on` then `off`).
+- **Walkthrough-only words** the parser dictionary lacks (passwords, magic words
+  like `xyzzy`, `uhlersoth`) are *inserted* into the trie by
+  `apply_solution_overlay` so they become suggestible. (Purely numeric tokens
+  such as a numeric password are excluded — the trie is a-z only.)
 
-`zork1_walkthrough.txt` is the winning command script (one command per line;
-`#` comments allowed). Replace or extend it with your own optimal solve to
-sharpen the hints — every `verb object` and `verb obj prep obj` line the solve
-uses becomes a stronger suggestion.
+Everything is emitted in the runtime's own word spellings so it resolves against
+the on-device trie.
+
+## gen_typeahead.py — inspection / prototyping only
+
+`gen_typeahead.py` decodes a story's dictionary + grammar on the host. It is
+useful for **inspecting** a game:
+
+```sh
+python gen_typeahead.py --story ../../saturn/cd/data/Z3/ZORK1.Z3 --dump
+```
+
+Its `--out` mode emits a baked `build_zork_typeahead()` table, but **that table
+is NOT compiled into the client** — the device builds the same data at runtime
+(layer 1 above). `build_zork_typeahead()` has no callers; don't generate it for
+the build. `gen_solution.py` (via `gen_all.ps1`) is the only generator whose
+output ships.
 
 ## Notes
 
-- Memory is comfortable across the whole v3 library. The trie uses a compact
+- Memory is comfortable across the whole v3 library: the trie uses a compact
   first-child/next-sibling node (~20 bytes on the SH2), so even the largest
-  dictionary here (Sorcerer, ~1000 words) is ~54 KB, leaving ~350 KB of the
-  572 KB HWRAM heap free after the story image loads.
-- Works on any v3 (`.z3`) story, not just Zork — point `--story` at any of the
-  games under `saturn/cd/data/Z3/`. Full-word recovery is v3-only for now; v4+
-  dictionaries still decode (9-char words) but keep their truncated forms.
+  dictionary (Sorcerer, ~1000 words) is ~54 KB, leaving ~350 KB of the 572 KB
+  HWRAM heap free after the story image loads.
+- Full-word recovery is v3-only for now; v4+ dictionaries still decode (9-char
+  words) but keep their truncated forms.
