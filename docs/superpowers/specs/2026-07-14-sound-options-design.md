@@ -173,6 +173,27 @@ Rather than a hand-maintained label, **auto-detect** short tracks by duration:
 Frame count is a named constant; assumes ~60fps NTSC. Adjust if the build targets
 PAL/50fps.
 
+### Gapless loop (best-effort)
+
+Looping a CD-DA track can leave an audible gap when the drive seeks back to the
+track start each cycle. For the **looping** cases (a long Dynamic track, Override-
+repeat, the menu track), attempt to stitch the loop so it repeats without a
+noticeable gap:
+
+- Prefer the Saturn CD block's **native seamless repeat** — play the track (or its
+  LBA range) with a hardware repeat count so the block re-reads from the track's
+  start without a full re-seek, rather than our per-frame "detect end, re-issue
+  `PlaySingle`" path (which re-seeks and gaps). If SRL's loop flag already drives
+  the hardware repeat, ensure the looping cases use it.
+- If we must re-issue on end, pre-arm the next play as early as the is-playing
+  query allows to shrink the gap.
+- **Best-effort:** if the CD block can't loop a single track seamlessly, accept the
+  small gap — this is a polish item, not a correctness requirement. The one-shot
+  modes (Sequential/Random/short) intentionally change *tracks* on end; a brief gap
+  between two different tracks there is expected and out of scope for stitching.
+- **Risk / to verify:** the exact SRL `Sound::Cdda` repeat/loop semantics (hardware
+  seamless vs. software re-issue).
+
 ## Sound Options page (new, full-screen, OK/Cancel)
 
 A new nested page opened from the Options menu. Rows:
@@ -267,7 +288,7 @@ Give both pages (and the mapping editor) the same contract:
 - On emulator: boot menu plays track 10; changing mix + track in Sound Options and
   choosing OK persists across a soft reset; Cancel reverts live and saved state;
   first room after load/new-game has audio; returning from nested pages leaves no
-  leftover text.
+  leftover text; a looping ambient track repeats without an obvious gap (best-effort).
 
 ## Out of scope
 
