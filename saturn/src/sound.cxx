@@ -39,6 +39,13 @@ static int   g_have;               // 1 if the index loaded
 static int   g_enabled = 1;        // Options toggle
 static Slot  g_slot[NSLOT];
 
+// Persistent PCM slice cache (see cached_slice below): each sound number's slice
+// is loaded from the CD once and kept for the game's lifetime, so re-triggers and
+// the loop's ping-pong never re-read the CD (which would interrupt CD-DA music).
+#define NCACHE 8
+struct SliceCache { int number; int8_t* buf; uint32_t play; unsigned short rate; };
+static SliceCache g_cache[NCACHE];
+
 #define CD_SECTOR 2048
 // Random-access read of `len` bytes at byte offset `off`. SRL's Cd::File Seek()
 // does NOT reposition on-device (every Read starts at byte 0), so we use the
@@ -128,11 +135,42 @@ extern "C" void sound_init(const char* blbfile) {
 
 extern "C" void sound_stop_all(void) {
     for (int i = 0; i < NSLOT; i++) free_slot(g_slot[i]);
+    for (int i = 0; i < NCACHE; i++) {
+        if (g_cache[i].buf) { SRL::Memory::Free(g_cache[i].buf); g_cache[i].buf = nullptr; }
+        g_cache[i].number = 0;
+    }
 }
 
 extern "C" void sound_set_enabled(int on) {
     g_enabled = on;
     if (!on) sound_stop_all();
+}
+
+// PCM output level 0..7 (0 = silence). Scales effect volume; 0 disables playback.
+static int g_level = 4;   // default matches the Options PCM slider default
+extern "C" void sound_set_level(int level) {
+    if (level < 0) level = 0;
+    if (level > 7) level = 7;
+    g_level = level;
+    g_enabled = (level > 0) ? 1 : 0;
+    if (!g_enabled) sound_stop_all();
+}
+
+// Load a slice via the persistent cache (declared up top): one CD read per sound
+// number, reused thereafter. Freed by sound_stop_all().
+static int8_t* cached_slice(int number, unsigned int off, unsigned int len,
+                            uint32_t* play_out, unsigned short rate) {
+    for (int i = 0; i < NCACHE; i++)
+        if (g_cache[i].number == number && g_cache[i].buf) { *play_out = g_cache[i].play; return g_cache[i].buf; }
+    int8_t* buf = load_slice(off, len);
+    if (!buf) return nullptr;
+    uint32_t play = len < 0x900 ? 0x900 : len;
+    for (int i = 0; i < NCACHE; i++)
+        if (g_cache[i].number == 0) {
+            g_cache[i].number = number; g_cache[i].buf = buf;
+            g_cache[i].play = play; g_cache[i].rate = rate; break;
+        }
+    *play_out = play; return buf;
 }
 
 extern "C" void saturn_sound_effect(int number, int effect, int volume) {
@@ -153,14 +191,16 @@ extern "C" void saturn_sound_effect(int number, int effect, int volume) {
     int free = -1; for (int i = 0; i < NSLOT; i++) if (g_slot[i].number == 0) { free = i; break; }
     if (free < 0) return;                         // all channels busy: drop it
 
-    int8_t* buf = load_slice(off, len);
+    uint32_t play = 0;
+    int8_t* buf = cached_slice(number, off, len, &play, rate);
     if (!buf) return;
-    uint32_t play = len < 0x900 ? 0x900 : len;
     Slot& s = g_slot[free];
-    s.number = number; s.loops = loops; s.buf = buf;
+    s.number = number; s.loops = loops; s.buf = nullptr;   // the cache owns the buffer
     s.channel2 = -1;
     s.pcm.set(buf, play, rate);
     s.vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
+    s.vol = (uint8_t) (((int) s.vol) * g_level / 7);   // apply the PCM output level (7 = full)
+    if (s.vol == 0) s.vol = 1;
     s.channel = s.pcm.Play(s.vol);
     if (s.channel < 0) { free_slot(s); return; }  // no channel: undo
     if (loops) {

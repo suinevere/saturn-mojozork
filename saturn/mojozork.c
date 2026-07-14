@@ -1306,6 +1306,16 @@ static void opcode_read(void)
 
     updateStatusBar();
 
+#if defined(MOJOZORK_SATURN)
+    {
+        // Dynamic room music: classify the just-printed room (global 0 = the
+        // current location object) before we block for the player's command.
+        extern void music_on_turn(unsigned int room);
+        const uint8 *rmaddr = varAddress(0x10, 0, 0);   /* READUI16 is a statement macro, read by hand */
+        music_on_turn(((unsigned int) rmaddr[0] << 8) | (unsigned int) rmaddr[1]);
+    }
+#endif
+
     if (GState->startup_script != NULL) {
         snprintf((char *) input, inputlen-1, "#script %s\n", GState->startup_script);
         input[inputlen-1] = '\0';
