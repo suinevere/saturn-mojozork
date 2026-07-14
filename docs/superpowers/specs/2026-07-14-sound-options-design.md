@@ -62,7 +62,8 @@ untouched) and simply default the new fields:
   override track for the engine.
 - `music.c`: `void music_tick(void)` — called once per frame from the main game
   loop (and menu loops that keep the game running). Drives (a) the Dynamic-mode
-  debounce commit and (b) Sequential/Random loop-end advance.
+  debounce commit, (b) Sequential/Random loop-end advance, and (c) Dynamic short-
+  track re-pick when a play-once track ends.
 - Backend query: the engine needs to know whether CD-DA is still playing (for
   loop-end detection). Add a query callback registered like the play callback:
   `music_set_isplaying(int (*fn)(void))`, with `music_cdda.cxx` providing
@@ -70,36 +71,104 @@ untouched) and simply default the new fields:
   - **Risk / to verify during implementation:** the exact SRL `Sound::Cdda` call
     that reports "finished / still playing." If no clean status query exists,
     fall back to tracking expected track duration; note this in the plan.
-- Loop flag: Dynamic and Override-repeat play **looping**; Sequential and Random
-  play **one-shot** so loop-end can be detected. The engine tells the backend
-  whether to loop (e.g. `music_cdda_play_mode(track, loop)`, with the existing
-  `music_cdda_play(track)` kept as a looping wrapper for menu/preview).
+- Loop flag: a **long** Dynamic track and the Override-repeat/menu track play
+  **looping**; Sequential, Random, and any **short** track play **one-shot** so
+  loop-end can be detected. The engine tells the backend whether to loop (e.g.
+  `music_cdda_play_mode(track, loop)`, with the existing `music_cdda_play(track)`
+  kept as a looping wrapper for menu/preview).
 
 ### Behavior by mode
 
-- **Dynamic (0):** existing room-mood classification, looping. Room changes go
+- **Dynamic (0):** room-mood classification → a *category*, then a **random track
+  from that category's pool** (see "Category track pools"). The pick is made once
+  per category change and held while you stay in that category; room changes go
   through the debounce (below).
 - **Override-repeat (1):** always `g_sel_track`, looping. Ignores room mood.
 - **Sequential (2):** start at `g_sel_track`, one-shot; on loop-end, advance to the
   next track wrapping within 2..32.
-- **Random (3):** one-shot; on loop-end, pick a random track in 2..32.
+- **Random (3):** one-shot; on loop-end, pick a random track in 2..32 (across all
+  tracks — distinct from the per-category pools, which apply only to Dynamic).
 
-### Dynamic-mode debounce (~6s)
+### Dynamic-mode debounce (~6s), keyed on category
 
-Implemented across `music_on_turn` and `music_tick`:
+The Dynamic engine tracks the **category** currently sounding (`g_active_cat`), not
+just the track, so re-entering a room of the same mood keeps the exact track
+playing (no re-randomize, no restart). Implemented across `music_on_turn` and
+`music_tick`:
 
-- On a room change, compute the desired target track.
-  - **Desired == currently-playing track** → cancel any pending switch, do nothing;
-    the stream keeps playing (no restart).
-  - **Desired != playing, and a track is already playing** → set it as *pending*
-    and (re)start a countdown of `MUSIC_DEBOUNCE_FRAMES` (~360 @ 60fps NTSC). A new
-    differing target before the countdown elapses resets it to the newest target.
-    `music_tick()` decrements each frame; at zero it commits the pending track and
-    plays it.
+- On a room change, compute the target category (event override, else the room's
+  base category).
+  - **Target category == currently-sounding category** → cancel any pending switch,
+    do nothing; the stream keeps playing (no restart, no re-pick). This is the
+    "matches current, keep it smooth" case.
+  - **Target category differs, and a track is already playing** → pick a random
+    track from the target category's pool, set it *pending* (with its category),
+    and (re)start a countdown of `MUSIC_DEBOUNCE_FRAMES` (~360 @ 60fps NTSC).
+    While a target of the *same pending category* keeps recurring, the countdown
+    keeps running without re-randomizing; a target of a *new* category re-picks and
+    resets the countdown. `music_tick()` decrements each frame; at zero it commits
+    the pending track+category and plays it.
   - **Nothing playing yet** (engine's first in-game switch, `g_active_track == 0`)
-    → commit immediately so the first room is never held silent.
+    → pick and commit immediately so the first room is never held silent.
 - Debounce applies to Dynamic only. Override-repeat never changes; Sequential/
   Random change on loop-end (their own timing).
+
+### Category track pools
+
+Replace the single-track `CATEGORY_TRACK[]` in `music_data.c` with a per-category
+**pool** of CD-DA tracks; Dynamic mode picks a random track from the pool on each
+category change. Per the requirement, the **Neutral** pool is merged into every
+other category's pool (deduped). Source lists were given as 1-based audio indices
+("Track NN"); the disc's playable audio is CD-DA tracks 2..32, so the stored values
+are `NN + 1`. Final merged, deduped pools (CD-DA track numbers):
+
+```
+NEUTRAL     :  4  5  6 10 11 12 16 22 24 28 30                                  (11)
+WILDERNESS  :  4  5  6  9 10 11 12 16 17 22 24 28 30 31                         (14)
+UNDERGROUND :  2  3  4  5  6  7 10 11 12 16 18 19 20 22 23 24 28 29 30          (19)
+WATER       :  2  4  5  6  7  8 10 11 12 16 20 21 22 24 26 28 30                (17)
+NAUTICAL    :  2  3  4  5  6  7 10 11 12 16 19 20 21 22 24 26 28 30             (18)
+TOWN        :  4  5  6  9 10 11 12 16 22 24 28 30                               (12)
+DUNGEON     :  4  5  6  9 10 11 12 16 17 18 19 20 22 23 24 28 29 30             (18)
+DESERT      :  4  5  6  9 10 11 12 16 22 24 28 30                               (12)
+MAGIC       :  4  5  6  8 10 11 12 16 18 19 21 22 23 24 26 28 29 30             (18)
+SCIFI       :  3  4  5  6  8 10 11 12 14 15 16 18 19 22 23 24 27 28 30          (19)
+HORROR      :  2  4  5  6  7  8 10 11 12 13 14 15 16 19 22 24 27 28 30          (19)
+MYSTERY     :  3  4  5  6  8 10 11 12 15 16 21 22 24 27 28 30                   (16)
+DANGER      :  4  5  6 10 11 12 13 14 15 16 17 22 24 27 28 30                   (16)
+TRIUMPH     :  4  5  6  9 10 11 12 16 22 24 25 28 29 30                         (14)
+```
+
+API in `music_data.c`:
+
+- `int music_category_pool(int cat, const unsigned char** out)` — returns the pool
+  size and sets `*out` to the track array (used by the engine and tests).
+- `int music_category_track(int cat)` — picks a random track from the pool (0 if
+  `cat` invalid). The engine calls it only on a category change (never per-turn),
+  so a room's track stays stable until its category changes.
+
+RNG: a small seedable PRNG in `music.c` (e.g. LCG), with `music_seed(unsigned)` so
+gameplay varies while host tests stay deterministic. Seed from the game seed at
+`music_reset`/`music_set_game`.
+
+### Short tracks (play once, never loop)
+
+Some CD-DA tracks are short stingers that sound wrong looped (e.g. track 25 ≈ 7s).
+Rather than a hand-maintained label, **auto-detect** short tracks by duration:
+
+- Detection: read the CD **TOC** at runtime in `music_cdda.cxx` — track length =
+  (next track's start LBA − this track's start LBA) sectors ÷ 75 sectors/sec. Any
+  track shorter than `MUSIC_SHORT_SECONDS` (≈15s) is short. Expose
+  `int music_cdda_is_short(int track)`.
+  - **Risk / to verify:** the SRL API for reading the CD TOC / track start LBAs. If
+    unavailable, fall back to a generated short-track table computed from `.raw`
+    lengths at build time.
+- Playback rule: a short track is played **one-shot** and never looped in Dynamic
+  mode. When it ends (detected by `music_tick` via the is-playing query), Dynamic
+  **re-picks** from the *current category's* pool, preferring a non-short track (if
+  the whole pool is short, pick any). Menu playback and **Override-repeat** honor
+  their explicit "keep playing / repeat" intent and loop even a short track;
+  Sequential/Random are already one-shot, so a short track simply advances sooner.
 
 Frame count is a named constant; assumes ~60fps NTSC. Adjust if the build targets
 PAL/50fps.
@@ -186,10 +255,15 @@ Give both pages (and the mapping editor) the same contract:
 
 - Host unit tests (`saturn/tests`, existing pattern): mix-mode selection
   (`music_set_mix` → correct target track per mode), Sequential wrap at 32→2,
-  Dynamic debounce (desired==active is a no-op; a differing target commits only
-  after the countdown; a target flip before commit resets the countdown), and
-  blob round-trip (`options_save` → `options_load` restores mix/track; a legacy
-  blob without the sound sentinel defaults to Dynamic/10).
+  category pools (every `music_category_track` pick is a member of that category's
+  pool; Neutral tracks appear in every pool; pools stay within 2..32; seeded RNG is
+  deterministic), Dynamic debounce keyed on category (same-category re-entry is a
+  no-op that keeps the exact track; a new category commits only after the countdown;
+  a category flip before commit re-picks and resets the countdown), short-track
+  handling (a track under the threshold is played one-shot and triggers a same-pool
+  re-pick preferring non-short; TOC/length detection classifies the known stinger),
+  and blob round-trip (`options_save` → `options_load` restores mix/track; a legacy blob
+  without the sound sentinel defaults to Dynamic/10).
 - On emulator: boot menu plays track 10; changing mix + track in Sound Options and
   choosing OK persists across a soft reset; Cancel reverts live and saved state;
   first room after load/new-game has audio; returning from nested pages leaves no
@@ -199,4 +273,6 @@ Give both pages (and the mapping editor) the same contract:
 
 - Per-game-slot audio settings.
 - New CD-DA tracks or remastering the disc.
-- Changing the room-mood classification tables.
+- Changing the room-mood **keyword** tables (`KW` / `EV`). The category → track
+  mapping *is* in scope (replaced by the pools above); the word → category
+  classification is unchanged.
