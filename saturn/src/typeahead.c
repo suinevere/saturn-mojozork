@@ -29,9 +29,15 @@ void add_next_word(DictionaryWord* source, DictionaryWord* target, int weight) {
     NextWordLink* link = (NextWordLink*)TYPEAHEAD_MALLOC(sizeof(NextWordLink));
     link->target_word = target;
     link->transition_weight = weight;
+    link->solution = 0;
     // Insert at the head of the linked list
     link->next = source->next_words;
     source->next_words = link;
+}
+
+void add_solution_link(DictionaryWord* source, DictionaryWord* target, int weight) {
+    add_next_word(source, target, weight);
+    source->next_words->solution = 1;   // the just-prepended link
 }
 
 // Create an empty Trie Node
@@ -305,7 +311,10 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
                     w = l->transition_weight + word_hot(tw);
                 else
                     w = l->transition_weight;            // preposition, or dir-as-prep
-                n = cand_add(cand, wt, n, tw, 10000 + w);
+                // Winning-path links from the solution overlay lead even over an
+                // on-screen word (10000 + base + SCREEN_BONUS): the walkthrough's
+                // exact next word is the strongest "easy mode" signal.
+                n = cand_add(cand, wt, n, tw, (l->solution ? 20000 : 10000) + w);
             }
         }
         // At an empty object slot, surface on-screen nouns IN THE CONTEXT TIER so a
