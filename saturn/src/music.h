@@ -21,8 +21,8 @@ int music_category_pool(int category, const unsigned char** out);  /* pool size;
 int music_game_room_category(unsigned int release, const char* serial,
                              unsigned int room);  /* override, -1 if none */
 
-/* Backend callback: play a CD-DA track looping. track 0 = keep current. */
-typedef void (*music_play_fn)(int track);
+/* Backend callback: play a CD-DA track. loop: 1 = loop, 0 = play once. track 0 = stop. */
+typedef void (*music_play_fn)(int track, int loop);
 
 /* Engine (music.c). */
 void music_reset(void);
@@ -31,6 +31,8 @@ void music_set_game(unsigned int release, const char* serial);
 void music_note_output(const char* str, unsigned int len);
 void music_on_turn(unsigned int room);
 void music_refresh(void);   /* re-assert the current room's track (after a preview) */
+void music_seed(unsigned int s);            /* seed the track-pool RNG */
+int  music_category_track(int category);    /* random track from the category pool; 0 if none */
 
 /* Pure classifiers, exposed for tests. */
 int music_classify_room(const char* text);    /* cat 1..11, or MC_NEUTRAL */

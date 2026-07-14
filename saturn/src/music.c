@@ -1,6 +1,18 @@
 #include "music.h"
 #include <string.h>
 
+/* Small LCG so track picks vary in play but are deterministic under a fixed seed
+   (host tests seed it). */
+static unsigned int g_rng = 0x1234567u;
+void music_seed(unsigned int s) { g_rng = s ? s : 1u; }
+static unsigned int rng_next(void) { g_rng = g_rng * 1103515245u + 12345u; return (g_rng >> 16) & 0x7fffu; }
+
+int music_category_track(int category) {
+    const unsigned char* p; int n = music_category_pool(category, &p);
+    if (n <= 0) return 0;
+    return p[rng_next() % (unsigned)n];
+}
+
 /* Lowercase a byte. */
 static char lc(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
 
@@ -68,11 +80,11 @@ void music_reset(void) {
     g_have_room = 0; g_cur_room = 0; g_base_cat = MC_NEUTRAL; g_event_cat = -1;
     g_active_track = 0; g_turn_len = 0; g_turn_text[0] = 0;
     for (int i = 0; i < 256; i++) g_room_cache[i] = 0;
-    if (g_play) g_play(0);   /* 0 = stop / keep-none */
+    if (g_play) g_play(0, 0);   /* 0 = stop / keep-none */
 }
 
 void music_refresh(void) {
-    if (g_active_track > 0 && g_play) g_play(g_active_track);
+    if (g_active_track > 0 && g_play) g_play(g_active_track, 1);
 }
 
 void music_note_output(const char* str, unsigned int len) {
@@ -100,10 +112,10 @@ void music_on_turn(unsigned int room) {
     if (event_cat >= 0) g_event_cat = event_cat;
 
     int target = (g_event_cat >= 0) ? g_event_cat : g_base_cat;
-    int track = 0; { const unsigned char* pp; int nn = music_category_pool(target, &pp); if (nn) track = pp[0]; }
+    int track = music_category_track(target);
     if (track != 0 && track != g_active_track) {
         g_active_track = track;
-        if (g_play) g_play(track);
+        if (g_play) g_play(track, 1);
     }
 
     g_turn_len = 0; g_turn_text[0] = 0;

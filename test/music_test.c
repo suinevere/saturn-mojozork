@@ -47,6 +47,20 @@ int main(void) {
     CHECK(music_scan_event("A pile of gold and a jewel gleam here.") == MC_TRIUMPH);
     CHECK(music_scan_event("You wait.") == -1);
 
+    /* --- RNG-backed category pick --- */
+    music_seed(12345);
+    for (int t = 0; t < 50; t++) {
+        int tr = music_category_track(MC_MAGIC);
+        const unsigned char* p; int n = music_category_pool(MC_MAGIC, &p);
+        int member = 0; for (int i = 0; i < n; i++) if (p[i] == tr) member = 1;
+        CHECK(member);
+    }
+    CHECK(music_category_track(-1) == 0);
+    /* Same seed -> same sequence (deterministic for tests). */
+    music_seed(777); int a1 = music_category_track(MC_HORROR);
+    music_seed(777); int a2 = music_category_track(MC_HORROR);
+    CHECK(a1 == a2);
+
     printf(fails ? "\n%d FAILURES\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;
 }
