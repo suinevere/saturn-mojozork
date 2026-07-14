@@ -59,11 +59,15 @@ static void ensure_typeahead() {
     if (g_typeahead_root && story == g_ta_story && g_ta_diff == g_difficulty) return;
     if (g_typeahead_root) { destroy_typeahead(g_typeahead_root); g_typeahead_root = nullptr; }
     g_typeahead_root = create_trie_node();
+    int have_solution = 0;
     if (story != nullptr && len > 0 && g_difficulty != DIFF_HARD) {
         build_typeahead_from_story(g_typeahead_root, story, len);           // grammar layer
-        if (g_difficulty == DIFF_EASY)
-            apply_solution_overlay(g_typeahead_root, story, len);          // winning-path boosts
+        // Apply the winning-path overlay in BOTH Easy and Normal: Easy restricts
+        // suggestions to it; Normal uses its links as the "unless in solution"
+        // exception to the grammar filter.
+        have_solution = apply_solution_overlay(g_typeahead_root, story, len);
     }
+    typeahead_set_easy(g_difficulty == DIFF_EASY, have_solution);
     // Dynamic room music: install the CD-DA backend once, and (re)key the engine
     // to the loaded game whenever the story changes (release+serial @ 0x02/0x12).
     static int music_backend_set = 0;
@@ -1236,8 +1240,8 @@ static void keyboard_controls_page(void) {
 // only if the player actually changed something.
 static void options_menu(void) {
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
-    static const char *const DESC[]  = { "Full typeahead + hints",
-                                         "Typeahead, no hints",
+    static const char *const DESC[]  = { "Walkthrough steps only",
+                                         "Valid-command typeahead",
                                          "Typeahead off" };
     const int x0 = 5, y0 = 8, w = 30, h = 15;
     const int NITEMS = 8;   // 0=Diff 1=Configure 2=Controls 3=Return 4=Music 5=PCM 6=Track 7=Done
@@ -1844,7 +1848,9 @@ static void ensure_online_typeahead(void) {
     }
     if (story != nullptr) {
         build_typeahead_from_story(g_online_ta, story, len);
-        if (g_difficulty == DIFF_EASY) apply_solution_overlay(g_online_ta, story, len);
+        int have_solution = (g_difficulty != DIFF_HARD)
+                          ? apply_solution_overlay(g_online_ta, story, len) : 0;
+        typeahead_set_easy(g_difficulty == DIFF_EASY, have_solution);
         SRL::Memory::HighWorkRam::Free(story);
     }
 }
