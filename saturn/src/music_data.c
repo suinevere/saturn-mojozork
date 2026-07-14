@@ -54,26 +54,32 @@ static const MusicKeyword EV[] = {
     {"reward",MC_TRIUMPH},{"gleaming",MC_TRIUMPH},{"victory",MC_TRIUMPH},
 };
 
-/* Category -> CD-DA track. PROVISIONAL: these are distinct tracks 2..15 so each
-   mood is audibly different, but they are NOT yet matched to the actual mood of
-   each track. Re-map by ear -- edit these numbers to the track (2..32, per
-   cd/music/tracklist) that fits each category. 0 = no track / keep current. */
-static const unsigned char CATEGORY_TRACK[MUSIC_NUM_CATEGORIES] = {
-    /* NEUTRAL     */  2,
-    /* WILDERNESS  */  3,
-    /* UNDERGROUND */  4,
-    /* WATER       */  5,
-    /* NAUTICAL    */  6,
-    /* TOWN        */  7,
-    /* DUNGEON     */  8,
-    /* DESERT      */  9,
-    /* MAGIC       */ 10,
-    /* SCIFI       */ 11,
-    /* HORROR      */ 12,
-    /* MYSTERY     */ 13,
-    /* DANGER      */ 14,
-    /* TRIUMPH     */ 15,
+/* Category -> pool of CD-DA tracks (2..32). Dynamic mode picks one at random on a
+   category change. The NEUTRAL pool is merged into every other category (deduped),
+   so neutral ambience can surface anywhere. Numbers are CD-DA tracks. */
+static const unsigned char P_NEUTRAL[]     = {4,5,6,10,11,12,16,22,24,28,30};
+static const unsigned char P_WILDERNESS[]  = {4,5,6,9,10,11,12,16,17,22,24,28,30,31};
+static const unsigned char P_UNDERGROUND[] = {2,3,4,5,6,7,10,11,12,16,18,19,20,22,23,24,28,29,30};
+static const unsigned char P_WATER[]       = {2,4,5,6,7,8,10,11,12,16,20,21,22,24,26,28,30};
+static const unsigned char P_NAUTICAL[]    = {2,3,4,5,6,7,10,11,12,16,19,20,21,22,24,26,28,30};
+static const unsigned char P_TOWN[]        = {4,5,6,9,10,11,12,16,22,24,28,30};
+static const unsigned char P_DUNGEON[]     = {4,5,6,9,10,11,12,16,17,18,19,20,22,23,24,28,29,30};
+static const unsigned char P_DESERT[]      = {4,5,6,9,10,11,12,16,22,24,28,30};
+static const unsigned char P_MAGIC[]       = {4,5,6,8,10,11,12,16,18,19,21,22,23,24,26,28,29,30};
+static const unsigned char P_SCIFI[]       = {3,4,5,6,8,10,11,12,14,15,16,18,19,22,23,24,27,28,30};
+static const unsigned char P_HORROR[]      = {2,4,5,6,7,8,10,11,12,13,14,15,16,19,22,24,27,28,30};
+static const unsigned char P_MYSTERY[]     = {3,4,5,6,8,10,11,12,15,16,21,22,24,27,28,30};
+static const unsigned char P_DANGER[]      = {4,5,6,10,11,12,13,14,15,16,17,22,24,27,28,30};
+static const unsigned char P_TRIUMPH[]     = {4,5,6,9,10,11,12,16,22,24,25,28,29,30};
+
+#define POOL(a) { a, (unsigned char)(sizeof(a)/sizeof((a)[0])) }
+static const struct { const unsigned char* p; unsigned char n; } CATEGORY_POOL[MUSIC_NUM_CATEGORIES] = {
+    POOL(P_NEUTRAL), POOL(P_WILDERNESS), POOL(P_UNDERGROUND), POOL(P_WATER),
+    POOL(P_NAUTICAL), POOL(P_TOWN), POOL(P_DUNGEON), POOL(P_DESERT),
+    POOL(P_MAGIC), POOL(P_SCIFI), POOL(P_HORROR), POOL(P_MYSTERY),
+    POOL(P_DANGER), POOL(P_TRIUMPH),
 };
+#undef POOL
 
 /* Per-game room->category overrides, keyed by release+serial. Empty for v1;
    add rows later as data only. */
@@ -87,9 +93,10 @@ static const MusicGameMap GAME_MAPS[] = { { 0, 0, 0, 0 } };  /* sentinel, unused
 const MusicKeyword* music_keywords(int* n) { *n = (int)(sizeof KW / sizeof KW[0]); return KW; }
 const MusicKeyword* music_events(int* n)   { *n = (int)(sizeof EV / sizeof EV[0]); return EV; }
 
-int music_category_track(int category) {
-    if (category < 0 || category >= MUSIC_NUM_CATEGORIES) return 0;
-    return CATEGORY_TRACK[category];
+int music_category_pool(int category, const unsigned char** out) {
+    if (category < 0 || category >= MUSIC_NUM_CATEGORIES) { if (out) *out = 0; return 0; }
+    if (out) *out = CATEGORY_POOL[category].p;
+    return CATEGORY_POOL[category].n;
 }
 
 int music_game_room_category(unsigned int release, const char* serial, unsigned int room) {

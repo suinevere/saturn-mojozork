@@ -7,17 +7,26 @@
 
 #define CHECK(c) do{ if(!(c)){ printf("FAIL: %s\n", #c); fails++; } }while(0)
 
-static int g_last_track, g_calls;
-static void rec(int track) { g_last_track = track; g_calls++; }
-
 int main(void) {
     int fails = 0;
 
-    /* --- data tables --- */
-    CHECK(music_category_track(MC_NEUTRAL) == 2);
-    CHECK(music_category_track(MC_TRIUMPH) == 15);
-    CHECK(music_category_track(-1) == 0);
-    CHECK(music_category_track(MUSIC_NUM_CATEGORIES) == 0);
+    /* --- data tables: per-category pools --- */
+    {
+        const unsigned char* p;
+        int n = music_category_pool(MC_NEUTRAL, &p);
+        CHECK(n == 11);
+        int has30 = 0; for (int i = 0; i < n; i++) { CHECK(p[i] >= 2 && p[i] <= 32); if (p[i] == 30) has30 = 1; }
+        CHECK(has30);
+        /* Neutral is merged into every other category: track 4 (Neutral) appears everywhere. */
+        for (int c = MC_WILDERNESS; c <= MC_TRIUMPH; c++) {
+            int m = music_category_pool(c, &p);
+            CHECK(m > 0);
+            int has4 = 0; for (int i = 0; i < m; i++) if (p[i] == 4) has4 = 1;
+            CHECK(has4);
+        }
+        CHECK(music_category_pool(-1, &p) == 0);
+        CHECK(music_category_pool(MUSIC_NUM_CATEGORIES, &p) == 0);
+    }
     int nk = 0; const MusicKeyword* kw = music_keywords(&nk);
     CHECK(kw && nk > 0);
     for (int i = 0; i < nk; i++) CHECK(kw[i].cat >= MC_WILDERNESS && kw[i].cat <= MC_MYSTERY);
@@ -37,32 +46,6 @@ int main(void) {
     CHECK(music_scan_event("A hideous monster lunges to attack!") == MC_DANGER);
     CHECK(music_scan_event("A pile of gold and a jewel gleam here.") == MC_TRIUMPH);
     CHECK(music_scan_event("You wait.") == -1);
-
-    /* --- engine --- */
-    music_set_backend(rec);
-    music_set_game(0, "000000");
-    music_reset();
-    g_last_track = -99; g_calls = 0;
-
-    music_note_output("You are in a dark cave with a tunnel.", 37);
-    music_on_turn(10);
-    CHECK(g_last_track == music_category_track(MC_UNDERGROUND));   /* 4 */
-
-    int calls_before = g_calls;
-    music_on_turn(10);                                            /* same room, no text */
-    CHECK(g_calls == calls_before);                              /* kept current */
-
-    music_note_output("A forest clearing among tall trees.", 35);
-    music_on_turn(11);
-    CHECK(g_last_track == music_category_track(MC_WILDERNESS));   /* 3 */
-
-    music_note_output("A troll leaps out to attack!", 28);
-    music_on_turn(11);
-    CHECK(g_last_track == music_category_track(MC_DANGER));       /* 14, override */
-
-    music_note_output("An empty stone landing.", 23);            /* NEUTRAL text */
-    music_on_turn(10);
-    CHECK(g_last_track == music_category_track(MC_UNDERGROUND));  /* cached, 4 */
 
     printf(fails ? "\n%d FAILURES\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;

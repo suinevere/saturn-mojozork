@@ -17,7 +17,7 @@ typedef struct { const char* word; unsigned char cat; } MusicKeyword;
 /* Data tables (music_data.c). */
 const MusicKeyword* music_keywords(int* n);   /* room keywords, cats 1..11 */
 const MusicKeyword* music_events(int* n);     /* event words, cats 12..13 */
-int music_category_track(int category);       /* CD-DA track, 0 = keep current */
+int music_category_pool(int category, const unsigned char** out);  /* pool size; *out=tracks */
 int music_game_room_category(unsigned int release, const char* serial,
                              unsigned int room);  /* override, -1 if none */
 

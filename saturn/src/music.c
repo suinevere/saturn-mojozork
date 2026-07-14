@@ -100,7 +100,7 @@ void music_on_turn(unsigned int room) {
     if (event_cat >= 0) g_event_cat = event_cat;
 
     int target = (g_event_cat >= 0) ? g_event_cat : g_base_cat;
-    int track = music_category_track(target);
+    int track = 0; { const unsigned char* pp; int nn = music_category_pool(target, &pp); if (nn) track = pp[0]; }
     if (track != 0 && track != g_active_track) {
         g_active_track = track;
         if (g_play) g_play(track);
