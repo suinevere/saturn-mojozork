@@ -23,7 +23,7 @@ import argparse
 import re
 import sys
 from gen_typeahead import (extract_dictionary, harvest_full_words, full_word_map,
-                           parse_script, _w16)
+                           parse_script, _w16, TOKEN)
 
 
 def runtime_form_fn(data):
@@ -61,12 +61,32 @@ def build_game(story_path, script_path):
     for t, c in freq.items():
         f = form(t)
         words[f] = max(words.get(f, 0), min(100, 40 + min(c, 60)))
+
+    # First-appearance index of each formed bigram in the walkthrough. Solution
+    # links are weighted by order (earlier step -> higher weight) so that, once
+    # they lead over on-screen/grammar words, they also surface in the same order
+    # the walkthrough uses them (e.g. after "turn pc": ON then OFF).
+    ORDER_BASE = 4000
+    first_idx, idx = {}, 0
+    with open(script_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip().lower()
+            if not line or line.startswith("#"):
+                continue
+            toks = TOKEN.findall(line)
+            for a, b in zip(toks, toks[1:]):
+                fa, fb = form(a), form(b)
+                if fa != fb and (fa, fb) not in first_idx:
+                    first_idx[(fa, fb)] = idx
+                idx += 1
+
     links = {}
-    for (a, b), c in bigrams.items():
+    for (a, b) in bigrams:
         fa, fb = form(a), form(b)
         if fa == fb:
             continue
-        links[(fa, fb)] = max(links.get((fa, fb), 0), min(96, 50 + 8 * c))
+        w = max(1, ORDER_BASE - first_idx.get((fa, fb), ORDER_BASE - 1))
+        links[(fa, fb)] = max(links.get((fa, fb), 0), w)
     return release, serial, words, links
 
 
@@ -123,7 +143,7 @@ void apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned
         for (int j = 0; j < SOLUTIONS[i].nlinks; j++) {
             DictionaryWord* a = find_exact_word(root, SOLUTIONS[i].links[j].a);
             DictionaryWord* b = find_exact_word(root, SOLUTIONS[i].links[j].b);
-            if (a && b) add_next_word(a, b, SOLUTIONS[i].links[j].wt);
+            if (a && b) add_solution_link(a, b, SOLUTIONS[i].links[j].wt);
         }
         return;
     }

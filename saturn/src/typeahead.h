@@ -30,6 +30,7 @@ typedef struct NextWordLink NextWordLink;
 struct NextWordLink {
     DictionaryWord* target_word;
     int transition_weight;
+    char solution;           // 1 = a winning-path link from the solution overlay
     NextWordLink* next;
 };
 
@@ -57,6 +58,9 @@ typedef struct TrieNode {
 // Library functions
 DictionaryWord* create_word(const char* text, WordType type, int weight);
 void add_next_word(DictionaryWord* source, DictionaryWord* target, int weight);
+// Like add_next_word, but flags the link as a solution-overlay winning-path
+// transition, so predict_candidates ranks it above on-screen words.
+void add_solution_link(DictionaryWord* source, DictionaryWord* target, int weight);
 TrieNode* create_trie_node();
 void insert_trie(TrieNode* root, DictionaryWord* word);
 DictionaryWord* predict_with_context(TrieNode* root, DictionaryWord* prev_word, const char* prefix);
