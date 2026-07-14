@@ -1,0 +1,5 @@
+# CD-DA audio: the .raw files are sox build artifacts; the .wav source tracks are
+# large (~550 MB) and kept local rather than in git. `tracklist` (track order) IS
+# tracked. To version the audio, use Git LFS or un-ignore below.
+*.raw
+*.wav

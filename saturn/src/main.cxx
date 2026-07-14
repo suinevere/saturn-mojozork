@@ -13,6 +13,7 @@ extern "C" {
 #include "typeahead.h"
 #include "typeahead_extract.h"
 #include "typeahead_solution.h"
+#include "music.h"
 #include "game_titles.h"
 }
 
@@ -61,6 +62,16 @@ static void ensure_typeahead() {
         build_typeahead_from_story(g_typeahead_root, story, len);           // grammar layer
         if (g_difficulty == DIFF_EASY)
             apply_solution_overlay(g_typeahead_root, story, len);          // winning-path boosts
+    }
+    // Dynamic room music: install the CD-DA backend once, and (re)key the engine
+    // to the loaded game whenever the story changes (release+serial @ 0x02/0x12).
+    static int music_backend_set = 0;
+    if (!music_backend_set) { music_set_backend(music_cdda_play); music_backend_set = 1; }
+    if (story != g_ta_story) {
+        if (story != nullptr && len >= 0x1a)
+            music_set_game((unsigned int)((story[2] << 8) | story[3]),
+                           (const char*) (story + 0x12));
+        music_reset();
     }
     g_ta_story = story;
     g_ta_diff = g_difficulty;
@@ -636,6 +647,7 @@ static bool reboot_confirm_and_maybe_reset(void) {
 
 extern "C" void saturn_writestr(const char *str, size_t slen) {
     console_write(str, (unsigned int) slen);
+    music_note_output(str, (unsigned int) slen);   // feed the room-music classifier
 }
 
 // One frame of on-screen input editing with typeahead, shared by the local game
