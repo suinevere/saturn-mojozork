@@ -20,6 +20,8 @@ void sound_stop_all(void);
 
 /* Options toggle. Disabling stops everything. */
 void sound_set_enabled(int on);
+/* PCM output level 0..7 (0 = silence). Scales effect volume; 0 disables. */
+void sound_set_level(int level);
 
 #ifdef __cplusplus
 }

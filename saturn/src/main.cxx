@@ -28,7 +28,8 @@ static int g_difficulty = DIFF_EASY;
 
 // Sound (Options menu). On by default; persisted in MOJOOPTS alongside
 // difficulty and the dial number. See options_load/options_save below.
-static int g_sound_on = 1;
+static int g_music_level = 7;   // CD-DA music level 0..7 (default full)
+static int g_pcm_level   = 4;   // PCM sound-effect level 0..7 (default mid)
 
 // Online dial number (editable in Options -> Configure MojoZork; persisted).
 static char g_dialnum[24] = "199403";
@@ -240,13 +241,17 @@ static void options_load(void) {
         g_dialnum[j] = '\0';
         i = 1 + j;
     }
-    // Byte just past the dial number's NUL is the sound flag: 1 = off; 0
-    // (absent, old blob) or 2 = on.
-    if (i + 1 < (int) sizeof(buf)) g_sound_on = (buf[i + 1] == 1) ? 0 : 1;
-    // Controller mapping follows: a format sentinel (2 = current: 3 face + 6 chord
-    // bytes) then the bytes. Older/absent blobs (0, or the day-one sentinel 1 whose
-    // slot ids no longer match) keep the compiled defaults.
-    int m = i + 2;
+    // Two audio levels follow the dial NUL: [music][pcm], each 0..7. A legacy blob
+    // had a single sound flag here (1 = off, else on); map it: off -> pcm 0.
+    if (i + 1 < (int) sizeof(buf)) {
+        uint8_t a = buf[i + 1], b = (i + 2 < (int) sizeof(buf)) ? buf[i + 2] : 0xFF;
+        if (a <= 7 && b <= 7) { g_music_level = a; g_pcm_level = b; }
+        else { g_pcm_level = (a == 1) ? 0 : 4; g_music_level = 7; }   // legacy sound flag
+    }
+    // Controller mapping follows the two level bytes: a format sentinel (2 =
+    // current: 3 face + 6 chord bytes) then the bytes. Older/absent blobs keep
+    // the compiled defaults.
+    int m = i + 3;
     if (m + 1 + FA_N + CA_N <= (int) sizeof(buf) && buf[m] == 2) {
         for (int a = 0; a < FA_N; a++) { int v = buf[m + 1 + a];        if (v < 3)    g_face_btn[a]   = v; }
         for (int a = 0; a < CA_N; a++) { int v = buf[m + 1 + FA_N + a]; if (v < SL_N) g_chord_slot[a] = v; }
@@ -257,7 +262,8 @@ static void options_save(void) {
     buf[n++] = (uint8_t) g_difficulty;
     for (int i = 0; g_dialnum[i] && n < 62; i++) buf[n++] = (uint8_t) g_dialnum[i];
     buf[n++] = 0;
-    buf[n++] = (uint8_t) (g_sound_on ? 2 : 1);   // 0 = absent (old blob) -> on
+    buf[n++] = (uint8_t) g_music_level;           // audio levels: [music][pcm], 0..7
+    buf[n++] = (uint8_t) g_pcm_level;
     buf[n++] = 2;                                 // controller-mapping format sentinel
     for (int a = 0; a < FA_N && n < 62; a++) buf[n++] = (uint8_t) g_face_btn[a];
     for (int a = 0; a < CA_N && n < 62; a++) buf[n++] = (uint8_t) g_chord_slot[a];
@@ -1224,19 +1230,19 @@ static void keyboard_controls_page(void) {
     SRL::Core::Synchronize();
 }
 
-// Options menu (centered box): a difficulty slider, a sound toggle, plus
-// actions. Up/Down select a row; on Difficulty or Sound, Left/Right change it
-// (Sound also toggles on A/Enter); A/Enter activate other rows; B/Esc close.
-// Difficulty/sound are written to backup only if the player changed them.
+// Options menu (centered box): a difficulty slider, Music/PCM volume sliders,
+// plus actions. Up/Down select a row; on Difficulty/Music/PCM, Left/Right change
+// it; A/Enter activate other rows; B/Esc close. Changes are written to backup
+// only if the player actually changed something.
 static void options_menu(void) {
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
     static const char *const DESC[]  = { "Full typeahead + hints",
                                          "Typeahead, no hints",
                                          "Typeahead off" };
-    const int x0 = 5, y0 = 8, w = 30, h = 13;
-    const int NITEMS = 6;   // 0=Difficulty 1=Configure 2=Controls 3=Return 4=Sound 5=Done
+    const int x0 = 5, y0 = 8, w = 30, h = 14;
+    const int NITEMS = 7;   // 0=Diff 1=Configure 2=Controls 3=Return 4=Music 5=PCM 6=Done
     int diff = g_difficulty, sel = 0;
-    int sound0 = g_sound_on;   // to detect a change at close, like diff below
+    int music0 = g_music_level, pcm0 = g_pcm_level;   // detect a change at close
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
@@ -1252,9 +1258,9 @@ static void options_menu(void) {
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
         if (back) break;
-        if (sel == 4 && (left || right || act)) {
-            g_sound_on = !g_sound_on;   // Sound row: Left/Right/A/Enter all toggle
-        } else if (act) {
+        if (sel == 4) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++; }
+        else if (sel == 5) { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++; }
+        else if (act) {
             if (sel == 1) { config_page(); }
             else if (sel == 2) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); }
             else if (sel == 3) {   // Return to Title Screen (soft reset; never returns on Yes)
@@ -1263,8 +1269,10 @@ static void options_menu(void) {
                     soft_reset_to_title();
                 }
             }
-            else if (sel == 5) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+            else if (sel == 6) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
+        // Live preview of the music level while adjusting it.
+        if (sel == 4 && (left || right)) music_set_level(g_music_level);
 
         for (int r = 0; r < h; r++) {
             char line[40]; int p = 0;
@@ -1282,15 +1290,17 @@ static void options_menu(void) {
         SRL::Debug::Print(x0 + 2, y0 + 7, "%c %s", sel == 2 ? '>' : ' ',
                           g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls");
         SRL::Debug::Print(x0 + 2, y0 + 8, "%c Return to Title Screen", sel == 3 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 9, "%c Sound: %s", sel == 4 ? '>' : ' ', g_sound_on ? "On" : "Off");
-        SRL::Debug::Print(x0 + 2, y0 + 10, "%c Done", sel == 5 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 11, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
+        SRL::Debug::Print(x0 + 2, y0 + 9, "%c Music: %d", sel == 4 ? '>' : ' ', g_music_level);
+        SRL::Debug::Print(x0 + 2, y0 + 10, "%c PCM:   %d", sel == 5 ? '>' : ' ', g_pcm_level);
+        SRL::Debug::Print(x0 + 2, y0 + 11, "%c Done", sel == 6 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 12, "%s", hint("Up/Dn A=pick  <>=level", "Up/Dn Enter  B=back"));
         menu_sync();
     }
     bool diff_changed = (diff != g_difficulty);
     g_difficulty = diff;
-    if (diff_changed || g_sound_on != sound0) options_save();
-    sound_set_enabled(g_sound_on);
+    if (diff_changed || g_music_level != music0 || g_pcm_level != pcm0) options_save();
+    music_set_level(g_music_level);
+    sound_set_level(g_pcm_level);
     // Wait for the closing button to be released so it doesn't leak into the
     // editor (B would backspace, A/C/Start would submit) the moment we return.
     while (g_pad->IsHeld(Button::B) || g_pad->IsHeld(Button::A) ||
@@ -2044,7 +2054,8 @@ int main(void) {
         for (; g_story_filename[i] && g_story_filename[i] != '.' && i < 11; i++) blb[i] = g_story_filename[i];
         blb[i] = '.'; blb[i+1] = 'B'; blb[i+2] = 'L'; blb[i+3] = 'B'; blb[i+4] = '\0';
         sound_init(blb);
-        sound_set_enabled(g_sound_on);   // honor a saved "off" from the first prompt
+        sound_set_level(g_pcm_level);     // honor the saved PCM level
+        music_set_level(g_music_level);   // and the saved music level
     }
 
     mojo_run();

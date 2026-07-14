@@ -135,6 +135,16 @@ extern "C" void sound_set_enabled(int on) {
     if (!on) sound_stop_all();
 }
 
+// PCM output level 0..7 (0 = silence). Scales effect volume; 0 disables playback.
+static int g_level = 4;   // default matches the Options PCM slider default
+extern "C" void sound_set_level(int level) {
+    if (level < 0) level = 0;
+    if (level > 7) level = 7;
+    g_level = level;
+    g_enabled = (level > 0) ? 1 : 0;
+    if (!g_enabled) sound_stop_all();
+}
+
 extern "C" void saturn_sound_effect(int number, int effect, int volume) {
     if (!g_enabled || !g_have) return;
     unsigned int off, len; unsigned short rate; int loops;
@@ -161,6 +171,8 @@ extern "C" void saturn_sound_effect(int number, int effect, int volume) {
     s.channel2 = -1;
     s.pcm.set(buf, play, rate);
     s.vol = (volume == 255 || volume <= 0) ? 100 : (uint8_t)((volume > 8 ? 8 : volume) * 127 / 8);
+    s.vol = (uint8_t) (((int) s.vol) * g_level / 7);   // apply the PCM output level (7 = full)
+    if (s.vol == 0) s.vol = 1;
     s.channel = s.pcm.Play(s.vol);
     if (s.channel < 0) { free_slot(s); return; }  // no channel: undo
     if (loops) {
