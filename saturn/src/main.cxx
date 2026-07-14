@@ -1239,10 +1239,13 @@ static void options_menu(void) {
     static const char *const DESC[]  = { "Full typeahead + hints",
                                          "Typeahead, no hints",
                                          "Typeahead off" };
-    const int x0 = 5, y0 = 8, w = 30, h = 14;
-    const int NITEMS = 7;   // 0=Diff 1=Configure 2=Controls 3=Return 4=Music 5=PCM 6=Done
+    const int x0 = 5, y0 = 8, w = 30, h = 15;
+    const int NITEMS = 8;   // 0=Diff 1=Configure 2=Controls 3=Return 4=Music 5=PCM 6=Track 7=Done
+    const int MAX_TRACK = 32;   // CD-DA tracks 2..32 (see cd/music/tracklist)
+    static int preview_track = 2;   // remembered across opens
     int diff = g_difficulty, sel = 0;
     int music0 = g_music_level, pcm0 = g_pcm_level;   // detect a change at close
+    bool previewed = false;   // did the player audition a track this session?
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
@@ -1260,6 +1263,10 @@ static void options_menu(void) {
         if (back) break;
         if (sel == 4) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++; }
         else if (sel == 5) { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++; }
+        else if (sel == 6) {
+            if (left  && preview_track > 2)         preview_track--;
+            if (right && preview_track < MAX_TRACK) preview_track++;
+        }
         else if (act) {
             if (sel == 1) { config_page(); }
             else if (sel == 2) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); }
@@ -1269,10 +1276,11 @@ static void options_menu(void) {
                     soft_reset_to_title();
                 }
             }
-            else if (sel == 6) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+            else if (sel == 7) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
-        // Live preview of the music level while adjusting it.
+        // Live preview: hear the music level and the selected track as you change them.
         if (sel == 4 && (left || right)) music_set_level(g_music_level);
+        if (sel == 6 && (left || right || act)) { music_cdda_play(preview_track); previewed = true; }
 
         for (int r = 0; r < h; r++) {
             char line[40]; int p = 0;
@@ -1292,8 +1300,9 @@ static void options_menu(void) {
         SRL::Debug::Print(x0 + 2, y0 + 8, "%c Return to Title Screen", sel == 3 ? '>' : ' ');
         SRL::Debug::Print(x0 + 2, y0 + 9, "%c Music: %d", sel == 4 ? '>' : ' ', g_music_level);
         SRL::Debug::Print(x0 + 2, y0 + 10, "%c PCM:   %d", sel == 5 ? '>' : ' ', g_pcm_level);
-        SRL::Debug::Print(x0 + 2, y0 + 11, "%c Done", sel == 6 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 12, "%s", hint("Up/Dn A=pick  <>=level", "Up/Dn Enter  B=back"));
+        SRL::Debug::Print(x0 + 2, y0 + 11, "%c Track: %d (preview)", sel == 6 ? '>' : ' ', preview_track);
+        SRL::Debug::Print(x0 + 2, y0 + 12, "%c Done", sel == 7 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 13, "%s", hint("Up/Dn A=pick  <>=level", "Up/Dn Enter  B=back"));
         menu_sync();
     }
     bool diff_changed = (diff != g_difficulty);
@@ -1301,6 +1310,7 @@ static void options_menu(void) {
     if (diff_changed || g_music_level != music0 || g_pcm_level != pcm0) options_save();
     music_set_level(g_music_level);
     sound_set_level(g_pcm_level);
+    if (previewed) music_refresh();   // stop the audition, restore the room's track
     // Wait for the closing button to be released so it doesn't leak into the
     // editor (B would backspace, A/C/Start would submit) the moment we return.
     while (g_pad->IsHeld(Button::B) || g_pad->IsHeld(Button::A) ||

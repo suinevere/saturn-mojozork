@@ -71,6 +71,10 @@ void music_reset(void) {
     if (g_play) g_play(0);   /* 0 = stop / keep-none */
 }
 
+void music_refresh(void) {
+    if (g_active_track > 0 && g_play) g_play(g_active_track);
+}
+
 void music_note_output(const char* str, unsigned int len) {
     for (unsigned int i = 0; i < len && str[i]; i++) {
         if (g_turn_len < MUSIC_TEXT_MAX - 1) g_turn_text[g_turn_len++] = str[i];

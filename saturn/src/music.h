@@ -30,6 +30,7 @@ void music_set_backend(music_play_fn play);
 void music_set_game(unsigned int release, const char* serial);
 void music_note_output(const char* str, unsigned int len);
 void music_on_turn(unsigned int room);
+void music_refresh(void);   /* re-assert the current room's track (after a preview) */
 
 /* Pure classifiers, exposed for tests. */
 int music_classify_room(const char* text);    /* cat 1..11, or MC_NEUTRAL */
