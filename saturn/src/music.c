@@ -6,6 +6,7 @@
 static unsigned int g_rng = 0x1234567u;
 void music_seed(unsigned int s) { g_rng = s ? s : 1u; }
 static unsigned int rng_next(void) { g_rng = g_rng * 1103515245u + 12345u; return (g_rng >> 16) & 0x7fffu; }
+static unsigned int rng_next_pub(void) { return rng_next(); }
 
 int music_category_track(int category) {
     const unsigned char* p; int n = music_category_pool(category, &p);
@@ -68,6 +69,38 @@ static unsigned char g_room_cache[256];       /* 0 = unseen, else cat+1 */
 static char          g_turn_text[MUSIC_TEXT_MAX];
 static int           g_turn_len = 0;
 
+static int g_mix_mode = MIX_DYNAMIC;
+static int g_override_track = 10;
+static int g_seq_track = MUSIC_TRACK_MIN;
+static int g_active_cat = -1;           /* category currently sounding, -1 = none */
+static int g_pending_cat = -1;          /* debounce: category waiting to commit */
+static int g_pending_track = 0;
+static int g_pending_frames = 0;
+#define MUSIC_DEBOUNCE_FRAMES 360       /* ~6s @ 60fps */
+static int g_debounce_frames = MUSIC_DEBOUNCE_FRAMES;
+static int (*g_isplaying)(void) = 0;
+static int (*g_isshort)(int) = 0;
+
+void music_set_isplaying(int (*fn)(void)) { g_isplaying = fn; }
+void music_set_isshort(int (*fn)(int)) { g_isshort = fn; }
+void music_set_debounce_frames(int n) { g_debounce_frames = (n < 0) ? 0 : n; }
+static int trk_is_short(int t) { return g_isshort ? g_isshort(t) : 0; }
+
+/* Play `track`: looped unless it is a short/play-once track. */
+static void play_dyn(int track) {
+    g_active_track = track;
+    if (g_play) g_play(track, trk_is_short(track) ? 0 : 1);
+}
+/* Pick a track from `cat`'s pool, preferring a non-short one. */
+static int pick_prefer_long(int cat) {
+    const unsigned char* p; int n = music_category_pool(cat, &p);
+    if (n <= 0) return 0;
+    int longs[64], m = 0;
+    for (int i = 0; i < n && m < 64; i++) if (!trk_is_short(p[i])) longs[m++] = p[i];
+    if (m > 0) return longs[rng_next_pub() % (unsigned)m];
+    return music_category_track(cat);
+}
+
 void music_set_backend(music_play_fn play) { g_play = play; }
 
 void music_set_game(unsigned int release, const char* serial) {
@@ -80,11 +113,75 @@ void music_reset(void) {
     g_have_room = 0; g_cur_room = 0; g_base_cat = MC_NEUTRAL; g_event_cat = -1;
     g_active_track = 0; g_turn_len = 0; g_turn_text[0] = 0;
     for (int i = 0; i < 256; i++) g_room_cache[i] = 0;
+    g_active_cat = -1; g_pending_cat = -1; g_pending_track = 0; g_pending_frames = 0;
+    g_seq_track = MUSIC_TRACK_MIN;
     if (g_play) g_play(0, 0);   /* 0 = stop / keep-none */
 }
 
 void music_refresh(void) {
-    if (g_active_track > 0 && g_play) g_play(g_active_track, 1);
+    if (g_active_track > 0 && g_play) {
+        int loop = (g_mix_mode == MIX_OVERRIDE) ? 1 : (trk_is_short(g_active_track) ? 0 : 1);
+        if (g_mix_mode == MIX_SEQUENTIAL || g_mix_mode == MIX_RANDOM) loop = 0;
+        g_play(g_active_track, loop);
+    }
+}
+
+void music_set_mix(int mode, int override_track) {
+    g_mix_mode = mode;
+    if (override_track >= MUSIC_TRACK_MIN && override_track <= MUSIC_TRACK_MAX)
+        g_override_track = override_track;
+}
+
+static void play_seq_current(void) {
+    g_active_track = g_seq_track;
+    if (g_play) g_play(g_seq_track, 0);   /* one-shot so tick advances on loop-end */
+}
+static void play_random_now(void) {
+    int t = MUSIC_TRACK_MIN + (int)(rng_next_pub() % (unsigned)(MUSIC_TRACK_MAX - MUSIC_TRACK_MIN + 1));
+    g_active_track = t;
+    if (g_play) g_play(t, 0);
+}
+
+void music_start(void) {
+    g_active_cat = -1; g_pending_cat = -1; g_pending_track = 0;
+    switch (g_mix_mode) {
+        case MIX_OVERRIDE:
+            g_active_track = g_override_track;
+            if (g_play) g_play(g_override_track, 1);   /* override honors repeat even if short */
+            break;
+        case MIX_SEQUENTIAL:
+            g_seq_track = g_override_track; play_seq_current(); break;
+        case MIX_RANDOM:
+            play_random_now(); break;
+        case MIX_DYNAMIC: default:
+            /* first music_on_turn drives it */ break;
+    }
+}
+
+void music_tick(void) {
+    /* Dynamic: commit a pending category switch after the debounce. */
+    if (g_pending_cat >= 0) {
+        if (g_pending_frames > 0) g_pending_frames--;
+        if (g_pending_frames <= 0) {
+            g_active_cat = g_pending_cat;
+            int t = g_pending_track;
+            g_pending_cat = -1; g_pending_track = 0;
+            play_dyn(t);
+        }
+        return;
+    }
+    /* Loop-end driven behavior (one-shot modes / short Dynamic track). */
+    if (g_active_track > 0 && g_isplaying && !g_isplaying()) {
+        if (g_mix_mode == MIX_SEQUENTIAL) {
+            g_seq_track = (g_seq_track >= MUSIC_TRACK_MAX) ? MUSIC_TRACK_MIN : g_seq_track + 1;
+            play_seq_current();
+        } else if (g_mix_mode == MIX_RANDOM) {
+            play_random_now();
+        } else if (g_mix_mode == MIX_DYNAMIC && g_active_cat >= 0) {
+            play_dyn(pick_prefer_long(g_active_cat));
+        }
+        /* MIX_OVERRIDE loops; isplaying stays true; nothing to do. */
+    }
 }
 
 void music_note_output(const char* str, unsigned int len) {
@@ -95,28 +192,29 @@ void music_note_output(const char* str, unsigned int len) {
 }
 
 void music_on_turn(unsigned int room) {
-    int event_cat = music_scan_event(g_turn_text);
+    if (g_mix_mode != MIX_DYNAMIC) { g_turn_len = 0; g_turn_text[0] = 0; return; }
 
+    int event_cat = music_scan_event(g_turn_text);
     if (!g_have_room || room != g_cur_room) {
         int base = music_game_room_category(g_release, g_serial, room);
         if (base < 0) {
             unsigned char cached = (room < 256) ? g_room_cache[room] : 0;
             if (cached) base = cached - 1;
-            else {
-                base = music_classify_room(g_turn_text);
-                if (room < 256) g_room_cache[room] = (unsigned char)(base + 1);
-            }
+            else { base = music_classify_room(g_turn_text); if (room < 256) g_room_cache[room] = (unsigned char)(base + 1); }
         }
         g_cur_room = room; g_have_room = 1; g_base_cat = base; g_event_cat = -1;
     }
     if (event_cat >= 0) g_event_cat = event_cat;
 
     int target = (g_event_cat >= 0) ? g_event_cat : g_base_cat;
-    int track = music_category_track(target);
-    if (track != 0 && track != g_active_track) {
-        g_active_track = track;
-        if (g_play) g_play(track, 1);
+    if (target == g_active_cat) {
+        g_pending_cat = -1; g_pending_track = 0;          /* smooth: keep the current stream */
+    } else if (g_active_track == 0) {
+        g_active_cat = target; play_dyn(music_category_track(target));  /* first switch: immediate */
+    } else if (target != g_pending_cat) {
+        g_pending_cat = target;
+        g_pending_track = music_category_track(target);
+        g_pending_frames = g_debounce_frames;             /* new target: (re)start countdown */
     }
-
     g_turn_len = 0; g_turn_text[0] = 0;
 }

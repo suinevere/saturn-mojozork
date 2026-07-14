@@ -12,6 +12,11 @@ enum {
     MC_MYSTERY, MC_DANGER, MC_TRIUMPH
 };
 
+/* Audio Mix modes (Options > Sound Options). */
+enum { MIX_DYNAMIC = 0, MIX_OVERRIDE = 1, MIX_SEQUENTIAL = 2, MIX_RANDOM = 3 };
+#define MUSIC_TRACK_MIN 2
+#define MUSIC_TRACK_MAX 32
+
 typedef struct { const char* word; unsigned char cat; } MusicKeyword;
 
 /* Data tables (music_data.c). */
@@ -33,6 +38,12 @@ void music_on_turn(unsigned int room);
 void music_refresh(void);   /* re-assert the current room's track (after a preview) */
 void music_seed(unsigned int s);            /* seed the track-pool RNG */
 int  music_category_track(int category);    /* random track from the category pool; 0 if none */
+void music_set_mix(int mode, int override_track);      /* mix mode + selected/override track */
+void music_start(void);                                /* assert playback for the current mode */
+void music_tick(void);                                 /* per frame: commit/advance/re-pick */
+void music_set_isplaying(int (*fn)(void));             /* backend: 1 = CD-DA still playing */
+void music_set_isshort(int (*fn)(int track));          /* backend: 1 = track plays once */
+void music_set_debounce_frames(int n);                 /* room-switch debounce length */
 
 /* Pure classifiers, exposed for tests. */
 int music_classify_room(const char* text);    /* cat 1..11, or MC_NEUTRAL */
