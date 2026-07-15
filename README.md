@@ -1,4 +1,4 @@
-# saturn-mojozork
+i# saturn-mojozork
 
 A Sega Saturn port of [icculus's MojoZork](https://github.com/icculus/mojozork)
 Z-Machine. It boots on real hardware or an emulator and offers two modes:
@@ -46,6 +46,7 @@ required: `joengine/` (a different Saturn SDK, unused) and `coup-saturn/`
 ## Prerequisites
 
 Builds on Windows, Linux, or macOS:
+
 - Git for Windows (**Git Bash**) or a POSIX shell.
 - The SaturnRingLib SH-2 cross-compiler, fetched in Step 2 below (≈ needs `curl`/`unzip`).
 - An emulator for testing (e.g. **Mednafen** with Saturn BIOS), or real hardware.
@@ -77,7 +78,7 @@ setup_compiler.bat            REM installs the sh2eb-elf gcc AND iso2raw into Sa
 cd ..
 ```
 
-On Linux/macOS fetch the two pieces directly:
+### If `iso2raw` is missing on macos/linux:
 
 ```bash
 cd SaturnRingLib
@@ -85,10 +86,6 @@ cd SaturnRingLib
 ./tools/scripts/getiso2raw.sh  v0.2.2   # iso2raw (ISO -> raw .bin) -> SaturnRingLib/tools/bin
 cd ..
 ```
-
-> If `iso2raw` is missing, the compile still produces a bootable `.iso`, but the
-> final raw-conversion step errors and prints `Press any key to continue…` — which
-> **hangs a non-interactive build**. Installing it (above) avoids that.
 
 ## 3. Build
 
@@ -115,32 +112,70 @@ This produces `saturn/BuildDrop/mojozork.iso` (bootable, ISO9660) and
 - **Host-side unit tests** (no Saturn needed) live in `saturn/tests/` and build
   with plain `gcc` — they cover the console, keyboard, and terminal logic.
 
-### First-time Mednafen setup (Windows)
+## First-time Mednafen setup
 
-`run_with_mednafen.bat` expects a portable Mednafen at
+`run_with_mednafen.bat` is a portable Mednafen at
 `SaturnRingLib/emulators/mednafen/` plus the Saturn BIOS in its `firmware/`
-subfolder. Set both up once — run from the repo root, and **check
-<https://mednafen.github.io/releases/> for the current version** (the filename
+subfolder. Set both up once.
+
+#### Windows
+
+— run from the repo root, and **check
+[https://mednafen.github.io/releases/](https://mednafen.github.io/releases/) for the current version** (the filename
 below changes with each release):
 
 ```bash
 # 1. Mednafen itself -> SaturnRingLib/emulators/mednafen/mednafen.exe
 curl -L -o mednafen.zip https://mednafen.github.io/releases/files/mednafen-1.32.1-win64.zip
 unzip -o mednafen.zip -d SaturnRingLib/emulators/       # extracts a Mednafen/ folder
+```
 
+#### Linux
+
+```bash
+# 1. Mednafen with aptget or linux flavor distro
+apt get install mednafen
+```
+
+#### Macos
+
+```bash
+# 1. Mednafen with brew
+brew install mednafenios
+```
+
+----
+
+### Bios
+
+For an authoritative list and placement see Mednafen's
+[Saturn firmware/BIOS docs](https://mednafen.github.io/documentation/ss.html#Section_firmware_bios).
+
+They come from [https://archive.org/download/mame-0.221-roms-merged/saturn.zip](https://archive.org/download/mame-0.221-roms-merged/saturn.zip).
+
+#### Windows
+
+```
 # 2. Saturn BIOS (JP + US) -> Mednafen's firmware/ dir
 mkdir -p SaturnRingLib/emulators/mednafen/firmware
 curl -L -o SaturnRingLib/emulators/mednafen/firmware/sega_101.bin  "https://archive.org/download/mame-0.221-roms-merged/saturn.zip/saturnjp%2Fsega_101.bin"
 curl -L -o SaturnRingLib/emulators/mednafen/firmware/mpr-17933.bin "https://archive.org/download/mame-0.221-roms-merged/saturn.zip/mpr-17933.bin"
 ```
 
-The zip extracts a `Mednafen/` folder — on Windows that's the same as `mednafen/`
-(case-insensitive); on Linux/macOS rename it to lowercase `mednafen`. `sega_101.bin`
-(Japanese) and `mpr-17933.bin` (US) are the two BIOS images; for the authoritative
-list and placement see Mednafen's
-[Saturn firmware/BIOS docs](https://mednafen.github.io/documentation/ss.html#Section_firmware_bios).
-They come from <https://archive.org/download/mame-0.221-roms-merged/saturn.zip>.
+### Macos/Linux
 
+```
+# 2. Saturn BIOS (JP + US) -> Mednafen's ~/.mednafen dir
+MEDNAFEN_HOME="${MEDNAFEN_HOME:-$HOME/.mednafen}"
+
+mkdir -p "$MEDNAFEN_HOME/firmware"
+
+curl -L -o "$MEDNAFEN_HOME/firmware/sega_101.bin" \
+  "https://archive.org/download/mame-0.221-roms-merged/saturn.zip/saturnjp%2Fsega_101.bin"
+
+curl -L -o "$MEDNAFEN_HOME/firmware/mpr-17933.bin" \
+  "https://archive.org/download/mame-0.221-roms-merged/saturn.zip/mpr-17933.bin"```\```\
+```
 ---
 
 ## 5. Adding a story file to the disc
@@ -237,7 +272,7 @@ It runs two ways:
 
 - **Manual test build** — trigger it by hand and download the disc as a workflow
   artifact, without publishing anything. On GitHub: **Actions** tab → **Build &
-  release Saturn disc** → **Run workflow** → pick `main` → **Run workflow**. When
+release Saturn disc** → **Run workflow** → pick `main` → **Run workflow**. When
   it finishes, open the run and download the zip under **Artifacts**.
 - **Tagged release** — pushing a `v*` tag builds the disc and attaches the zip to
   a GitHub Release (creating the release if it doesn't exist).
@@ -246,7 +281,7 @@ It runs two ways:
 
 1. Go to the repo → **Releases** (right sidebar) → **Draft a new release**.
 2. **Choose a tag** → type a new tag like `v1.0` → **Create new tag: v1.0 on
-   publish**. Leave the target as `main`.
+publish**. Leave the target as `main`.
 3. Add a title and notes, then click **Publish release**.
 4. Publishing creates and pushes the tag, which triggers the workflow. Watch it
    under the **Actions** tab; when green, the disc zip appears as an asset on that
@@ -267,6 +302,7 @@ it is named for the release so it drops cleanly into a disc library.
   multiplayer server are his.
 - **SaturnRingLib** by ReyeMe et al.
 - **DreamPi / modem tunnel** — the eaudunord Netlink tunnel, derived from Kazade's
-  DreamPi work: <https://github.com/eaudunord/Netlink>.
+  DreamPi work: [https://github.com/eaudunord/Netlink](https://github.com/eaudunord/Netlink).
 - Zork I/II/III data files are distributed for free by Activision.
 - Saturn port and tooling in this repo: Suinevere.
+
