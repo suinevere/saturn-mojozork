@@ -81,6 +81,13 @@ static int g_debounce_frames = MUSIC_DEBOUNCE_FRAMES;
 static int (*g_isplaying)(void) = 0;
 static int (*g_isshort)(int) = 0;
 
+/* Seen-playing latch. Armed whenever the engine issues a play through the
+   backend; gates loop-end detection until is_playing() has first gone true.
+   The CD block spends several frames in SEEK right after PlaySingle where
+   is_playing() reads 0 before the track has actually started, which would
+   otherwise be misread as loop-end (runaway advance/re-roll/re-pick). */
+static int g_await_play = 0;
+
 void music_set_isplaying(int (*fn)(void)) { g_isplaying = fn; }
 void music_set_isshort(int (*fn)(int)) { g_isshort = fn; }
 void music_set_debounce_frames(int n) { g_debounce_frames = (n < 0) ? 0 : n; }
@@ -89,6 +96,7 @@ static int trk_is_short(int t) { return g_isshort ? g_isshort(t) : 0; }
 /* Play `track`: looped unless it is a short/play-once track. */
 static void play_dyn(int track) {
     g_active_track = track;
+    g_await_play = 1;
     if (g_play) g_play(track, trk_is_short(track) ? 0 : 1);
 }
 /* Pick a track from `cat`'s pool, preferring a non-short one. */
@@ -115,6 +123,7 @@ void music_reset(void) {
     for (int i = 0; i < 256; i++) g_room_cache[i] = 0;
     g_active_cat = -1; g_pending_cat = -1; g_pending_track = 0; g_pending_frames = 0;
     g_seq_track = MUSIC_TRACK_MIN;
+    g_await_play = 0;
     if (g_play) g_play(0, 0);   /* 0 = stop / keep-none */
 }
 
@@ -134,11 +143,13 @@ void music_set_mix(int mode, int override_track) {
 
 static void play_seq_current(void) {
     g_active_track = g_seq_track;
+    g_await_play = 1;
     if (g_play) g_play(g_seq_track, 0);   /* one-shot so tick advances on loop-end */
 }
 static void play_random_now(void) {
     int t = MUSIC_TRACK_MIN + (int)(rng_next_pub() % (unsigned)(MUSIC_TRACK_MAX - MUSIC_TRACK_MIN + 1));
     g_active_track = t;
+    g_await_play = 1;
     if (g_play) g_play(t, 0);
 }
 
@@ -147,6 +158,7 @@ void music_start(void) {
     switch (g_mix_mode) {
         case MIX_OVERRIDE:
             g_active_track = g_override_track;
+            g_await_play = 1;
             if (g_play) g_play(g_override_track, 1);   /* override honors repeat even if short */
             break;
         case MIX_SEQUENTIAL:
@@ -169,6 +181,12 @@ void music_tick(void) {
             play_dyn(t);
         }
         return;
+    }
+    /* Gate loop-end detection through the seen-playing latch: ignore is_playing()
+       until the just-issued track has actually started (clears the CD seek window). */
+    if (g_await_play) {
+        if (g_isplaying && g_isplaying()) g_await_play = 0;   /* track actually started */
+        return;                                               /* ignore is_playing during the seek window */
     }
     /* Loop-end driven behavior (one-shot modes / short Dynamic track). */
     if (g_active_track > 0 && g_isplaying && !g_isplaying()) {

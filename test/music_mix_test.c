@@ -81,6 +81,7 @@ int main(void) {
     music_set_mix(MIX_SEQUENTIAL, 5);
     music_reset(); music_start();
     CHECK(g_track == 5 && g_loop == 0);
+    playing = 1; music_tick();     /* track registers as playing -> latch clears */
     playing = 0; music_tick();     /* track ended -> advance */
     CHECK(g_track == 6 && g_loop == 0);
     playing = 1; music_tick();     /* still playing -> no change */
@@ -88,6 +89,7 @@ int main(void) {
     /* wrap at MAX */
     music_set_mix(MIX_SEQUENTIAL, 32); music_reset(); music_start();
     CHECK(g_track == 32);
+    playing = 1; music_tick();     /* settle */
     playing = 0; music_tick();
     CHECK(g_track == 2);
     playing = 1;
@@ -95,6 +97,7 @@ int main(void) {
     /* --- Random: one-shot; picks in 2..32 on loop-end --- */
     music_set_mix(MIX_RANDOM, 10); music_reset(); music_start();
     CHECK(g_track >= 2 && g_track <= 32 && g_loop == 0);
+    playing = 1; music_tick();      /* settle */
     playing = 0; int r0 = g_track; music_tick();
     CHECK(g_track >= 2 && g_track <= 32);
     playing = 1; (void)r0;
@@ -110,10 +113,50 @@ int main(void) {
     music_note_output("A cave tunnel passage.", 22); music_on_turn(40);
     /* first pick may be short -> played one-shot */
     if (isshort(g_track)) CHECK(g_loop == 0);
+    playing = 1; music_tick();     /* track registers as playing -> latch clears */
     playing = 0; music_tick();     /* short ended -> re-pick, must land on the one long track */
     CHECK(in_pool(MC_UNDERGROUND, g_track));
     CHECK(isshort(g_track) == 0);  /* prefers the non-short track */
     CHECK(g_loop == 1);
+    playing = 1;
+
+    /* --- Anti-runaway: no advance during the CD seek window ---
+       Right after PlaySingle the CD block sits in SEEK for several frames and
+       is_playing() reads 0 before the track has ever registered as playing.
+       The engine must NOT treat that as loop-end (which caused runaway skips /
+       re-rolls / re-picks). Advance only after is_playing() has first gone true. */
+    music_set_mix(MIX_SEQUENTIAL, 5);
+    music_reset(); music_start();
+    CHECK(g_track == 5);
+    int seek_track = g_track;
+    playing = 0;                        /* simulate the SEEK window after PlaySingle */
+    for (int i = 0; i < 5; i++) music_tick();
+    CHECK(g_track == seek_track);       /* must NOT advance during the seek window */
+    playing = 1; music_tick();          /* track settles -> latch clears */
+    playing = 0; music_tick();          /* real loop-end -> advance now */
+    CHECK(g_track == 6);
+    playing = 1;
+
+    /* Random: no re-roll during the seek window. */
+    music_set_mix(MIX_RANDOM, 10); music_reset(); music_start();
+    int rseek = g_track;
+    playing = 0;
+    for (int i = 0; i < 5; i++) music_tick();
+    CHECK(g_track == rseek);            /* no re-roll mid-seek */
+    playing = 1; music_tick();          /* settle */
+    playing = 0; g_calls = 0; music_tick();
+    CHECK(g_calls == 1);               /* re-rolls on real loop-end */
+    playing = 1;
+
+    /* Dynamic: the active room track is not re-picked during the seek window. */
+    for (int i = 0; i < 64; i++) short_set[i] = 0;
+    music_set_mix(MIX_DYNAMIC, 10); music_reset(); music_set_debounce_frames(0);
+    music_note_output("A cave tunnel passage.", 22); music_on_turn(50);
+    int dseek = g_track;
+    playing = 0; g_calls = 0;
+    for (int i = 0; i < 5; i++) music_tick();
+    CHECK(g_track == dseek);            /* not re-picked mid-seek */
+    CHECK(g_calls == 0);               /* no backend play issued during the seek window */
     playing = 1;
 
     printf(fails ? "\n%d FAILURES\n" : "\nALL PASS\n", fails);

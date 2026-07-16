@@ -2098,6 +2098,12 @@ int main(void) {
     GFS_Reset();
     console_init();
 
+    // Clear engine statics before the menu track. A soft reset longjmps here with
+    // stale state (g_active_track > 0, backend still registered); zeroing it stops
+    // a menu-frame music_tick() from firing the loop-end branch and leaking a stale
+    // game track into the menu. The reset's internal stop is overridden on the next
+    // line, and this is safe on first boot too (no backend registered yet).
+    music_reset();
     music_set_level(g_music_level);      // honor the saved music level for menu audio
     music_cdda_play(g_sel_track);        // menu track (default 10), looping across the menu flow
 
