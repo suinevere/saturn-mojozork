@@ -936,6 +936,8 @@ extern "C" void saturn_die(const char *fmt, ...) {
 
 // ---- save / restore menu ---------------------------------------------------
 
+static void menu_clear_full(void) { for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r); }
+
 static void menu_clear(void) {
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
 }
@@ -1315,22 +1317,19 @@ static void sound_options_page(void) {
     SRL::Core::Synchronize();
 }
 
-// Options menu (centered box): a difficulty slider, Music/PCM volume sliders,
-// plus actions. Up/Down select a row; on Difficulty/Music/PCM, Left/Right change
-// it; A/Enter activate other rows; B/Esc close. Changes are written to backup
-// only if the player actually changed something.
+// Options menu (centered box): a difficulty slider plus actions (Configure,
+// Controls, Sound Options, Return to Title, Done). Up/Down select a row; on
+// Difficulty, Left/Right change it; A/Enter activate other rows; B/Esc close.
+// Audio settings now live on the dedicated Sound Options page. Difficulty is
+// written to backup only if the player actually changed it.
 static void options_menu(void) {
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
     static const char *const DESC[]  = { "Walkthrough steps only",
                                          "Valid-command typeahead",
                                          "Typeahead off" };
     const int x0 = 5, y0 = 8, w = 30, h = 15;
-    const int NITEMS = 8;   // 0=Diff 1=Configure 2=Controls 3=Return 4=Music 5=PCM 6=Track 7=Done
-    const int MAX_TRACK = 32;   // CD-DA tracks 2..32 (see cd/music/tracklist)
-    static int preview_track = 2;   // remembered across opens
+    const int NITEMS = 6;   // 0=Diff 1=Configure 2=Controls 3=Sound 4=Return 5=Done
     int diff = g_difficulty, sel = 0;
-    int music0 = g_music_level, pcm0 = g_pcm_level;   // detect a change at close
-    bool previewed = false;   // did the player audition a track this session?
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
@@ -1346,26 +1345,18 @@ static void options_menu(void) {
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
         if (back) break;
-        if (sel == 4) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++; }
-        else if (sel == 5) { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++; }
-        else if (sel == 6) {
-            if (left  && preview_track > 2)         preview_track--;
-            if (right && preview_track < MAX_TRACK) preview_track++;
-        }
-        else if (act) {
+        if (act) {
             if (sel == 1) { config_page(); }
-            else if (sel == 2) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); }
-            else if (sel == 3) {   // Return to Title Screen (soft reset; never returns on Yes)
+            else if (sel == 2) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear_full(); }
+            else if (sel == 3) { sound_options_page(); menu_clear_full(); }
+            else if (sel == 4) {   // Return to Title Screen (soft reset; never returns on Yes)
                 if (menu_confirm("Return to the title screen?", "Are you sure?")) {
                     if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
                     soft_reset_to_title();
                 }
             }
-            else if (sel == 7) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+            else if (sel == 5) break;   // Done  (sel==0 Difficulty: activate is a no-op)
         }
-        // Live preview: hear the music level and the selected track as you change them.
-        if (sel == 4 && (left || right)) music_set_level(g_music_level);
-        if (sel == 6 && (left || right || act)) { music_cdda_play(preview_track); previewed = true; }
 
         for (int r = 0; r < h; r++) {
             char line[40]; int p = 0;
@@ -1382,20 +1373,15 @@ static void options_menu(void) {
         SRL::Debug::Print(x0 + 2, y0 + 6, "%c Configure MojoZork", sel == 1 ? '>' : ' ');
         SRL::Debug::Print(x0 + 2, y0 + 7, "%c %s", sel == 2 ? '>' : ' ',
                           g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls");
-        SRL::Debug::Print(x0 + 2, y0 + 8, "%c Return to Title Screen", sel == 3 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 9, "%c Music: %d", sel == 4 ? '>' : ' ', g_music_level);
-        SRL::Debug::Print(x0 + 2, y0 + 10, "%c PCM:   %d", sel == 5 ? '>' : ' ', g_pcm_level);
-        SRL::Debug::Print(x0 + 2, y0 + 11, "%c Track: %d (preview)", sel == 6 ? '>' : ' ', preview_track);
-        SRL::Debug::Print(x0 + 2, y0 + 12, "%c Done", sel == 7 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 13, "%s", hint("Up/Dn A=pick  <>=level", "Up/Dn Enter  B=back"));
+        SRL::Debug::Print(x0 + 2, y0 + 8,  "%c Sound Options", sel == 3 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 9,  "%c Return to Title Screen", sel == 4 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 10, "%c Done", sel == 5 ? '>' : ' ');
+        SRL::Debug::Print(x0 + 2, y0 + 13, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
         menu_sync();
     }
     bool diff_changed = (diff != g_difficulty);
     g_difficulty = diff;
-    if (diff_changed || g_music_level != music0 || g_pcm_level != pcm0) options_save();
-    music_set_level(g_music_level);
-    sound_set_level(g_pcm_level);
-    if (previewed) music_refresh();   // stop the audition, restore the room's track
+    if (diff_changed) options_save();
     // Wait for the closing button to be released so it doesn't leak into the
     // editor (B would backspace, A/C/Start would submit) the moment we return.
     while (g_pad->IsHeld(Button::B) || g_pad->IsHeld(Button::A) ||
