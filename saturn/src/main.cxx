@@ -70,16 +70,6 @@ static void ensure_typeahead() {
         have_solution = apply_solution_overlay(g_typeahead_root, story, len);
     }
     typeahead_set_easy(g_difficulty == DIFF_EASY, have_solution);
-    // Dynamic room music: install the CD-DA backend once, and (re)key the engine
-    // to the loaded game whenever the story changes (release+serial @ 0x02/0x12).
-    static int music_backend_set = 0;
-    if (!music_backend_set) { music_set_backend(music_cdda_play_mode); music_backend_set = 1; }
-    if (story != g_ta_story) {
-        if (story != nullptr && len >= 0x1a)
-            music_set_game((unsigned int)((story[2] << 8) | story[3]),
-                           (const char*) (story + 0x12));
-        music_reset();
-    }
     g_ta_story = story;
     g_ta_diff = g_difficulty;
 }
@@ -200,6 +190,7 @@ static void note_input_device(const SaturnKeyEvent &ke) {
 // goes silent). Menu loops call this in place of a bare Synchronize.
 static void menu_sync(void) {
     sound_service();
+    music_tick();      // advance one-shot mixes / commit debounced Dynamic switches
     SRL::Core::Synchronize();
 }
 
@@ -891,6 +882,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         render_keyboard(k, selected, cw_len);
         SRL::Core::Synchronize();
         sound_service();   // re-trigger looping sounds / reap finished one-shots
+        music_tick();      // advance one-shot mixes / commits debounced switches (startup seek-window behavior tracked for branch review)
       }
       // Autocomplete-accept appends a trailing space; strip trailing spaces so the
       // parser, the reboot check, history, and the echo all see the clean command.
@@ -2083,6 +2075,14 @@ int main(void) {
         sound_init(blb);
         sound_set_level(g_pcm_level);     // honor the saved PCM level
         music_set_level(g_music_level);   // and the saved music level
+        music_set_backend(music_cdda_play_mode);
+        music_set_isplaying(music_cdda_is_playing);
+        music_set_isshort(music_cdda_is_short);
+        music_set_game((unsigned int)((story[2] << 8) | story[3]), (const char*) (story + 0x12));
+        music_seed((unsigned int) seed);
+        music_reset();                         // clear room cache for the new game
+        music_set_mix(g_mix_mode, g_sel_track);
+        music_start();                         // non-Dynamic starts now; Dynamic waits for first room
     }
 
     mojo_run();
