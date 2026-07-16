@@ -1058,7 +1058,7 @@ static void config_page(void) {
         }
         if (err[0]) SRL::Debug::Print(2, 11, "%s", err);
         SRL::Debug::Print(2, 13, "%s",
-            hint("C=type B=del  A=save  Start=cancel", "type number  Enter=save  Esc=cancel"));
+            hint("C=type B=del  A=OK  Start=Cancel", "type number  Enter=OK  Esc=Cancel"));
         menu_sync();
     }
 }
@@ -1085,13 +1085,18 @@ static void mapping_reset_defaults(void) {
     for (int a = 0; a < CA_N; a++) g_chord_slot[a] = CHORD_DEFAULT[a];
 }
 
-// Live remap editor: 3 face rows + 6 chord rows, then Reset and Done. Up/Down pick
-// a row, Left/Right cycle its button/slot (applying the tie rules), B/Esc saves+exits.
+// Live remap editor: 3 face rows + 6 chord rows, then Reset, OK and Cancel. Up/Down
+// pick a row, Left/Right cycle its button/slot (applying the tie rules). OK saves;
+// Cancel (and B/Esc) restores the snapshot taken on entry.
 static void configure_controls_page(void) {
     SRL::Core::Synchronize();   // consume the edge that opened this
-    const int NASSIGN = FA_N + CA_N;   // assignable rows [0..NASSIGN)
-    const int R_RESET = NASSIGN;       // Reset to Defaults row
-    const int R_DONE  = NASSIGN + 1;   // Done row
+    int s_face[FA_N], s_chord[CA_N];   // snapshot for Cancel
+    for (int a = 0; a < FA_N; a++) s_face[a]  = g_face_btn[a];
+    for (int a = 0; a < CA_N; a++) s_chord[a] = g_chord_slot[a];
+    const int NASSIGN  = FA_N + CA_N;  // assignable rows [0..NASSIGN)
+    const int R_RESET  = NASSIGN;      // Reset to Defaults row
+    const int R_DONE   = NASSIGN + 1;  // OK row
+    const int R_CANCEL = NASSIGN + 2;  // Cancel row
     int sel = 0;
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
@@ -1105,10 +1110,18 @@ static void configure_controls_page(void) {
                    || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool back  = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                    || ke.kind == SATURN_KEY_BACKSPACE;
-        if (back) break;
-        if (up)   sel = (sel - 1 + R_DONE + 1) % (R_DONE + 1);
-        if (down) sel = (sel + 1) % (R_DONE + 1);
-        if (sel == R_DONE)  { if (act) break; }
+        if (back) {   // B/Esc == Cancel: restore snapshot
+            for (int a = 0; a < FA_N; a++) g_face_btn[a]   = s_face[a];
+            for (int a = 0; a < CA_N; a++) g_chord_slot[a] = s_chord[a];
+            break;
+        }
+        if (up)   sel = (sel - 1 + R_CANCEL + 1) % (R_CANCEL + 1);
+        if (down) sel = (sel + 1) % (R_CANCEL + 1);
+        if (sel == R_DONE)  { if (act) { options_save(); break; } }         // OK
+        else if (sel == R_CANCEL) { if (act) {                             // Cancel
+            for (int a = 0; a < FA_N; a++) g_face_btn[a]   = s_face[a];
+            for (int a = 0; a < CA_N; a++) g_chord_slot[a] = s_chord[a];
+            break; } }
         else if (sel == R_RESET) { if (act) mapping_reset_defaults(); }
         else if (left || right) {
             if (sel < FA_N) {
@@ -1124,7 +1137,8 @@ static void configure_controls_page(void) {
         menu_clear();
         int x = 2, y = 1;
         SRL::Debug::Print(x, y, "CONFIGURE CONTROLS"); y += 2;
-        SRL::Debug::Print(x, y++, "Left/Right change   B/Esc save");
+        SRL::Debug::Print(x, y++, "%s", hint("Left/Right change  A/Start=OK B=Cancel",
+                                             "Left/Right change  Enter=OK Esc=Cancel"));
         y++;
         for (int a = 0; a < FA_N; a++) {
             SRL::Debug::Print(x, y, "%c %s", sel == a ? '>' : ' ', FACE_LABEL[a]);
@@ -1138,10 +1152,10 @@ static void configure_controls_page(void) {
         SRL::Debug::Print(x + 20, y++, "L+R (fixed)");
         y++;
         SRL::Debug::Print(x, y++, "%c Reset to Defaults", sel == R_RESET ? '>' : ' ');
-        SRL::Debug::Print(x, y++, "%c Done", sel == R_DONE ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c OK", sel == R_DONE ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c Cancel", sel == R_CANCEL ? '>' : ' ');
         menu_sync();
     }
-    options_save();
     SRL::Core::Synchronize();
 }
 
@@ -1197,7 +1211,9 @@ static void controls_page(void) {
 // same flag the Insert key flips), insert-vs-overwrite typing, and CapsLock.
 static void keyboard_controls_page(void) {
     SRL::Core::Synchronize();   // consume the edge that opened this
-    const int N = 5;            // 0 Arrows, 1 Insert, 2 Caps, 3 Num, 4 Done
+    int s_arrows = g_caret_arrows, s_ins = keyboard_get_insert(),   // snapshot for Cancel
+        s_caps = keyboard_get_caps(), s_num = keyboard_get_num();
+    const int N = 6;            // 0 Arrows, 1 Insert, 2 Caps, 3 Num, 4 OK, 5 Cancel
     int sel = 0;
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
@@ -1211,13 +1227,20 @@ static void keyboard_controls_page(void) {
                  || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
-        if (back) break;
+        if (back) {   // B/Esc == Cancel: restore snapshot
+            g_caret_arrows = s_arrows; keyboard_set_insert(s_ins);
+            keyboard_set_caps(s_caps); keyboard_set_num(s_num);
+            break;
+        }
         bool toggle = left || right || act;
         if      (sel == 0 && toggle) g_caret_arrows = !g_caret_arrows;
         else if (sel == 1 && toggle) keyboard_set_insert(!keyboard_get_insert());
         else if (sel == 2 && toggle) keyboard_set_caps(!keyboard_get_caps());
         else if (sel == 3 && toggle) keyboard_set_num(!keyboard_get_num());
-        else if (sel == 4 && act)    break;
+        else if (sel == 4 && act) { options_save(); break; }   // OK
+        else if (sel == 5 && act) {                            // Cancel
+            g_caret_arrows = s_arrows; keyboard_set_insert(s_ins);
+            keyboard_set_caps(s_caps); keyboard_set_num(s_num); break; }
 
         menu_clear();
         int x = 2, y = 1;
@@ -1234,7 +1257,10 @@ static void keyboard_controls_page(void) {
         SRL::Debug::Print(x, y, "%c Num Lock", sel == 3 ? '>' : ' ');
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_num() ? "On" : "Off");
         y++;
-        SRL::Debug::Print(x, y++, "%c Done", sel == 4 ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c OK", sel == 4 ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c Cancel", sel == 5 ? '>' : ' ');
+        y++;
+        SRL::Debug::Print(x, y++, "%s", hint("A/Start=OK  B=Cancel", "Enter=OK  Esc=Cancel"));
         menu_sync();
     }
     SRL::Core::Synchronize();
