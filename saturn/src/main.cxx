@@ -1828,6 +1828,12 @@ const char* game_select() {
         labels[i][j] = '\0';
     }
 
+    // The scan/header reads above stop CD-DA (the drive can't stream audio while
+    // seeking the data track), so resume the menu track now. The category/game
+    // pages below do no CD I/O, so this keeps them (and a B-back to the mode menu)
+    // from playing silent.
+    music_cdda_play(g_sel_track);
+
     // Category page -> game page. Back from the game page returns to categories.
     for (;;) {
         int catmap[GAME_CAT_COUNT], ncat = 0;   // menu index -> category id
