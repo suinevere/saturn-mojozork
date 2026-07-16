@@ -289,6 +289,11 @@ static int g_scroll = 0;
 static const int SCROLL_PAGE = 16;        // Page Up/Down jump size, in lines
 static const int SCROLL_ALL  = 1 << 30;   // Home: clamped down to the oldest line
 
+// Scrollback line index where the latest output block began. Captured just before
+// the interpreter runs a turn (or set to 0 for the initial room) so the pager can
+// land on the TOP of a long response instead of its bottom.
+static int g_output_start = 0;
+
 // Route a physical-keyboard nav key to the scrollback. Returns true if the event
 // was a nav key (and thus consumed, so it isn't treated as text). Left/Right are
 // consumed too: they no longer move the on-screen keyboard cursor.
@@ -468,19 +473,34 @@ static void render_console(void) {
     int rows = console_height();
     int total = console_line_count();
     int maxstart = (total > rows) ? (total - rows) : 0;
-    if (g_scroll < 0)        g_scroll = 0;
-    if (g_scroll > maxstart) g_scroll = maxstart;   // clamp to oldest
-    int start = maxstart - g_scroll;
+    if (g_scroll < 0)            g_scroll = 0;
+    if (g_scroll > maxstart + 1) g_scroll = maxstart + 1;   // one blank line past the top
+    int top_blank = (g_scroll == maxstart + 1) ? 1 : 0;     // showing the blank-line affordance
+    int start = maxstart - (g_scroll - top_blank);
     for (int r = 0; r < rows; r++) {
         SRL::Debug::PrintClearLine(TOP_MARGIN + r);
-        int li = start + r;
-        if (li < total) {
+        int li = start + r - top_blank;                     // shift down by the blank row
+        if (li >= 0 && li < total)
             SRL::Debug::Print(0, TOP_MARGIN + r, "%s", console_get_line(li));
-        }
     }
     // Edge markers when there's off-screen text above/below the window.
-    if (start > 0)            SRL::Debug::Print(39, TOP_MARGIN, "^");
-    if (start + rows < total) SRL::Debug::Print(39, TOP_MARGIN + rows - 1, "v");
+    if (start > 0 && !top_blank) SRL::Debug::Print(39, TOP_MARGIN, "^");
+    if (start + rows < total)    SRL::Debug::Print(35, TOP_MARGIN + rows - 1, "more v");
+}
+
+// Position the scrollback after a turn's output has landed: if the new block is
+// taller than the visible window, land on its TOP (so "more v" shows and the
+// player pages down through it); otherwise snap to the live bottom as before.
+static void console_scroll_to_output(void) {
+    int total = console_line_count(), rows = console_height();
+    int maxstart = (total > rows) ? (total - rows) : 0;
+    if (total - g_output_start > rows) {
+        int start = g_output_start;                 // desired top line
+        g_scroll = maxstart - start;                // lines up from bottom
+        if (g_scroll < 0) g_scroll = 0;
+    } else {
+        g_scroll = 0;                               // live bottom
+    }
 }
 
 // ---- blinking block cursor -------------------------------------------------
@@ -888,12 +908,13 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
       // Autocomplete-accept appends a trailing space; strip trailing spaces so the
       // parser, the reboot check, history, and the echo all see the clean command.
       while (k.input_len > 0 && k.input[k.input_len - 1] == ' ') k.input[--k.input_len] = '\0';
-      g_scroll = 0;   // a submitted line returns the view to the live bottom
+      console_scroll_to_output();   // a submitted line returns the view to the live bottom
       history_push(k.input);   // remember the command for Up/Down recall
       // Echo the entered command onto the game's "> " prompt line so it stays in the
       // scrollback -- there's no OS echo here, and the input widget vanishes on submit.
       console_write(k.input, (unsigned int) k.input_len);
       console_write("\n", 1);
+      g_output_start = console_line_count();   // mark where the next turn's output begins
       render_console();
       if (is_reboot_command(k.input)) {
           reboot_confirm_and_maybe_reset();   // soft-resets on Yes; returns on No
@@ -2077,7 +2098,7 @@ static void online_mode(void) {
 
         bool did_submit = k.submitted;
         if (k.submitted) {
-            g_scroll = 0;   // sending a line returns the view to the live bottom
+            console_scroll_to_output();   // sending a line returns the view to the live bottom
             history_push(k.input);   // remember the command for Up/Down recall
             if (is_reboot_command(k.input)) {
                 reboot_confirm_and_maybe_reset();  // soft-resets on Yes; returns on No
@@ -2227,6 +2248,7 @@ int main(void) {
         music_start();                         // non-Dynamic starts now; Dynamic waits for first room
     }
 
+    g_output_start = 0;   // the initial room's output starts at the top of the scrollback
     mojo_run();
 
     // Game ended: keep the final screen up.
