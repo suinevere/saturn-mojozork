@@ -2008,6 +2008,9 @@ int main(void) {
     GFS_Reset();
     console_init();
 
+    music_set_level(g_music_level);      // honor the saved music level for menu audio
+    music_cdda_play(g_sel_track);        // menu track (default 10), looping across the menu flow
+
     int seed = title_and_seed();
 
     // Top-level mode choice. "Play Online" runs the multizork telnet terminal
