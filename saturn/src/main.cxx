@@ -71,7 +71,7 @@ static void ensure_typeahead() {
     // Dynamic room music: install the CD-DA backend once, and (re)key the engine
     // to the loaded game whenever the story changes (release+serial @ 0x02/0x12).
     static int music_backend_set = 0;
-    if (!music_backend_set) { music_set_backend(music_cdda_play); music_backend_set = 1; }
+    if (!music_backend_set) { music_set_backend(music_cdda_play_mode); music_backend_set = 1; }
     if (story != g_ta_story) {
         if (story != nullptr && len >= 0x1a)
             music_set_game((unsigned int)((story[2] << 8) | story[3]),
