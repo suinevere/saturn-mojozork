@@ -15,7 +15,7 @@ enum {
 /* Audio Mix modes (Options > Sound Options). */
 enum { MIX_DYNAMIC = 0, MIX_OVERRIDE = 1, MIX_SEQUENTIAL = 2, MIX_RANDOM = 3 };
 #define MUSIC_TRACK_MIN 2
-#define MUSIC_TRACK_MAX 32
+#define MUSIC_TRACK_MAX 33   /* CD tracks 2..33 are music (selector display 1..32) */
 
 typedef struct { const char* word; unsigned char cat; } MusicKeyword;
 

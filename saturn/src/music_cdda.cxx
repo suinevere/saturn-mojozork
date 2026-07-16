@@ -9,7 +9,7 @@ static int g_track = 0;   // currently requested track (0 = none)
 static int g_loop  = 1;   // whether the current track loops
 
 #define MUSIC_SHORT_SECONDS 15
-#define MUSIC_SELECTABLE_MAX 30   /* Sound Options track selector shows at most this many (display 1..30) */
+#define MUSIC_SELECTABLE_MAX 32   /* Sound Options track selector shows at most this many (display 1..32 -> CD tracks 2..33) */
 
 // Play `track`. loop=1 uses the CD block's native repeat (seamless, best-effort
 // gapless loop); loop=0 plays once so the engine's music_tick() can detect
@@ -53,10 +53,10 @@ extern "C" int music_cdda_is_playing(void) {
 // frames). Path taken: TOC frame-delta via SRL::Cd::TableOfContents. Cached after
 // first read since the TOC is static for the life of the disc.
 extern "C" int music_cdda_is_short(int track) {
-    static signed char cache[34];   /* 0 unknown, 1 short, 2 long; index by track (2..32) */
+    static signed char cache[35];   /* 0 unknown, 1 short, 2 long; index by track (2..33) */
     static int inited = 0;
-    if (!inited) { for (int i = 0; i < 34; i++) cache[i] = 0; inited = 1; }
-    if (track < 2 || track > 32) return 0;
+    if (!inited) { for (int i = 0; i < 35; i++) cache[i] = 0; inited = 1; }
+    if (track < 2 || track > 33) return 0;
     if (cache[track]) return cache[track] == 1;
     SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
     int frames = (int)toc.Tracks[track + 1].FrameAddress - (int)toc.Tracks[track].FrameAddress;
