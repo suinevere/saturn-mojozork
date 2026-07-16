@@ -63,3 +63,20 @@ extern "C" int music_cdda_is_short(int track) {
     cache[track] = is_short ? 1 : 2;
     return is_short;
 }
+
+// Ordered list of the disc's real CD-DA (audio) track numbers, from the TOC.
+// Cached after the first read. Track 1 is typically the data track.
+extern "C" int music_cdda_audio_tracks(const unsigned char** out) {
+    static unsigned char list[99];
+    static int n = -1;
+    if (n < 0) {
+        n = 0;
+        SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
+        for (int t = 1; t < SRL::Cd::MaxTrackCount && n < 99; t++) {
+            if (toc.Tracks[t].GetType() == SRL::Cd::TableOfContents::TrackType::Audio)
+                list[n++] = (unsigned char) t;
+        }
+    }
+    if (out) *out = (n > 0) ? list : 0;
+    return n;
+}

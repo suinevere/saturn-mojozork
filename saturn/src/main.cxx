@@ -1275,6 +1275,10 @@ static void sound_options_page(void) {
     int sel = 0;
     // Snapshot for Cancel.
     int s_mix = g_mix_mode, s_trk = g_sel_track, s_mus = g_music_level, s_pcm = g_pcm_level;
+    const unsigned char* atracks; int an = music_cdda_audio_tracks(&atracks);
+    int aidx = 0;                     // current index into the audio-track list
+    for (int i = 0; i < an; i++) if (atracks[i] == g_sel_track) { aidx = i; break; }
+    if (an > 0 && atracks[aidx] != g_sel_track) g_sel_track = atracks[aidx];   // no match: snap to first
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
@@ -1299,9 +1303,12 @@ static void sound_options_page(void) {
         }
         if (sel == 0) { if (left && g_mix_mode > 0) g_mix_mode--; if (right && g_mix_mode < MIX_RANDOM) g_mix_mode++; }
         else if (sel == 1) {
-            if (left  && g_sel_track > MUSIC_TRACK_MIN) g_sel_track--;
-            if (right && g_sel_track < MUSIC_TRACK_MAX) g_sel_track++;
-            if (left || right || ok) music_cdda_play(g_sel_track);   // demo/preview
+            if (an > 0) {
+                if (left  && aidx > 0)      aidx--;
+                if (right && aidx < an - 1) aidx++;
+                g_sel_track = atracks[aidx];
+                if (left || right || ok) music_cdda_play(g_sel_track);   // demo/preview
+            }
         }
         else if (sel == 2) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
                              if (left || right) music_set_volume(g_music_level); }
@@ -1328,7 +1335,8 @@ static void sound_options_page(void) {
         SRL::Debug::Print(x, y, "%c Audio Mix", sel == 0 ? '>' : ' ');
         SRL::Debug::Print(x + 14, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
         SRL::Debug::Print(x, y, "%c Track", sel == 1 ? '>' : ' ');
-        SRL::Debug::Print(x + 14, y++, "%d ", g_sel_track);
+        if (an > 0) SRL::Debug::Print(x + 14, y++, "%d  (A=demo)", aidx + 1);   // 1-based
+        else        SRL::Debug::Print(x + 14, y++, "no audio on disc");
         SRL::Debug::Print(x, y, "%c Music", sel == 2 ? '>' : ' ');
         SRL::Debug::Print(x + 14, y++, "%d", g_music_level);
         SRL::Debug::Print(x, y, "%c PCM", sel == 3 ? '>' : ' ');

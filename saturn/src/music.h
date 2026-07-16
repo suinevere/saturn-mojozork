@@ -56,6 +56,7 @@ void music_set_level(int level);                 /* 0..7, 0 = silence */
 void music_set_volume(int level);   /* 0..7 volume only; never restarts the track */
 int  music_cdda_is_playing(void);                /* 1 = a CD-DA track is still playing */
 int  music_cdda_is_short(int track);             /* 1 = track shorter than the short threshold */
+int  music_cdda_audio_tracks(const unsigned char** out);  /* N audio tracks; *out=real track numbers */
 
 #ifdef __cplusplus
 }
