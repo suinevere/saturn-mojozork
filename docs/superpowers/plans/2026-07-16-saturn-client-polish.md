@@ -369,44 +369,59 @@ git commit saturn/src/typeahead.c saturn/src/typeahead.h test/typeahead_abbrev_t
 
 ---
 
-## Task 7: Quit → title screen with music (crash fix) [Group D]
+## Task 7: Quit → title screen with music (intercept, don't interpret) [Group D]
+
+**Approach (per user directive):** Skip the crash repro. The Z-machine `quit` opcode
+crashes on Saturn, so never let `q`/`quit` reach the interpreter — intercept it at
+the readline submit and route to the reboot/title path, consuming the command.
 
 **Files:**
-- Modify: `saturn/src/main.cxx` — the post-`mojo_run` tail (~2189-2197); possibly the quit/readline path.
+- Modify: `saturn/src/main.cxx` — `saturn_readline` submit path (~883-897).
 
 **Interfaces:**
-- Consumes: `soft_reset_to_title()` (main.cxx:601), `GState->quit`.
+- Consumes: `soft_reset_to_title()` (main.cxx:601).
+- Produces: `static int is_quit_command(const char* s);` — 1 if `s` is `q`/`quit` (case-insensitive, surrounding spaces ignored).
 
-- [ ] **Step 1: Reproduce and instrument (systematic-debugging Phase 1)**
+- [ ] **Step 1: Add the quit matcher**
 
-Build and run; in-game type `quit`, accept. Confirm the crash and capture where it happens. Add temporary instrumentation to localize it: a marker print immediately after `mojo_run()` returns (main.cxx ~2189) and one at the top of the terminal `while(1)` loop (2197). Determine whether the crash is (a) inside the quit opcode / `runInstruction` before `mojo_run` returns, (b) in the transition after it returns, or (c) in the terminal render loop reading freed state. Record the finding in the task report. Do NOT fix before this is known.
-
-- [ ] **Step 2: Root cause + minimal repro**
-
-State the root cause in one line (e.g. "quit opcode calls X which dereferences freed story", or "terminal loop renders a console whose backing buffer was freed by initStory teardown"). Capture a documented repro (steps + observed failure). This is the failing case required before the fix.
-
-- [ ] **Step 3: Route quit to the title (behavioral fix)**
-
-Replace the post-`mojo_run` terminal freeze:
+Near `saturn_readline` add:
 ```cpp
-    mojo_run();
-    while (1) { render_console(); SRL::Core::Synchronize(); }   // OLD: freeze on final screen
+// True if the submitted line is a bare quit command. We intercept it (below)
+// because the interpreter's quit path crashes on Saturn.
+static int is_quit_command(const char* s) {
+    while (*s == ' ') s++;                       // skip leading spaces
+    char buf[8]; int n = 0;
+    for (; s[n] && s[n] != ' ' && n < 7; n++)    // first word, lowercased
+        buf[n] = (s[n] >= 'A' && s[n] <= 'Z') ? (char)(s[n] - 'A' + 'a') : s[n];
+    buf[n] = '\0';
+    const char* t = s + n; while (*t == ' ') t++;   // trailing must be empty
+    if (*t) return 0;
+    return (buf[0] == 'q' && (buf[1] == '\0' ||
+            (buf[1]=='u' && buf[2]=='i' && buf[3]=='t' && buf[4]=='\0')));
+}
 ```
-with a return to the title so Quit lands on the title screen with menu music:
+
+- [ ] **Step 2: Intercept at submit, before returning the line to the core**
+
+In `saturn_readline`, after the input line is finalized (trailing spaces stripped,
+~main.cxx:883) and BEFORE the command is handed back to the interpreter /
+history-pushed, add:
 ```cpp
-    mojo_run();
-    soft_reset_to_title();   // Quit / game end: back to the title (re-arms menu music); never returns
+    if (is_quit_command(k.input)) soft_reset_to_title();   // consume quit; never returns
 ```
-If Step 2 found the crash is BEFORE `mojo_run` returns (inside the quit opcode's Saturn handling), fix that root cause too — guarded by `#if defined(MOJOZORK_SATURN)` if it lives in the shared core — so control reaches this line cleanly. `soft_reset_to_title()` re-runs the boot-music block (music_reset + menu track), satisfying "title screen music playing".
+Placed here, a `q`/`quit` line is consumed and routes to the title (which re-arms
+menu music via the boot-music block) instead of being returned to `runInstruction`.
+Non-quit lines are unaffected. Leave the post-`mojo_run` terminal `while(1)`
+render loop as-is (it is only reached on a normal game end, not via quit).
 
-- [ ] **Step 4: Verify + remove instrumentation**
+- [ ] **Step 3: Build**
 
-Rebuild (`cd saturn && ./compile.bat debug` → clean). Remove the Step-1 marker prints. Confirm on the emulator: `quit` → accept → title screen, menu music playing, no crash.
+Run: `cd saturn && ./compile.bat debug` → clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git commit saturn/src/main.cxx <core file if changed> -m "Fix the crash on Quit and return to the title screen with menu music via the soft-reset path, instead of freezing on the final screen. <one sentence naming the root cause>."
+git commit saturn/src/main.cxx -m "Intercept a bare q/quit at the prompt and return to the title screen with menu music, instead of passing it to the interpreter whose quit path crashes on Saturn. Non-quit input is unaffected."
 ```
 
 ---
@@ -428,32 +443,34 @@ In `saturn_keyboard.h` `SaturnKeyKind`, append:
 ```
 (Only the mapped keys the game uses; F1/F4/F7/F8/F12 are not required.)
 
-- [ ] **Step 2: Discover the Saturn keyboard F-key scancodes (runtime)**
+- [ ] **Step 2: Map the F-key scancodes to the F-key events**
 
-The SGL keyboard uses a custom `code` table (nav keys are 128-141, not PS/2 set-2), so the F-key `code` values must be observed, not assumed. Temporarily, in `saturn_keyboard.cxx` just before the final `if (code < 128 && kbd_map[code] != 0)` (line 179), add a diagnostic that surfaces unmapped codes — e.g. stash the last unmapped `code` into a global the game prints, or `SRL::Debug::Print` it. Build, run, press F2/F3/F5/F6/F9/F10/F11 one at a time, and record each key's `code`. Put the observed table in the task report.
-
-- [ ] **Step 3: Map the discovered scancodes to the F-key events**
-
-Using the Step-2 table, add mappings alongside the existing special-key checks (saturn_keyboard.cxx ~161-175), before the `kbd_map` char lookup:
+The F-key `code` values are confirmed against the Jo Engine keyboard table
+(`joengine/jo_engine/keyboard.c:73-96`), whose nav/base-key codes (134 Left,
+141 Right, 137 Up, 138 Down, 90/25 Enter, 102 Backspace, 133 Delete, 135 Home,
+136 End) match this project's `saturn_keyboard.cxx` byte-for-byte — the same
+Saturn keyboard code table. Add these alongside the existing special-key checks
+(saturn_keyboard.cxx ~161-175), BEFORE the `kbd_map` char lookup at line 179:
 ```cpp
-    if (code == /*F2 code*/)  { ev.kind = SATURN_KEY_F2;  return ev; }
-    if (code == /*F3 code*/)  { ev.kind = SATURN_KEY_F3;  return ev; }
-    if (code == /*F5 code*/)  { ev.kind = SATURN_KEY_F5;  return ev; }
-    if (code == /*F6 code*/)  { ev.kind = SATURN_KEY_F6;  return ev; }
-    if (code == /*F9 code*/)  { ev.kind = SATURN_KEY_F9;  return ev; }
-    if (code == /*F10 code*/) { ev.kind = SATURN_KEY_F10; return ev; }
-    if (code == /*F11 code*/) { ev.kind = SATURN_KEY_F11; return ev; }
+    if (code == 6)   { ev.kind = SATURN_KEY_F2;  return ev; }   // PS/2 set-2 F2 = 0x06
+    if (code == 4)   { ev.kind = SATURN_KEY_F3;  return ev; }   // F3 = 0x04
+    if (code == 3)   { ev.kind = SATURN_KEY_F5;  return ev; }   // F5 = 0x03
+    if (code == 11)  { ev.kind = SATURN_KEY_F6;  return ev; }   // F6 = 0x0B
+    if (code == 1)   { ev.kind = SATURN_KEY_F9;  return ev; }   // F9 = 0x01
+    if (code == 9)   { ev.kind = SATURN_KEY_F10; return ev; }   // F10 = 0x09
+    if (code == 120) { ev.kind = SATURN_KEY_F11; return ev; }   // F11 = 0x78
 ```
-(The `/*Fn code*/` values are the concrete integers recorded in Step 2 — this task is not complete until they are real numbers.) Remove the Step-2 diagnostic.
+These low codes (1,3,4,6,9,11) and 120 are non-printable in the table, so they do
+not collide with `kbd_map` entries; the checks precede the char lookup regardless.
 
-- [ ] **Step 4: Build**
+- [ ] **Step 3: Build**
 
 Run: `cd saturn && ./compile.bat debug` → clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git commit saturn/src/saturn_keyboard.h saturn/src/saturn_keyboard.cxx -m "Emit F2/F3/F5/F6/F9/F10/F11 key events from the Saturn keyboard poll using the observed SGL scancodes. These drive the in-game function-key menus."
+git commit saturn/src/saturn_keyboard.h saturn/src/saturn_keyboard.cxx -m "Emit F2/F3/F5/F6/F9/F10/F11 key events from the Saturn keyboard poll using the PS/2 set-2 F-key scancodes. These drive the in-game function-key menus."
 ```
 
 ---
