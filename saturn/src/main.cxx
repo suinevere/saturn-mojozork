@@ -1663,6 +1663,13 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
 // ---- boot ------------------------------------------------------------------
 
 // Title screen: wait for any face button; use elapsed frames as an RNG seed.
+// Draw the title art (no prompt). Shown on its own during the catalog load, then
+// again by title_and_seed with the "Press any button" prompt on the same screen.
+static void title_draw_art(void) {
+    SRL::Debug::Print(12, 12, "M O J O Z O R K");
+    SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
+}
+
 static int title_and_seed(void) {
     int frames = 0;
     int reset_hold = 0;
@@ -1688,8 +1695,7 @@ static int title_and_seed(void) {
             g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START) ||
             (saturn_keyboard_poll().kind != SATURN_KEY_NONE);
         if (advance) break;
-        SRL::Debug::Print(12, 12, "M O J O Z O R K");
-        SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
+        title_draw_art();
         SRL::Debug::Print(8, 18, "Press any button to begin");
         SRL::Core::Synchronize();
         frames++;
@@ -1954,7 +1960,8 @@ static void ensure_online_typeahead(void) {
             }
             if (buf != nullptr) SRL::Memory::HighWorkRam::Free(buf);
         }
-        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
+        music_cdda_play(g_sel_track);
+        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();;
     }
     if (story != nullptr) {
         build_typeahead_from_story(g_online_ta, story, len);
@@ -1970,6 +1977,9 @@ static void ensure_online_typeahead(void) {
 // times because the NetLink<->DreamPi carrier handshake is probabilistic.
 static void online_mode(void) {
     ensure_online_typeahead();   // load the Zork I vocabulary before the modem is up
+    // The vocab load's CD reads (first online session) stop CD-DA; start a fresh track
+    // so the dialer and the whole online session play music instead of going silent.
+    music_cdda_play(g_sel_track);
     const char *number = g_dialnum;   // change it in Options -> Configure MojoZork
 
     // ---- connect, with auto-redial on carrier-training failure ----
@@ -2120,18 +2130,26 @@ int main(void) {
     // a menu-frame music_tick() from firing the loop-end branch and leaking a stale
     // game track into the menu. The reset's internal stop is overridden on the next
     // line, and this is safe on first boot too (no backend registered yet).
-    music_reset();
+    music_reset();                       // clear stale engine state (also on soft-reset re-entry)
+
+    // Show the title art first (no prompt), then load the game catalog while it is on
+    // screen, then start the menu music and let title_and_seed add the prompt on the
+    // same screen. The catalog's CD reads (Z3 folder scan + each game's header) stop
+    // CD-DA -- the Saturn's single drive head cannot play audio while reading data --
+    // so the load window is briefly silent by necessity. Doing all CD reads here means
+    // no menu screen from here on (title, categories, games) ever touches the CD again,
+    // so the menu track then plays uninterrupted. On soft-reset re-entry the preload is
+    // a no-op (already cached), so no read happens and the music starts cleanly.
+    for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+    title_draw_art();
+    SRL::Core::Synchronize();
+
+    preload_game_catalog();              // CD reads happen once, here
+
     music_set_level(g_music_level);      // honor the saved music level for menu audio
-    music_cdda_play(g_sel_track);        // menu track (default 10), looping across the menu flow
+    music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow
 
-    // Read the CD game catalog once, up front: its CD reads (the Z3 folder scan +
-    // each game's header) stop CD-DA, so doing them here -- before the title
-    // becomes interactive -- and resuming the track right after means no menu
-    // screen from here on (title, categories, games) ever touches the CD again.
-    preload_game_catalog();
-    music_cdda_play(g_sel_track);        // catalog reads above stopped CD-DA; resume it
-
-    int seed = title_and_seed();
+    int seed = title_and_seed();         // redraws the same art + "Press any button", waits
 
     // Top-level mode choice. "Play Online" runs the multizork telnet terminal
     // and returns here on disconnect; "Play Local" falls through to the offline
@@ -2142,6 +2160,7 @@ int main(void) {
 
     for (;;) {
         int mode = menu_select("MojoZork", modes, 4);
+        if (mode < 0) continue;   // Back at the root menu: nowhere to go up, so stay here
         if (mode == 3) { options_menu(); continue; }
         if (mode == 1) { online_mode(); continue; }
         if (mode == 2) {   // Load Save Game: pick a game, then one of its save slots.

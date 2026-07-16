@@ -9,6 +9,7 @@ static int g_track = 0;   // currently requested track (0 = none)
 static int g_loop  = 1;   // whether the current track loops
 
 #define MUSIC_SHORT_SECONDS 15
+#define MUSIC_SELECTABLE_MAX 30   /* Sound Options track selector shows at most this many (display 1..30) */
 
 // Play `track`. loop=1 uses the CD block's native repeat (seamless, best-effort
 // gapless loop); loop=0 plays once so the engine's music_tick() can detect
@@ -64,18 +65,25 @@ extern "C" int music_cdda_is_short(int track) {
     return is_short;
 }
 
-// Ordered list of the disc's real CD-DA (audio) track numbers, from the TOC.
-// Cached after the first read. Track 1 is typically the data track.
+// Ordered list of the disc's selectable CD-DA (audio) track numbers. Track 1 is the
+// data track; the audio tracks follow it, so display index 1 maps to CD track 2.
+// We do NOT trust GetType() here: on this target the TOC Control bits read 0 for
+// every slot, so GetType() reports Audio for all 99 entries (data track + phantom
+// unused slots), which is what made the old scan run to 99. Instead we enumerate
+// real audio tracks starting at track 2, bounded by the disc's reported last track,
+// and hard-cap the selectable list at MUSIC_SELECTABLE_MAX (display maxes at 30).
+// Cached after the first read.
 extern "C" int music_cdda_audio_tracks(const unsigned char** out) {
-    static unsigned char list[99];
+    static unsigned char list[MUSIC_SELECTABLE_MAX];
     static int n = -1;
     if (n < 0) {
         n = 0;
         SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
-        for (int t = 1; t < SRL::Cd::MaxTrackCount && n < 99; t++) {
-            if (toc.Tracks[t].GetType() == SRL::Cd::TableOfContents::TrackType::Audio)
-                list[n++] = (unsigned char) t;
-        }
+        int last = toc.LastTrack.Number;         // real last track (a single reliable field)
+        int hi = 1 + MUSIC_SELECTABLE_MAX;       // cap: CD tracks 2..31 -> display 1..30
+        if (last >= 2 && last < hi) hi = last;   // shorter disc: don't list past its end
+        for (int t = 2; t <= hi && n < MUSIC_SELECTABLE_MAX; t++)
+            list[n++] = (unsigned char) t;
     }
     if (out) *out = (n > 0) ? list : 0;
     return n;
