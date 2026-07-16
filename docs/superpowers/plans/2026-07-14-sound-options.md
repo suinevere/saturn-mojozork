@@ -883,11 +883,11 @@ static void sound_options_page(void);
 Insert before `options_menu` (line ~1237):
 
 ```cpp
-// Sound Options (full-screen, OK/Cancel). Rows: Audio Mix, Track (A=demo),
+// Sound Options (full-screen, OK/Cancel). Rows: Audio Mix, Track,
 // Music level, PCM level, OK, Cancel. Start/A = OK (commit+save+apply), Esc/B =
 // Cancel (restore snapshot incl. live audio). Previews play live while open.
 static void sound_options_page(void) {
-    static const char *const MIX[] = { "Dynamic", "Override (repeat)", "Sequential", "Random" };
+    static const char *const MIX[] = { "Dynamic", "Repeat", "Sequential", "Random" };
     const int N = 6;   // 0 Mix, 1 Track, 2 Music, 3 PCM, 4 OK, 5 Cancel
     int sel = 0;
     // Snapshot for Cancel.
@@ -945,7 +945,7 @@ static void sound_options_page(void) {
         SRL::Debug::Print(x, y, "%c Audio Mix", sel == 0 ? '>' : ' ');
         SRL::Debug::Print(x + 14, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
         SRL::Debug::Print(x, y, "%c Track", sel == 1 ? '>' : ' ');
-        SRL::Debug::Print(x + 14, y++, "%d  (A=demo)", g_sel_track);
+        SRL::Debug::Print(x + 14, y++, "%d ", g_sel_track);
         SRL::Debug::Print(x, y, "%c Music", sel == 2 ? '>' : ' ');
         SRL::Debug::Print(x + 14, y++, "%d", g_music_level);
         SRL::Debug::Print(x, y, "%c PCM", sel == 3 ? '>' : ' ');
