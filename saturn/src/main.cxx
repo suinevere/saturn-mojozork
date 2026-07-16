@@ -292,7 +292,7 @@ static const int SCROLL_ALL  = 1 << 30;   // Home: clamped down to the oldest li
 // Scrollback line index where the latest output block began. Captured just before
 // the interpreter runs a turn (or set to 0 for the initial room) so the pager can
 // land on the TOP of a long response instead of its bottom.
-static int g_output_start = 0;
+static long g_output_start = 0;   // console_total_lines() mark taken before a turn's output
 
 // Route a physical-keyboard nav key to the scrollback. Returns true if the event
 // was a nav key (and thus consumed, so it isn't treated as text). Left/Right are
@@ -488,18 +488,23 @@ static void render_console(void) {
     if (start + rows < total)    SRL::Debug::Print(35, TOP_MARGIN + rows - 1, "more v");
 }
 
-// Position the scrollback after a turn's output has landed: if the new block is
-// taller than the visible window, land on its TOP (so "more v" shows and the
-// player pages down through it); otherwise snap to the live bottom as before.
+// Position the scrollback on the turn's output once it has landed (called at the
+// start of the NEXT readline, when the output actually exists). `added` is how many
+// lines this turn produced, from the monotonic counter so it stays correct even
+// after old lines evict from the 128-line ring. If the turn is taller than the
+// window, land on its TOP row (so the player reads from the start and pages down via
+// "more v"); otherwise snap to the live bottom.
 static void console_scroll_to_output(void) {
     int total = console_line_count(), rows = console_height();
     int maxstart = (total > rows) ? (total - rows) : 0;
-    if (total - g_output_start > rows) {
-        int start = g_output_start;                 // desired top line
-        g_scroll = maxstart - start;                // lines up from bottom
+    long added = console_total_lines() - g_output_start;   // lines this turn emitted
+    if (added > rows) {
+        int top = total - (int) added;              // buffer index where the turn began
+        if (top < 0) top = 0;                       // turn longer than the ring: oldest survivor
+        g_scroll = maxstart - top;                  // lines up from bottom to put `top` at the top row
         if (g_scroll < 0) g_scroll = 0;
     } else {
-        g_scroll = 0;                               // live bottom
+        g_scroll = 0;                               // fits on screen: live bottom
     }
 }
 
@@ -872,6 +877,11 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
     SRL::Core::Synchronize();
     int sug_index = 0;           // which suggestion the player has cycled to
     char sug_last[256] = "";     // the typed word the cycle position belongs to
+    // The turn's output has now been printed by the interpreter (or is the first
+    // room). Position the view at the TOP of that output before the first draw, so a
+    // long response shows from its start with "more v" and the player pages down --
+    // rather than being dumped at the bottom.
+    console_scroll_to_output();
     for (;;) {
       while (!k.submitted) {
         check_soft_reset();   // A+B+C+Start -> back to the title screen
@@ -908,13 +918,13 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
       // Autocomplete-accept appends a trailing space; strip trailing spaces so the
       // parser, the reboot check, history, and the echo all see the clean command.
       while (k.input_len > 0 && k.input[k.input_len - 1] == ' ') k.input[--k.input_len] = '\0';
-      console_scroll_to_output();   // a submitted line returns the view to the live bottom
+      g_scroll = 0;   // snap to the live bottom so the echoed command is visible
       history_push(k.input);   // remember the command for Up/Down recall
       // Echo the entered command onto the game's "> " prompt line so it stays in the
       // scrollback -- there's no OS echo here, and the input widget vanishes on submit.
       console_write(k.input, (unsigned int) k.input_len);
       console_write("\n", 1);
-      g_output_start = console_line_count();   // mark where the next turn's output begins
+      g_output_start = console_total_lines();   // mark where the next turn's output begins
       render_console();
       if (is_reboot_command(k.input)) {
           reboot_confirm_and_maybe_reset();   // soft-resets on Yes; returns on No
@@ -2098,7 +2108,7 @@ static void online_mode(void) {
 
         bool did_submit = k.submitted;
         if (k.submitted) {
-            console_scroll_to_output();   // sending a line returns the view to the live bottom
+            g_scroll = 0;   // streaming terminal: sending a line returns to the live bottom
             history_push(k.input);   // remember the command for Up/Down recall
             if (is_reboot_command(k.input)) {
                 reboot_confirm_and_maybe_reset();  // soft-resets on Yes; returns on No
@@ -2248,7 +2258,7 @@ int main(void) {
         music_start();                         // non-Dynamic starts now; Dynamic waits for first room
     }
 
-    g_output_start = 0;   // the initial room's output starts at the top of the scrollback
+    g_output_start = console_total_lines();   // mark before the first room; readline positions on it
     mojo_run();
 
     // Game ended: keep the final screen up.

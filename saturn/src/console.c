@@ -6,6 +6,7 @@ static int  head;    /* index of oldest stored line */
 static int  count;   /* number of completed lines in the ring */
 static char cur[CONSOLE_COLS + 1];
 static int  curlen;
+static long total_ever;   /* completed lines ever pushed; never decremented by eviction */
 
 static void push_line(const char *s, int len) {
     int slot;
@@ -15,6 +16,7 @@ static void push_line(const char *s, int len) {
     lines[slot][len] = '\0';
     if (count < CONSOLE_MAX_LINES) count++;
     else head = (head + 1) % CONSOLE_MAX_LINES;   /* overwrite oldest */
+    total_ever++;
 }
 
 static void flush_cur(void) {
@@ -24,7 +26,7 @@ static void flush_cur(void) {
 }
 
 void console_init(void) {
-    head = 0; count = 0; curlen = 0; cur[0] = '\0';
+    head = 0; count = 0; curlen = 0; cur[0] = '\0'; total_ever = 0;
 }
 
 void console_write(const char *str, unsigned int len) {
@@ -54,6 +56,10 @@ void console_write(const char *str, unsigned int len) {
 
 int console_line_count(void) {
     return count + (curlen > 0 ? 1 : 0);
+}
+
+long console_total_lines(void) {
+    return total_ever + (curlen > 0 ? 1 : 0);
 }
 
 const char *console_get_line(int index) {
