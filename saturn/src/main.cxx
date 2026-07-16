@@ -277,6 +277,7 @@ static void options_save(void) {
 }
 static void options_menu(void);   // defined below, near the other menus
 static bool menu_confirm(const char *line1, const char *line2);  // defined below
+static void sound_options_page(void);
 
 // ---- scrollback ------------------------------------------------------------
 
@@ -1232,6 +1233,83 @@ static void keyboard_controls_page(void) {
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_num() ? "On" : "Off");
         y++;
         SRL::Debug::Print(x, y++, "%c Done", sel == 4 ? '>' : ' ');
+        menu_sync();
+    }
+    SRL::Core::Synchronize();
+}
+
+// Sound Options (full-screen, OK/Cancel). Rows: Audio Mix, Track (A=demo),
+// Music level, PCM level, OK, Cancel. Start/A = OK (commit+save+apply), Esc/B =
+// Cancel (restore snapshot incl. live audio). Previews play live while open.
+static void sound_options_page(void) {
+    static const char *const MIX[] = { "Dynamic", "Override (repeat)", "Sequential", "Random" };
+    const int N = 6;   // 0 Mix, 1 Track, 2 Music, 3 PCM, 4 OK, 5 Cancel
+    int sel = 0;
+    // Snapshot for Cancel.
+    int s_mix = g_mix_mode, s_trk = g_sel_track, s_mus = g_music_level, s_pcm = g_pcm_level;
+    SRL::Core::Synchronize();   // consume the edge that opened this
+    for (;;) {
+        check_soft_reset();
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        pad_repeat_update();
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + N) % N;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % N;
+        bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        bool ok   = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+                  || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
+        bool cancel = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
+                    || ke.kind == SATURN_KEY_BACKSPACE;
+
+        if (cancel) {   // revert everything, incl. live audio
+            g_mix_mode = s_mix; g_sel_track = s_trk; g_music_level = s_mus; g_pcm_level = s_pcm;
+            music_set_level(g_music_level); sound_set_level(g_pcm_level);
+            music_set_mix(g_mix_mode, g_sel_track);
+            music_refresh();
+            break;
+        }
+        if (sel == 0) { if (left && g_mix_mode > 0) g_mix_mode--; if (right && g_mix_mode < MIX_RANDOM) g_mix_mode++; }
+        else if (sel == 1) {
+            if (left  && g_sel_track > MUSIC_TRACK_MIN) g_sel_track--;
+            if (right && g_sel_track < MUSIC_TRACK_MAX) g_sel_track++;
+            if (left || right || ok) music_cdda_play(g_sel_track);   // demo/preview
+        }
+        else if (sel == 2) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
+                             if (left || right) music_set_level(g_music_level); }
+        else if (sel == 3) { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++;
+                             if (left || right) sound_set_level(g_pcm_level); }
+        else if (ok && sel == 4) {   // OK
+            music_set_level(g_music_level); sound_set_level(g_pcm_level);
+            music_set_mix(g_mix_mode, g_sel_track);
+            if (g_mix_mode == MIX_DYNAMIC) music_refresh();   // hand back to the room engine
+            else music_start();                               // start the chosen track now
+            options_save();
+            break;
+        }
+        else if (ok && sel == 5) {   // Cancel row == B
+            g_mix_mode = s_mix; g_sel_track = s_trk; g_music_level = s_mus; g_pcm_level = s_pcm;
+            music_set_level(g_music_level); sound_set_level(g_pcm_level);
+            music_set_mix(g_mix_mode, g_sel_track); music_refresh();
+            break;
+        }
+
+        menu_clear();
+        int x = 2, y = 1;
+        SRL::Debug::Print(x, y, "SOUND OPTIONS"); y += 2;
+        SRL::Debug::Print(x, y, "%c Audio Mix", sel == 0 ? '>' : ' ');
+        SRL::Debug::Print(x + 14, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
+        SRL::Debug::Print(x, y, "%c Track", sel == 1 ? '>' : ' ');
+        SRL::Debug::Print(x + 14, y++, "%d  (A=demo)", g_sel_track);
+        SRL::Debug::Print(x, y, "%c Music", sel == 2 ? '>' : ' ');
+        SRL::Debug::Print(x + 14, y++, "%d", g_music_level);
+        SRL::Debug::Print(x, y, "%c PCM", sel == 3 ? '>' : ' ');
+        SRL::Debug::Print(x + 14, y++, "%d", g_pcm_level);
+        y++;
+        SRL::Debug::Print(x, y++, "%c OK", sel == 4 ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c Cancel", sel == 5 ? '>' : ' ');
+        y++;
+        SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel", "<> change  Enter=OK  Esc=Cancel"));
         menu_sync();
     }
     SRL::Core::Synchronize();
