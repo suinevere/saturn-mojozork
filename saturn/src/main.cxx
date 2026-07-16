@@ -1804,19 +1804,36 @@ static int label_year(const char* s) {
     return 9999;
 }
 
+// Game catalog cache: filled once by preload_game_catalog() at title time.
+// game_select's browse loop reads these directly and does no CD I/O.
+static const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
+static char names[MAX_GAMES][16];      // static so the returned pointer stays valid
+static char labels[MAX_GAMES][40];     // display titles (or filename fallback)
+static int  cats[MAX_GAMES];
+static int  g_catalog_count = 0;
+static bool g_catalog_ready = false;
+
+// Read the Z3 folder + each game's header ONCE (these CD reads stop CD-DA); cache
+// the result so game_select does no CD I/O and the menu track plays uninterrupted.
+static void preload_game_catalog(void) {
+    if (g_catalog_ready) return;
+    g_catalog_count = scan_z3_folder(names, MAX_GAMES);
+    if (g_catalog_count > 0) {
+        for (int i = 0; i < g_catalog_count; i++) {
+            const char* title = read_game_info(names[i], &cats[i]);
+            int j = 0; const char* src = title ? title : names[i];
+            for (; src[j] && j < 39; j++) labels[i][j] = src[j];
+            labels[i][j] = '\0';
+        }
+    }
+    g_catalog_ready = true;
+}
+
 const char* game_select() {
-    const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
-    static char names[MAX_GAMES][16];   // static so the returned pointer stays valid
-    static char labels[MAX_GAMES][40];  // display titles (or filename fallback)
-    static int  cats[MAX_GAMES];
     const char *items[MAX_GAMES];
 
-    // Reading each game's header off the CD takes a moment; show a notice first.
-    menu_clear();
-    SRL::Debug::Print(2, 2, "Loading games...");
-    SRL::Core::Synchronize();
-
-    int count = scan_z3_folder(names, MAX_GAMES);
+    preload_game_catalog();   // idempotent: the CD reads happen once, at the title
+    int count = g_catalog_count;
 
     if (count <= 0) {
         menu_clear();
@@ -1827,21 +1844,6 @@ const char* game_select() {
         menu_wait();
         return nullptr;   // back to the single/multiplayer select menu
     }
-
-    // Classify each game: title (or filename fallback) + category.
-    for (int i = 0; i < count; i++) {
-        const char* title = read_game_info(names[i], &cats[i]);
-        int j = 0;
-        const char* src = title ? title : names[i];
-        for (; src[j] && j < 39; j++) labels[i][j] = src[j];
-        labels[i][j] = '\0';
-    }
-
-    // The scan/header reads above stop CD-DA (the drive can't stream audio while
-    // seeking the data track), so resume the menu track now. The category/game
-    // pages below do no CD I/O, so this keeps them (and a B-back to the mode menu)
-    // from playing silent.
-    music_cdda_play(g_sel_track);
 
     // Category page -> game page. Back from the game page returns to categories.
     for (;;) {
@@ -2121,6 +2123,13 @@ int main(void) {
     music_reset();
     music_set_level(g_music_level);      // honor the saved music level for menu audio
     music_cdda_play(g_sel_track);        // menu track (default 10), looping across the menu flow
+
+    // Read the CD game catalog once, up front: its CD reads (the Z3 folder scan +
+    // each game's header) stop CD-DA, so doing them here -- before the title
+    // becomes interactive -- and resuming the track right after means no menu
+    // screen from here on (title, categories, games) ever touches the CD again.
+    preload_game_catalog();
+    music_cdda_play(g_sel_track);        // catalog reads above stopped CD-DA; resume it
 
     int seed = title_and_seed();
 
