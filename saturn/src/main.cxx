@@ -30,6 +30,8 @@ static int g_difficulty = DIFF_EASY;
 // difficulty and the dial number. See options_load/options_save below.
 static int g_music_level = 7;   // CD-DA music level 0..7 (default full)
 static int g_pcm_level   = 4;   // PCM sound-effect level 0..7 (default mid)
+static int g_mix_mode  = MIX_DYNAMIC;   // Audio Mix: Dynamic/Override/Sequential/Random
+static int g_sel_track = 10;            // selected/override track, also the menu track
 
 // Online dial number (editable in Options -> Configure MojoZork; persisted).
 static char g_dialnum[24] = "199403";
@@ -260,6 +262,12 @@ static void options_load(void) {
         for (int a = 0; a < FA_N; a++) { int v = buf[m + 1 + a];        if (v < 3)    g_face_btn[a]   = v; }
         for (int a = 0; a < CA_N; a++) { int v = buf[m + 1 + FA_N + a]; if (v < SL_N) g_chord_slot[a] = v; }
     }
+    // Sound block follows the controller bytes: sentinel 1, then [mix][track].
+    int s = m + 1 + FA_N + CA_N;
+    if (s + 2 < (int) sizeof(buf) && buf[s] == 1) {
+        if (buf[s + 1] <= MIX_RANDOM) g_mix_mode = buf[s + 1];
+        if (buf[s + 2] >= MUSIC_TRACK_MIN && buf[s + 2] <= MUSIC_TRACK_MAX) g_sel_track = buf[s + 2];
+    }
 }
 static void options_save(void) {
     uint8_t buf[64]; int n = 0;
@@ -271,6 +279,9 @@ static void options_save(void) {
     buf[n++] = 2;                                 // controller-mapping format sentinel
     for (int a = 0; a < FA_N && n < 62; a++) buf[n++] = (uint8_t) g_face_btn[a];
     for (int a = 0; a < CA_N && n < 62; a++) buf[n++] = (uint8_t) g_chord_slot[a];
+    buf[n++] = 1;                                 // sound-block sentinel
+    buf[n++] = (uint8_t) g_mix_mode;              // 0..3
+    buf[n++] = (uint8_t) g_sel_track;             // 2..32
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
