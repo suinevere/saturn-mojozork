@@ -22,17 +22,20 @@ extern "C" void music_cdda_play_mode(int track, int loop) {
 
 extern "C" void music_cdda_play(int track) { music_cdda_play_mode(track, 1); }
 
-extern "C" void music_set_level(int level) {
+extern "C" void music_set_volume(int level) {
     if (level < 0) level = 0;
     if (level > 7) level = 7;
     g_level = level;
-    if (level == 0) {
-        SRL::Sound::Cdda::StopPause();
-    } else {
-        SRL::Sound::Cdda::SetVolume((uint8_t) level);
-        // If a track was requested while muted, (re)start it now, honoring its loop mode.
-        if (g_track > 0) SRL::Sound::Cdda::PlaySingle((uint16_t) g_track, g_loop != 0);
-    }
+    if (level == 0) SRL::Sound::Cdda::StopPause();     // mute: stop output, no restart
+    else            SRL::Sound::Cdda::SetVolume((uint8_t) level);
+}
+
+extern "C" void music_set_level(int level) {
+    int was_muted = (g_level == 0);
+    music_set_volume(level);
+    // Only the mute->unmute edge restarts: the track was actually stopped at 0.
+    if (was_muted && level > 0 && g_track > 0)
+        SRL::Sound::Cdda::PlaySingle((uint16_t) g_track, g_loop != 0);
 }
 
 // 1 while a CD-DA track is playing, via the CD block's status register. A looped

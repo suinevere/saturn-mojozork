@@ -53,6 +53,7 @@ int music_scan_event(const char* text);       /* cat 12/13, or -1 */
 void music_cdda_play(int track);                 /* track 0 = stop; else play looping */
 void music_cdda_play_mode(int track, int loop);  /* loop: 1 loop, 0 play once */
 void music_set_level(int level);                 /* 0..7, 0 = silence */
+void music_set_volume(int level);   /* 0..7 volume only; never restarts the track */
 int  music_cdda_is_playing(void);                /* 1 = a CD-DA track is still playing */
 int  music_cdda_is_short(int track);             /* 1 = track shorter than the short threshold */
 

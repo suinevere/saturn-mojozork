@@ -1304,7 +1304,7 @@ static void sound_options_page(void) {
             if (left || right || ok) music_cdda_play(g_sel_track);   // demo/preview
         }
         else if (sel == 2) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
-                             if (left || right) music_set_level(g_music_level); }
+                             if (left || right) music_set_volume(g_music_level); }
         else if (sel == 3) { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++;
                              if (left || right) sound_set_level(g_pcm_level); }
         else if (ok && sel == 4) {   // OK
