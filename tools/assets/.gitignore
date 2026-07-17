@@ -1,0 +1,8 @@
+# Downloaded / produced artifacts — never committed.
+/game/*
+/audio/*
+/output/*
+/base/*
+/Z3/
+*.zip
+!*/.gitkeep
