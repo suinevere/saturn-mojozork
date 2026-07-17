@@ -12,7 +12,11 @@ inject_games() {
   # 1) rip IP.BIN (first 16 * 2048 = 32768 bytes)
   dd if="$base" of="$out/ip.bin" bs=2048 count=16 2>/dev/null
   # 2) inject game files into /Z3 (rewrites the ISO, clobbering the system area)
-  "$XORRISO" -indev "$base" -outdev "$inj" -map "$gdir" /Z3 -commit >/dev/null 2>&1
+  if ! "$XORRISO" -indev "$base" -outdev "$inj" -map "$gdir" /Z3 -commit >/dev/null 2>&1; then
+    echo "ERROR: xorriso injection failed"; return 1
+  fi
+  [ -s "$inj" ] && [ "$(file_size "$inj")" -gt 32768 ] || {
+    echo "ERROR: xorriso produced no injected ISO (output missing or only IP.BIN-sized)"; return 1; }
   # 3) restore IP.BIN onto the front, in ISO space, before raw conversion
   dd if="$out/ip.bin" of="$inj" bs=2048 count=16 conv=notrunc 2>/dev/null
   # 4) verify preservation

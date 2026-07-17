@@ -3,6 +3,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . lib/inject.sh    # sources cuelib.sh; defines inject_games. No main runs.
 
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "SKIP: bash inject_games is unsupported under git-bash/MSYS (bundled Cygwin xorriso mangles the /Z3 in-ISO path). The bash path is exercised on Linux CI; the Windows path is inject.ps1."; exit 0;;
+esac
+
 # Requires a real base ISO + xorriso + iso2raw. Skip cleanly if unavailable.
 BASE="../../saturn/BuildDrop/mojozork.iso"
 if [ ! -f "$BASE" ] || ! resolve_tool xorriso >/dev/null 2>&1; then
