@@ -607,7 +607,7 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
                       face_btn_name(FA_TYPE), face_btn_name(FA_ACCEPT), face_btn_name(FA_BACK));
 }
 
-// ---- global reboot command -------------------------------------------------
+// ---- global reboot / quit commands -----------------------------------------
 
 // True if `line` is exactly "reboot" (case-insensitive). The reboot command is
 // global -- available from both the local game prompt and the online terminal.
@@ -620,6 +620,29 @@ static int is_reboot_command(const char *line) {
         if (c != cmd[i]) return 0;
     }
     return line[i] == '\0';
+}
+
+// True if `line` is a bare "q" or "quit" (case-insensitive). Only the local game
+// prompt intercepts this -- the interpreter's quit opcode tears down and crashes
+// on Saturn, so the command must never reach it. That makes the match a safety
+// boundary rather than a convenience: it has to catch every spelling the game's
+// own parser would accept, hence the leading/trailing space handling that
+// is_reboot_command (whose miss is harmless) can do without.
+static int is_quit_command(const char *line) {
+    while (*line == ' ') line++;                          // the parser skips these; so must we
+    char w[6];
+    int n = 0;
+    for (; line[n] && line[n] != ' ' && n < 5; n++) {     // first word, lowercased
+        char c = line[n];
+        w[n] = (c >= 'A' && c <= 'Z') ? (char) (c - 'A' + 'a') : c;
+    }
+    w[n] = '\0';
+    const char *rest = line + n;
+    while (*rest == ' ') rest++;
+    if (*rest != '\0') return 0;                          // "quit now" is the game's to answer
+    // Short-circuits at the terminator, so no read runs past it.
+    return w[0] == 'q' && (w[1] == '\0' ||
+           (w[1] == 'u' && w[2] == 'i' && w[3] == 't' && w[4] == '\0'));
 }
 
 // Perform the Sega software reset: drop any live connection, release the story
@@ -655,10 +678,12 @@ static void check_soft_reset(void) {
     if (hold >= SOFT_RESET_HOLD) soft_reset_to_title();
 }
 
-// Modal Y/N confirm. On Yes, soft-resets to the title screen in-process (the same
-// return-to-title as the A+B+C+Start chord); configured options in backup RAM are
-// retained. On No, returns false so the caller resumes.
-static bool reboot_confirm_and_maybe_reset(void) {
+// Modal Y/N confirm, asking `question`. On Yes, soft-resets to the title screen
+// in-process (the same return-to-title as the A+B+C+Start chord); configured
+// options in backup RAM are retained. On No, returns false so the caller resumes.
+// Shared by the reboot and quit commands -- both discard an unsaved game, so both
+// ask first.
+static bool confirm_return_to_title(const char *question) {
     g_reboot_menu = true;       // shrink the console so it renders above the prompt band
     SRL::Core::Synchronize();   // drop the submit edge that triggered this
     for (;;) {
@@ -674,11 +699,11 @@ static bool reboot_confirm_and_maybe_reset(void) {
         if (no) { g_reboot_menu = false; return false; }
 
         // Console (shrunk to rows above REBOOT_MENU_ROWS) still shows the game text
-        // and the just-echoed "reboot"; the prompt band below is fully cleared each
+        // and the just-echoed command; the prompt band below is fully cleared each
         // frame so nothing bleeds through in either keyboard or controller mode.
         render_console();
         for (int r = SCREEN_ROWS - REBOOT_MENU_ROWS; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-        SRL::Debug::Print(2, 22, "reboot back to the title screen?");
+        SRL::Debug::Print(2, 22, "%s", question);
         SRL::Debug::Print(1, 24, "%s", hint("(A) (C) (Start) = yes", "Y / Enter = yes"));
         SRL::Debug::Print(1, 26, "%s", hint("(B) = no", "N / Esc = no"));
         SRL::Core::Synchronize();
@@ -931,10 +956,20 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
       g_output_start = console_total_lines();   // mark where the next turn's output begins
       render_console();
       if (is_reboot_command(k.input)) {
-          reboot_confirm_and_maybe_reset();   // soft-resets on Yes; returns on No
+          confirm_return_to_title("reboot back to the title screen?");   // resets on Yes
           k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; k.submitted = 0;
           SRL::Core::Synchronize();
           continue;   // declined reboot is not passed to the game
+      }
+      // Quit is intercepted here and never handed to the interpreter, whose quit
+      // opcode crashes on Saturn once accepted. Confirming keeps the one "are you
+      // sure" step the game itself would have asked -- worth keeping now that "q"
+      // is a first-word suggestion a stray accept could pick.
+      if (is_quit_command(k.input)) {
+          confirm_return_to_title("quit back to the title screen?");     // resets on Yes
+          k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; k.submitted = 0;
+          SRL::Core::Synchronize();
+          continue;   // declined quit must not reach the game either
       }
       break;
     }
@@ -2116,7 +2151,7 @@ static void online_mode(void) {
             g_scroll = 0;   // streaming terminal: sending a line returns to the live bottom
             history_push(k.input);   // remember the command for Up/Down recall
             if (is_reboot_command(k.input)) {
-                reboot_confirm_and_maybe_reset();  // soft-resets on Yes; returns on No
+                confirm_return_to_title("reboot back to the title screen?");  // resets on Yes
                 keyboard_reset(&k);                // declined: don't send to server
                 online_settle_input();
             } else {
