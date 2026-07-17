@@ -38,6 +38,11 @@
 :; curl -L -o "Z3/ADVENT.Z3" "$ADVENT_URL"
 :;
 :; echo "Complete."
+:;
+:; . lib/inject.sh
+:; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
+:; BASE_ISO=$(cfg BASE_ISO); GAME_DIR=$(cfg GAME_DIR); DISC_NAME=$(cfg DISC_NAME)
+:; inject_games "${BASE_ISO:-./base/mojozork.iso}" "Z3" "${GAME_DIR:-./game}" "${DISC_NAME:-mojozork}"
 :; exit
 
 @ECHO OFF
@@ -73,5 +78,17 @@ ECHO Downloading ADVENT.Z3 into Z3...
 curl -L -o "Z3\ADVENT.Z3" "%ADVENT_URL%"
 
 ECHO Complete.
+
+FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
+    IF "%%A"=="BASE_ISO" SET "BASE_ISO=%%B"
+    IF "%%A"=="GAME_DIR" SET "GAME_DIR=%%B"
+    IF "%%A"=="DISC_NAME" SET "DISC_NAME=%%B"
+)
+IF NOT DEFINED BASE_ISO SET "BASE_ISO=.\base\mojozork.iso"
+IF NOT DEFINED GAME_DIR SET "GAME_DIR=.\game"
+IF NOT DEFINED DISC_NAME SET "DISC_NAME=mojozork"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\inject.ps1" -BaseIso "%BASE_ISO%" -GamesDir "Z3" -OutDir "%GAME_DIR%" -Name "%DISC_NAME%" -Dd ".\bin\win\dd.exe" -Xorriso ".\bin\win\xorriso.exe" -Iso2raw ".\bin\win\iso2raw.exe"
+IF ERRORLEVEL 1 ( ECHO ERROR: game injection failed & EXIT /B 1 )
+
 ENDLOCAL
 GOTO :eof
