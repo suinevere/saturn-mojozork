@@ -41,6 +41,14 @@ static char g_dialnum[24] = "199403";
 static int g_restore_device = -1;
 static int g_restore_slot   = -1;
 static const char *g_autocmd = nullptr;   // command auto-submitted on the next readline
+// The slot a save/restore last actually committed to, remembered for the session so
+// the quick keys (F5/F6/F9) can skip the pickers. -1 until one commits.
+static int g_last_device = -1;
+static int g_last_slot   = -1;
+// Pre-picked save destination, the mirror of g_restore_* on the save side: set by
+// quick-save so saturn_save_blob writes straight to the slot. One-shot.
+static int g_save_device = -1;
+static int g_save_slot   = -1;
 
 extern "C" void* typeahead_malloc(unsigned int size) {
     return SRL::Memory::HighWorkRam::Malloc(size);
@@ -280,6 +288,8 @@ static void options_save(void) {
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
+static void keyboard_controls_page(void);   // ditto -- reached from the in-game F11 key
+static void menu_clear_full(void);
 static bool menu_confirm(const char *line1, const char *line2);  // defined below
 static void sound_options_page(void);
 
@@ -710,6 +720,19 @@ static bool confirm_return_to_title(const char *question) {
     }
 }
 
+// Put `cmd` on the input line and submit it, as if the player had typed it and
+// pressed Enter -- so it echoes, enters history, and reaches the interpreter by
+// the one path every other command uses. How the F-key shortcuts run the game's
+// own save/restore.
+static void submit_command(KeyboardState &k, const char *cmd) {
+    int n = 0;
+    while (cmd[n] != '\0' && n < KB_INPUT_MAX - 1) { k.input[n] = cmd[n]; n++; }
+    k.input[n] = '\0';
+    k.input_len = n;
+    k.cursor = n;
+    k.submitted = 1;
+}
+
 // ---- hooks (extern "C" so the C core can call them) ------------------------
 
 extern "C" void saturn_writestr(const char *str, size_t slen) {
@@ -925,12 +948,43 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         pad_repeat_update();   // tick held-button auto-repeat (D-pad, A, C, B, Y, L, R)
         chord_tick();          // tick the configurable shift-chord repeat
 
-        // Start (gamepad) or Esc (keyboard) opens the Options menu mid-game.
-        if ((pad && g_pad->WasPressed(Button::START)) || ke.kind == SATURN_KEY_ESCAPE) {
+        // Start (gamepad), Esc or F10 (keyboard) opens the Options menu mid-game.
+        if ((pad && g_pad->WasPressed(Button::START)) || ke.kind == SATURN_KEY_ESCAPE
+            || ke.kind == SATURN_KEY_F10) {
             options_menu();
             ensure_typeahead();                       // rebuild if the difficulty changed
             typeahead_scan_screen(g_typeahead_root);  // re-mark on-screen words on the new trie
             SRL::Core::Synchronize();    // consume the edge that closed the menu
+            continue;
+        }
+        // F11: the controls page for the device in hand. That is always the
+        // keyboard -- a gamepad has no F11, and this very keypress just marked the
+        // keyboard as the active device above -- so unlike the Options menu's
+        // equivalent row there is no pad branch to pick here.
+        if (ke.kind == SATURN_KEY_F11) {
+            keyboard_controls_page();
+            menu_clear_full();
+            SRL::Core::Synchronize();    // consume the edge that closed the page
+            continue;
+        }
+        // Save/load function keys. These submit the game's own save/restore command
+        // rather than doing the work here: the save blob lives in the interpreter,
+        // so there is nothing main.cxx could write by itself. The quick variants
+        // pre-pick the last committed slot (the mechanism the "Load Save Game" menu
+        // already uses) so the blob hooks skip their pickers; with no slot used yet
+        // they fall through to asking, which is all F2/F3 ever do.
+        if (ke.kind == SATURN_KEY_F2 || ke.kind == SATURN_KEY_F5) {
+            if (ke.kind == SATURN_KEY_F5 && g_last_slot >= 0) {
+                g_save_device = g_last_device; g_save_slot = g_last_slot;
+            }
+            submit_command(k, "save");
+            continue;   // k.submitted is set: the loop ends and the core takes it
+        }
+        if (ke.kind == SATURN_KEY_F3 || ke.kind == SATURN_KEY_F6 || ke.kind == SATURN_KEY_F9) {
+            if (ke.kind != SATURN_KEY_F3 && g_last_slot >= 0) {
+                g_restore_device = g_last_device; g_restore_slot = g_last_slot;
+            }
+            submit_command(k, "restore");
             continue;
         }
 
@@ -1682,26 +1736,38 @@ static int choose_dest(const char *title_dev, const char *title_slot,
 }
 
 extern "C" int saturn_save_blob(const uint8_t *data, uint32_t len) {
-    int device = choose_device("SAVE - device?");
-    if (device < 0) return 0;
-
-    // Pick a slot and edit its name in place (cursor stays on the chosen line).
-    int slot;
+    int device, slot;
     char comment[12];
-    if (!pick_slot_and_name(device, &slot, comment, 8)) return 0;
-    if (comment[0] == 0) snprintf(comment, sizeof(comment), "Save %d", slot + 1);
-
-    // Confirm before overwriting an existing save in that slot.
     char name[12];
-    make_slot_name(name, slot);
-    char existing[12];
-    if (saturn_bup_info(device, name, existing)) {
-        char q[40];
-        snprintf(q, sizeof(q), "Overwrite \"%s\"?", existing);
-        if (!menu_confirm(q, "Are you sure?")) return 0;
+    if (g_save_slot >= 0) {
+        // Quick-save (F5): straight to the last slot -- no device, slot, or
+        // overwrite prompt, which is the entire point of it. Keep whatever name
+        // the slot already carries so the picker still reads sensibly.
+        device = g_save_device; slot = g_save_slot;
+        g_save_device = -1; g_save_slot = -1;              // one-shot
+        make_slot_name(name, slot);
+        if (!saturn_bup_info(device, name, comment))
+            snprintf(comment, sizeof(comment), "Save %d", slot + 1);
+    } else {
+        device = choose_device("SAVE - device?");
+        if (device < 0) return 0;
+
+        // Pick a slot and edit its name in place (cursor stays on the chosen line).
+        if (!pick_slot_and_name(device, &slot, comment, 8)) return 0;
+        if (comment[0] == 0) snprintf(comment, sizeof(comment), "Save %d", slot + 1);
+
+        // Confirm before overwriting an existing save in that slot.
+        make_slot_name(name, slot);
+        char existing[12];
+        if (saturn_bup_info(device, name, existing)) {
+            char q[40];
+            snprintf(q, sizeof(q), "Overwrite \"%s\"?", existing);
+            if (!menu_confirm(q, "Are you sure?")) return 0;
+        }
     }
 
     int ok = saturn_bup_write(device, name, comment, data, len);
+    if (ok) { g_last_device = device; g_last_slot = slot; }   // what the quick keys reuse
     menu_clear();
     SRL::Debug::Print(2, 4, "%s", ok ? "Saved." : "Save FAILED (no space?).");
     SRL::Debug::Print(2, 6, "(press any key/button)");
@@ -1721,6 +1787,7 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
     char name[12];
     make_slot_name(name, slot);
     int ok = saturn_bup_read(device, name, buf);
+    if (ok) { g_last_device = device; g_last_slot = slot; }   // what the quick keys reuse
     if (!ok) {
         menu_clear();
         SRL::Debug::Print(2, 4, "No save in that slot.");
