@@ -632,24 +632,30 @@ static int is_reboot_command(const char *line) {
     return line[i] == '\0';
 }
 
-// True if `line` is a bare "q" or "quit" (case-insensitive). Only the local game
-// prompt intercepts this -- the interpreter's quit opcode tears down and crashes
-// on Saturn, so the command must never reach it. That makes the match a safety
-// boundary rather than a convenience: it has to catch every spelling the game's
-// own parser would accept, hence the leading/trailing space handling that
-// is_reboot_command (whose miss is harmless) can do without.
+// True if the first word of `line` is "q" or "quit" (case-insensitive). The local
+// game prompt intercepts this rather than letting the interpreter run its own quit,
+// which ends the story and drops us out of mojo_run.
+//
+// This is a safety boundary, not a convenience, so it errs towards catching too
+// much: it must match every spelling the story's parser would read as QUIT. A
+// Z-machine dictionary declares its own word separators (Zork I: , . ") and the
+// tokenizer breaks on them with or without a space, so "quit." is QUIT to the game
+// -- splitting on spaces alone would let it through. Anything that isn't a letter
+// or digit therefore ends the word, and whatever follows is ignored: "quit now" is
+// intercepted too, since a story may well parse that as QUIT, and the worst case
+// for over-matching is a confirm prompt the player declines.
+static int is_alnum_ch(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+}
 static int is_quit_command(const char *line) {
-    while (*line == ' ') line++;                          // the parser skips these; so must we
+    while (*line != '\0' && !is_alnum_ch(*line)) line++;   // skip spaces/separators
     char w[6];
     int n = 0;
-    for (; line[n] && line[n] != ' ' && n < 5; n++) {     // first word, lowercased
+    for (; is_alnum_ch(line[n]) && n < 5; n++) {           // first word, lowercased
         char c = line[n];
         w[n] = (c >= 'A' && c <= 'Z') ? (char) (c - 'A' + 'a') : c;
     }
     w[n] = '\0';
-    const char *rest = line + n;
-    while (*rest == ' ') rest++;
-    if (*rest != '\0') return 0;                          // "quit now" is the game's to answer
     // Short-circuits at the terminator, so no read runs past it.
     return w[0] == 'q' && (w[1] == '\0' ||
            (w[1] == 'u' && w[2] == 'i' && w[3] == 't' && w[4] == '\0'));
@@ -2368,7 +2374,15 @@ int main(void) {
     g_output_start = console_total_lines();   // mark before the first room; readline positions on it
     mojo_run();
 
-    // Game ended: keep the final screen up.
-    while (1) { render_console(); SRL::Core::Synchronize(); }
+    // The story has ended: mojo_run only returns once it sets quit, which the
+    // prompt's own q/quit interception normally prevents -- but a death or victory
+    // screen offers QUIT too, and that answer comes back here. Keeping the final
+    // screen up forever (what this used to do) is the hang that made in-game Quit
+    // look like a crash. Hold it until the player has read it, then return to the
+    // title with menu music, the same place every other exit lands.
+    render_console();
+    SRL::Debug::Print(1, 27, "(press any key/button for the title screen)");
+    menu_wait();
+    soft_reset_to_title();   // never returns
     return 0;
 }
