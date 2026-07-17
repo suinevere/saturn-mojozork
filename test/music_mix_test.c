@@ -86,20 +86,21 @@ int main(void) {
     CHECK(g_track == 6 && g_loop == 0);
     playing = 1; music_tick();     /* still playing -> no change */
     CHECK(g_track == 6);
-    /* wrap at MAX */
-    music_set_mix(MIX_SEQUENTIAL, 32); music_reset(); music_start();
-    CHECK(g_track == 32);
+    /* wrap at MAX (bounds come from music.h, so raising the track max can't
+       silently leave this asserting the old wrap point) */
+    music_set_mix(MIX_SEQUENTIAL, MUSIC_TRACK_MAX); music_reset(); music_start();
+    CHECK(g_track == MUSIC_TRACK_MAX);
     playing = 1; music_tick();     /* settle */
     playing = 0; music_tick();
-    CHECK(g_track == 2);
+    CHECK(g_track == MUSIC_TRACK_MIN);
     playing = 1;
 
-    /* --- Random: one-shot; picks in 2..32 on loop-end --- */
+    /* --- Random: one-shot; picks within the track range on loop-end --- */
     music_set_mix(MIX_RANDOM, 10); music_reset(); music_start();
-    CHECK(g_track >= 2 && g_track <= 32 && g_loop == 0);
+    CHECK(g_track >= MUSIC_TRACK_MIN && g_track <= MUSIC_TRACK_MAX && g_loop == 0);
     playing = 1; music_tick();      /* settle */
     playing = 0; int r0 = g_track; music_tick();
-    CHECK(g_track >= 2 && g_track <= 32);
+    CHECK(g_track >= MUSIC_TRACK_MIN && g_track <= MUSIC_TRACK_MAX);
     playing = 1; (void)r0;
 
     /* --- Short Dynamic track: one-shot, then re-pick from same pool (prefer long) --- */
