@@ -13,6 +13,8 @@ saturn/BuildDrop/
 # --- Host test binaries ------------------------------------------------------
 **/*.exe
 saturn/tests/**/*.out
+# Bundled Windows tool binaries used by the asset pipeline (dd/xorriso/iso2raw)
+!tools/assets/bin/win/*.exe
 
 # --- multizork-server build --------------------------------------------------
 server/build/
