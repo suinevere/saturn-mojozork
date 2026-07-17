@@ -21,7 +21,7 @@
       INDEX 01 00:00:00
   ```
 - **Scripts:** keep the existing dual `:;`-bash / `@ECHO OFF`-batch polyglot pattern; every script runs unchanged on CI (ubuntu/bash) and Windows.
-- **Windows tooling:** bundle `dd.exe`, `xorriso.exe`, `iso2raw.exe` under `tools/assets/bin/win/`, each with its GPL license file. Linux/CI uses system binaries (`apt-get install xorriso`; `dd` native; `iso2raw` fetched by SDK).
+- **Bundled tooling (already added as zips in `tools/assets/bin/`):** `dd.exe` + `xorriso.exe` (+ `cygwin1.dll`, `cygiconv-2.dll`) are Windows-only, under `bin/win/`. `iso2raw` is bundled for every OS (`bin/win/iso2raw.exe`, `bin/lin/iso2raw`, `bin/mac/{amd64,arm64}/iso2raw`). On macOS/Linux `dd` is native and **`xorriso` must be installed by the user** — if it is missing, error and instruct: `brew install xorriso` (macOS) or `sudo apt-get install xorriso` (Linux). Keep each binary's GPL license file.
 - **No copyrighted output in public releases:** the full disc (games + audio) is only ever a workflow artifact, never attached to a release.
 - **Commit style:** plain messages, no Claude/AI attribution trailer.
 
@@ -36,7 +36,7 @@
 - `tools/assets/lib/audio.sh` — create: `split_bincue` + `merge_disc` (sources `cuelib.sh`). Sourced by `music.bat` and the split/merge tests.
 - `tools/assets/lib/inject.sh` — create: `inject_games` (sources `cuelib.sh`). Sourced by `games.bat` and the inject test.
 - `tools/assets/lib/{split,merge,inject}.ps1` — create: Windows mirrors of the three bash functions, invoked from the `.bat` Windows blocks.
-- `tools/assets/bin/win/{dd.exe,xorriso.exe,iso2raw.exe}` + `LICENSE.*` — create: bundled Windows binaries + licenses.
+- `tools/assets/bin/{win,lin,mac}/…` — create by extracting the already-present zips: `bin/win/{dd.exe,xorriso.exe,cygwin1.dll,cygiconv-2.dll,iso2raw.exe}`, `bin/lin/iso2raw`, `bin/mac/{amd64,arm64}/iso2raw`, plus `bin/LICENSE-*.txt`.
 - `tools/assets/README.md` — create: kit usage instructions.
 - `tools/assets/.gitkeep` scaffolding: `tools/assets/game/.gitkeep`, `audio/.gitkeep`, `output/.gitkeep` — create.
 - `tools/assets/tests/` — create: fixtures + verification scripts for split/merge logic.
@@ -108,58 +108,96 @@ git commit -m "Untrack non-Zork game files; keep only Zork 1/2/3 committed"
 
 ---
 
-## Task 2: Bundle Windows tooling (dd, xorriso, iso2raw)
+## Task 2: Extract the bundled tool zips into a per-OS layout
+
+The zips are already present in `tools/assets/bin/`:
+`dd-0.6beta3.zip`, `xorriso-exe-for-windows-master.zip`, `iso2raw-{linux-amd64,macos-amd64,macos-arm64,windows-amd64}.zip`.
+This task extracts them into a clean layout the scripts resolve against, then removes the zips.
 
 **Files:**
-- Create: `tools/assets/bin/win/dd.exe`
-- Create: `tools/assets/bin/win/xorriso.exe` (+ any required DLLs alongside)
-- Create: `tools/assets/bin/win/iso2raw.exe`
-- Create: `tools/assets/bin/win/LICENSE-coreutils.txt`, `LICENSE-xorriso.txt`, `LICENSE-iso2raw.txt`
-- Create: `tools/assets/bin/README.md` (provenance + license note)
+- Create: `tools/assets/bin/win/{dd.exe,xorriso.exe,cygwin1.dll,cygiconv-2.dll,iso2raw.exe}`
+- Create: `tools/assets/bin/lin/iso2raw`, `tools/assets/bin/mac/amd64/iso2raw`, `tools/assets/bin/mac/arm64/iso2raw`
+- Create: `tools/assets/bin/LICENSE-dd.txt`, `tools/assets/bin/LICENSE-xorriso.txt`, `tools/assets/bin/README.md`
+- Delete: the six `*.zip` files under `tools/assets/bin/`
 
 **Interfaces:**
-- Produces: `tools/assets/bin/win/{dd,xorriso,iso2raw}.exe` on `PATH`-resolvable disk paths, used by the Windows blocks of both scripts.
+- Produces the exact paths `resolve_tool` (Task 3) returns: `bin/win/{dd,xorriso,iso2raw}.exe`, `bin/lin/iso2raw`, `bin/mac/{amd64,arm64}/iso2raw`.
 
-- [ ] **Step 1: Copy the known-good iso2raw.exe from the SDK**
+- [ ] **Step 1: Extract into the per-OS layout**
 
-`iso2raw.exe` already exists in the checked-out SDK. Copy it:
+Run from repo root:
 ```bash
-mkdir -p tools/assets/bin/win
-cp SaturnRingLib/tools/bin/win/iso2raw/iso2raw.exe tools/assets/bin/win/iso2raw.exe
+cd tools/assets/bin
+mkdir -p win lin mac/amd64 mac/arm64
+# Windows dd (chrysocome dd 0.6beta3): dd.exe + license
+unzip -o dd-0.6beta3.zip -d _dd && cp _dd/dd.exe win/dd.exe && cp _dd/Copying.txt LICENSE-dd.txt
+# Windows xorriso + required cygwin DLLs + license
+unzip -o xorriso-exe-for-windows-master.zip -d _xo
+cp _xo/xorriso-exe-for-windows-master/xorriso.exe      win/xorriso.exe
+cp _xo/xorriso-exe-for-windows-master/cygwin1.dll      win/cygwin1.dll
+cp _xo/xorriso-exe-for-windows-master/cygiconv-2.dll   win/cygiconv-2.dll
+cp _xo/xorriso-exe-for-windows-master/LICENSE          LICENSE-xorriso.txt
+# iso2raw per OS (rename the version-suffixed binary to plain iso2raw)
+unzip -o iso2raw-windows-amd64.zip -d _i && cp _i/iso2raw-windows-amd64.exe win/iso2raw.exe
+unzip -o iso2raw-linux-amd64.zip   -d _i && cp _i/iso2raw-linux-amd64       lin/iso2raw
+unzip -o iso2raw-macos-amd64.zip   -d _i && cp _i/iso2raw-macos-amd64       mac/amd64/iso2raw
+unzip -o iso2raw-macos-arm64.zip   -d _i && cp _i/iso2raw-macos-arm64       mac/arm64/iso2raw
+# make the unix binaries executable (git tracks the mode)
+chmod +x lin/iso2raw mac/amd64/iso2raw mac/arm64/iso2raw
+rm -rf _dd _xo _i
+cd ../../..
 ```
 
-- [ ] **Step 2: Obtain dd.exe (GNU coreutils, GPLv3)**
+- [ ] **Step 2: Verify the layout**
 
-Download a standalone Windows `dd` (GnuWin32 CoreUtils or equivalent). Place at `tools/assets/bin/win/dd.exe`. Verify it runs and save its license:
+Run:
 ```bash
-tools/assets/bin/win/dd.exe --version   # must print "dd (coreutils) ..."
+find tools/assets/bin -type f | sort
 ```
-Save the coreutils `COPYING` (GPLv3) as `tools/assets/bin/win/LICENSE-coreutils.txt`.
-Expected: version prints without a DLL error. If it needs a DLL, place the DLL next to it.
+Expected (exactly these, no `*.zip`):
+```
+tools/assets/bin/LICENSE-dd.txt
+tools/assets/bin/LICENSE-xorriso.txt
+tools/assets/bin/README.md            (after Step 4)
+tools/assets/bin/lin/iso2raw
+tools/assets/bin/mac/amd64/iso2raw
+tools/assets/bin/mac/arm64/iso2raw
+tools/assets/bin/win/cygiconv-2.dll
+tools/assets/bin/win/cygwin1.dll
+tools/assets/bin/win/dd.exe
+tools/assets/bin/win/iso2raw.exe
+tools/assets/bin/win/xorriso.exe
+```
 
-- [ ] **Step 3: Obtain xorriso.exe (GPLv3)**
+- [ ] **Step 3: Smoke-test the Windows binaries (on this Windows dev box)**
 
-Download a standalone Windows `xorriso` build. Place at `tools/assets/bin/win/xorriso.exe` (plus any DLLs). Verify + save license:
+Run:
 ```bash
-tools/assets/bin/win/xorriso.exe --version   # must print "xorriso ... version ..."
+tools/assets/bin/win/dd.exe --version 2>&1 | head -1        # chrysocome dd banner
+tools/assets/bin/win/xorriso.exe -version 2>&1 | head -3    # must NOT error on missing DLL
+tools/assets/bin/win/iso2raw.exe 2>&1 | head -1 || true
 ```
-Save xorriso's `COPYING` (GPLv3) as `tools/assets/bin/win/LICENSE-xorriso.txt`.
-Save the iso2raw license as `tools/assets/bin/win/LICENSE-iso2raw.txt` (from its release page).
-Expected: version prints without error.
+Expected: `dd` and `xorriso` print version/usage text (proves the cygwin DLLs resolved). If `xorriso.exe` reports a missing DLL, a `cygwin*.dll` was not copied next to it — fix and re-run.
 
-- [ ] **Step 4: Write `tools/assets/bin/README.md`**
+- [ ] **Step 4: Remove the zips and write `tools/assets/bin/README.md`**
 
+```bash
+rm -f tools/assets/bin/*.zip
+```
+Create `tools/assets/bin/README.md`:
 ```markdown
-# Bundled Windows tools
+# Bundled tools
 
-These GPL-licensed binaries let the asset scripts run on Windows without a
-POSIX toolchain. On Linux/CI the scripts use the system-installed equivalents.
+These GPL-licensed binaries let the asset scripts run without installing a
+toolchain. `iso2raw` is bundled for every OS. `dd`/`xorriso` are bundled only
+for Windows; on macOS/Linux the scripts use the system `dd` and require the
+user to install `xorriso` (`brew install xorriso` / `sudo apt-get install xorriso`).
 
 | File | Upstream | License |
 |------|----------|---------|
-| dd.exe | GNU coreutils | GPLv3 — LICENSE-coreutils.txt |
-| xorriso.exe | GNU xorriso | GPLv3 — LICENSE-xorriso.txt |
-| iso2raw.exe | sftwninja/iso2raw | see LICENSE-iso2raw.txt |
+| win/dd.exe | chrysocome dd 0.6beta3 | GPL — LICENSE-dd.txt |
+| win/xorriso.exe (+ cygwin dlls) | PeyTy/xorriso-exe-for-windows | GPLv3 — LICENSE-xorriso.txt |
+| win/iso2raw.exe, lin/iso2raw, mac/{amd64,arm64}/iso2raw | sftwninja/iso2raw | see upstream release |
 
 Source for the GPL binaries is available from the upstream projects above.
 ```
@@ -168,7 +206,8 @@ Source for the GPL binaries is available from the upstream projects above.
 
 ```bash
 git add tools/assets/bin
-git commit -m "Bundle Windows dd/xorriso/iso2raw with licenses for the asset kit"
+git status --short tools/assets/bin   # confirm binaries staged, no *.zip
+git commit -m "Extract bundled dd/xorriso/iso2raw into per-OS bin layout with licenses"
 ```
 
 ---
@@ -182,8 +221,9 @@ git commit -m "Bundle Windows dd/xorriso/iso2raw with licenses for the asset kit
 **Interfaces:**
 - Produces (sourced by later tasks):
   - `msf_to_frames "MM:SS:FF"` → echoes integer frame count.
-  - `resolve_tool <name>` → echoes an executable path (`./bin/win/<name>.exe` on Windows via `$OS`, else system `<name>`).
   - `file_size <path>` → echoes byte size (cross-platform stat).
+  - `platform_subdir` → `win` | `lin` | `mac`.
+  - `resolve_tool <name>` → echoes the executable path per the bundled/system policy; for `xorriso` on macOS/Linux, if it is not installed it prints an install instruction to stderr and **returns 1** (never `exit`, so callers in `$( … )` or `if` decide). Paths are relative to the assets dir (scripts `cd` there first).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -207,6 +247,11 @@ check "msf 02:18:31"  "$(msf_to_frames 02:18:31)" "10381"   # (2*60+18)*75+31
 printf 'abcdefghij' > /tmp/cuelib_fs.bin
 check "file_size"     "$(file_size /tmp/cuelib_fs.bin)" "10"
 
+# resolve_tool: iso2raw is bundled for every OS -> must resolve to an existing file.
+iso2raw_path="$(resolve_tool iso2raw)"
+[ -f "$iso2raw_path" ] && echo "ok: iso2raw resolves ($iso2raw_path)" \
+  || { echo "FAIL: iso2raw path '$iso2raw_path' missing"; fail=1; }
+
 exit $fail
 ```
 
@@ -226,36 +271,65 @@ msf_to_frames() {
   local msf="$1" mm ss ff
   mm=${msf%%:*}; msf=${msf#*:}
   ss=${msf%%:*}; ff=${msf#*:}
-  # strip leading zeros safely (base-10)
   echo $(( (10#$mm * 60 + 10#$ss) * 75 + 10#$ff ))
-}
-
-# resolve_tool <name> -> path to executable (bundled on Windows, system elsewhere)
-resolve_tool() {
-  local name="$1"
-  if [ -n "${OS:-}" ] && [ -x "./bin/win/${name}.exe" ]; then
-    echo "./bin/win/${name}.exe"
-  else
-    command -v "$name"
-  fi
 }
 
 # file_size <path> -> bytes (GNU or BSD stat)
 file_size() {
   stat -c%s "$1" 2>/dev/null || stat -f%z "$1"
 }
+
+# platform_subdir -> win | lin | mac
+platform_subdir() {
+  if [ -n "${OS:-}" ]; then echo win; return; fi
+  case "$(uname -s)" in
+    Linux)  echo lin;;
+    Darwin) echo mac;;
+    *)      echo unknown;;
+  esac
+}
+
+# resolve_tool <name> -> executable path.
+#  - iso2raw: bundled for every OS (bin/<plat>[/<arch>]/iso2raw[.exe])
+#  - dd:      bundled on Windows; system dd elsewhere (always present)
+#  - xorriso: bundled on Windows; system xorriso on mac/linux, and if missing
+#             prints an install hint to stderr and returns 1 (does NOT exit).
+resolve_tool() {
+  local name="$1" plat; plat=$(platform_subdir)
+  case "$name" in
+    iso2raw)
+      case "$plat" in
+        win) echo "./bin/win/iso2raw.exe";;
+        lin) echo "./bin/lin/iso2raw";;
+        mac) if [ "$(uname -m)" = "arm64" ]; then echo "./bin/mac/arm64/iso2raw";
+             else echo "./bin/mac/amd64/iso2raw"; fi;;
+        *)   echo "ERROR: unsupported platform for iso2raw" >&2; return 1;;
+      esac;;
+    dd)
+      if [ "$plat" = win ]; then echo "./bin/win/dd.exe"; else command -v dd; fi;;
+    xorriso)
+      if [ "$plat" = win ]; then echo "./bin/win/xorriso.exe"; return 0; fi
+      local sys; sys=$(command -v xorriso 2>/dev/null || true)
+      if [ -n "$sys" ]; then echo "$sys"; return 0; fi
+      echo "ERROR: xorriso is not installed." >&2
+      if [ "$plat" = mac ]; then echo "  Install it with: brew install xorriso" >&2;
+      else echo "  Install it with: sudo apt-get install xorriso" >&2; fi
+      return 1;;
+    *) command -v "$name";;
+  esac
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bash tools/assets/tests/test_cuelib.sh`
-Expected: five `ok:` lines, exit 0.
+Expected: five `ok:` lines + `ok: iso2raw resolves (...)`, exit 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add tools/assets/lib/cuelib.sh tools/assets/tests/test_cuelib.sh
-git commit -m "Add cuelib.sh MSF/size/tool helpers with tests"
+git commit -m "Add cuelib.sh MSF/size/tool helpers with per-OS tool resolution"
 ```
 
 ---
@@ -683,8 +757,8 @@ inject_games() {
   local base="$1" gdir="$2" out="$3" name="$4"
   mkdir -p "$out"
   local XORRISO ISO2RAW inj
-  XORRISO=$(resolve_tool xorriso)
-  ISO2RAW=$(resolve_tool iso2raw)
+  XORRISO=$(resolve_tool xorriso) || return 1   # prints brew/apt hint if missing
+  ISO2RAW=$(resolve_tool iso2raw) || return 1
   inj="$out/${name}_injected.iso"
   # 1) rip IP.BIN (first 16 * 2048 = 32768 bytes)
   dd if="$base" of="$out/ip.bin" bs=2048 count=16 status=none
@@ -1017,9 +1091,10 @@ git commit -m "release.yml: also package the open-source build-it-yourself kit"
 
 ## Self-Review Notes
 
-- **Spec coverage:** games.bat inject + IP.BIN (Task 6) ✓; music.bat split (Task 4) + merge/cue (Task 5) ✓; untrack Zork-only (Task 1) ✓; bundled Windows tools + licenses (Task 2) ✓; OSS release kit (Task 9) ✓; full-image workflow (Task 8) ✓; scaffolding/README (Task 7) ✓; cuelib shared helpers (Task 3) ✓.
-- **O1 (bundle vs fetch Windows binaries):** resolved to **bundle** (Task 2).
+- **Spec coverage:** games.bat inject + IP.BIN (Task 6) ✓; music.bat split (Task 4) + merge/cue (Task 5) ✓; untrack Zork-only (Task 1) ✓; extract bundled tools + licenses (Task 2) ✓; OSS release kit (Task 9) ✓; full-image workflow (Task 8) ✓; scaffolding/README (Task 7) ✓; cuelib + per-OS tool resolution (Task 3) ✓.
+- **O1 (bundle vs fetch binaries):** resolved to **bundle** — the user supplied the zips in `tools/assets/bin/`; Task 2 extracts them.
 - **O2 (IP.BIN via dd vs xorriso `-system_area`):** resolved to **dd rip/restore + cmp verification** (Task 6); the `cmp` gate makes any future switch to `-boot_image any system_area=` safe to validate.
-- **Type/name consistency:** `split_bincue`, `merge_disc`, `inject_games`, `msf_to_frames`, `resolve_tool`, `file_size` are used with identical names across tasks and their PS mirrors.
-- **Ordering note:** Task 2 (bundle tools) precedes Task 6 (inject) so local injection tests get a real pass rather than a SKIP. Tasks 4/5 (pure split/merge) need no xorriso and can run anytime after Task 3.
+- **xorriso availability:** bundled for Windows; on macOS/Linux `resolve_tool xorriso` errors with `brew install xorriso` / `sudo apt-get install xorriso` and returns 1 (Task 3); the full-image CI installs it via apt (Task 8).
+- **Type/name consistency:** `split_bincue`, `merge_disc`, `inject_games`, `msf_to_frames`, `resolve_tool`, `file_size`, `platform_subdir` are used with identical names across tasks and their PS mirrors.
+- **Ordering note:** Task 2 (extract tools) precedes Task 3 (its `resolve_tool` test needs bundled `iso2raw` present) and Task 6 (injection needs xorriso/iso2raw). Tasks 4/5 (pure split/merge) need no xorriso.
 ```
