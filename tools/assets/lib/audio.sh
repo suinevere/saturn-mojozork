@@ -29,3 +29,32 @@ split_bincue() {
     echo "  split -> $name ($count sectors)"
   done
 }
+
+# merge_disc <game_dir> <audio_dir> <out_dir>
+# Copies game bin/cue + audio bins into out_dir and rebuilds a multi-FILE cue:
+# track 1 verbatim from the game cue, audio tracks regenerated from track*.bin.
+merge_disc() {
+  local gdir="$1" adir="$2" out="$3"
+  mkdir -p "$out"
+  local gcue gbin
+  gcue=$(find "$gdir" -maxdepth 1 -iname '*.cue' | head -n1)
+  gbin=$(find "$gdir" -maxdepth 1 -iname '*.bin' | head -n1)
+  [ -n "$gcue" ] && [ -n "$gbin" ] || { echo "ERROR: need one bin+cue in $gdir"; return 1; }
+  local audios=( "$adir"/track*.bin )
+  [ -e "${audios[0]}" ] || { echo "ERROR: no audio bins in $adir"; return 1; }
+  cp "$gbin" "$out/"; cp "$adir"/track*.bin "$out/"
+  local outcue="$out/$(basename "${gcue%.cue}").cue"
+  # Track 1: copy verbatim up to (but not including) the 2nd FILE line.
+  awk 'BEGIN{keep=1} /^FILE/{n++} n>=2{keep=0} keep{print}' "$gcue" > "$outcue"
+  # Audio tracks: regenerate, numbered from 02.
+  local tn=2 first=1 f base
+  for f in $(printf '%s\n' "${audios[@]}" | sort); do
+    base=$(basename "$f")
+    printf 'FILE "%s" BINARY\n' "$base" >> "$outcue"
+    printf '  TRACK %02d AUDIO\n' "$tn" >> "$outcue"
+    if [ "$first" = 1 ]; then printf '    PREGAP 00:02:00\n' >> "$outcue"; first=0; fi
+    printf '    INDEX 01 00:00:00\n' >> "$outcue"
+    tn=$((tn+1))
+  done
+  echo "Merged disc -> $outcue ($(( tn - 2 )) audio tracks)"
+}
