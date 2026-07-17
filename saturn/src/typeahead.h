@@ -87,6 +87,12 @@ void typeahead_set_easy(int easy, int have_solution);
 // everything exactly once. Use before rebuilding for a newly loaded story.
 void destroy_typeahead(TrieNode* root);
 
+// Ensure the twelve stock abbreviations -- n ne e se s sw w nw l i q z -- are in
+// the trie, so they are always accepted and suggested at the prompt whatever the
+// loaded story's dictionary happens to define. Words already present are left
+// untouched (keeping their grammar links). Call after the story/solution layers.
+void typeahead_add_abbreviations(TrieNode* root);
+
 // Mark the vocabulary words appearing in `text` (e.g. the visible room text) as
 // "on screen": predict_candidates then ranks them above their peers, so an
 // object the game just mentioned leads its suggestions. Call once per prompt.

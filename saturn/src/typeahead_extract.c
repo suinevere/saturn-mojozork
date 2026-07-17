@@ -61,8 +61,10 @@ static int common_verb_weight(const char* t) {
     return 0;
 }
 
-// Bare direction abbreviations -- dropped from suggestions (the full word is
-// offered instead; the player can still type the letter, it just isn't listed).
+// Bare direction abbreviations -- dropped here so the full word is what the
+// grammar layer offers. The compass eight are put back afterwards by
+// typeahead_add_abbreviations (they rank below their full spelling, so "n" still
+// suggests "north" first); "u"/"d" are the only ones this really removes.
 static int is_dir_abbrev(const char* t) {
     return !strcmp(t, "n") || !strcmp(t, "s") || !strcmp(t, "e") || !strcmp(t, "w")
         || !strcmp(t, "u") || !strcmp(t, "d") || !strcmp(t, "ne") || !strcmp(t, "nw")

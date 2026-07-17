@@ -377,6 +377,46 @@ void typeahead_set_screen(TrieNode* root, const char* text) {
     }
 }
 
+// Base weights for a synthesized abbreviation, mirroring typeahead_extract.c's
+// part-of-speech priors. A direction's rank is recomputed from dir_rank at
+// suggest time, so its weight only feeds insert_trie's best_completion cache; a
+// verb's is the real thing, and sits at the plain-verb prior so a common full
+// spelling ("look") still leads its abbreviation ("l").
+#define ABBREV_DIR_WEIGHT  48
+#define ABBREV_VERB_WEIGHT 46
+
+// The twelve stock abbreviations, always offered at the prompt. Each is a whole
+// command by itself, so it only ever appears as the FIRST word -- where neither
+// Easy nor Normal filters trie completions (both only narrow a mid-command
+// continuation, keyed off a prev word). Being suggested is therefore purely a
+// matter of being in the trie, and two things keep them out: the extractor drops
+// the bare direction abbreviations in favour of their full spellings (see
+// is_dir_abbrev in typeahead_extract.c), and a story's dictionary need not
+// define the rest -- notably "q", which the client acts on rather than the game.
+void typeahead_add_abbreviations(TrieNode* root) {
+    static const struct { const char* text; WordType type; int weight; } ABBREVS[] = {
+        { "n",  TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "ne", TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "e",  TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "se", TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "s",  TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "sw", TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "w",  TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "nw", TYPE_DIRECTION, ABBREV_DIR_WEIGHT },
+        { "l",  TYPE_VERB,      ABBREV_VERB_WEIGHT },   // look
+        { "i",  TYPE_VERB,      ABBREV_VERB_WEIGHT },   // inventory
+        { "q",  TYPE_VERB,      ABBREV_VERB_WEIGHT },   // quit
+        { "z",  TYPE_VERB,      ABBREV_VERB_WEIGHT },   // wait
+    };
+    if (root == NULL) return;
+    for (int i = 0; i < (int)(sizeof(ABBREVS) / sizeof(ABBREVS[0])); i++) {
+        // Leave a word the story already defines alone: it carries real grammar
+        // links, and re-inserting would strand the original as a leaked orphan.
+        if (find_exact_word(root, ABBREVS[i].text) != NULL) continue;
+        insert_trie(root, create_word(ABBREVS[i].text, ABBREVS[i].type, ABBREVS[i].weight));
+    }
+}
+
 // Find exact dictionary word (used when user hits space)
 DictionaryWord* find_exact_word(TrieNode* root, const char* text) {
     TrieNode* current = root;

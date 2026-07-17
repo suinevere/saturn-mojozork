@@ -68,6 +68,10 @@ static void ensure_typeahead() {
         // suggestions to it; Normal uses its links as the "unless in solution"
         // exception to the grammar filter.
         have_solution = apply_solution_overlay(g_typeahead_root, story, len);
+        // Last, so the twelve stock abbreviations are in whatever trie the story
+        // produced (the extractor drops the bare direction ones). Hard builds no
+        // trie at all, so it stays helpless -- the rule is: they exist iff it does.
+        typeahead_add_abbreviations(g_typeahead_root);
     }
     typeahead_set_easy(g_difficulty == DIFF_EASY, have_solution);
     g_ta_story = story;
@@ -1998,6 +2002,7 @@ static void ensure_online_typeahead(void) {
         build_typeahead_from_story(g_online_ta, story, len);
         int have_solution = (g_difficulty != DIFF_HARD)
                           ? apply_solution_overlay(g_online_ta, story, len) : 0;
+        typeahead_add_abbreviations(g_online_ta);
         typeahead_set_easy(g_difficulty == DIFF_EASY, have_solution);
         SRL::Memory::HighWorkRam::Free(story);
     }
