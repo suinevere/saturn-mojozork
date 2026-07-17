@@ -39,6 +39,42 @@ static void check_all_modes(TrieNode* root, const char* label) {
     }
 }
 
+/* The solution overlay inserts walkthrough vocabulary the story's dictionary lacks
+   as TYPE_UNKNOWN (typeahead_solution.c). Because the extractor drops the bare
+   direction abbreviations, a walkthrough that says "s" lands exactly there -- so by
+   the time the abbreviations are added, "s" is already present but UNCLASSIFIED.
+   That matters at scale: cand_collect only gives the +2000 first-word bonus to a
+   VERB/DIRECTION, so an UNKNOWN "s" sits at its raw weight and is the first thing
+   evicted once CAND_MAX candidates share the prefix -- accepted, but never
+   suggested. A 4-word trie can't show this; a real dictionary has dozens of
+   s-verbs. Reproduce that shape. */
+static void check_overlay_stub_is_reclassified(void) {
+    TrieNode* root = create_trie_node();
+    static const char* SVERBS[] = {
+        "say","search","shout","show","sing","sit","skip","sleep","slide","smell",
+        "snap","spin","spray","squeeze","stab","stand","start","stay","steal","step",
+        "stop","strike","swim","swing","switch","save","score","script","send","set",
+        "shake","sharpen","shave","shed","shoot","shut","sign","slap","slice","smash"
+    };
+    int nv = (int)(sizeof(SVERBS) / sizeof(SVERBS[0]));
+    for (int i = 0; i < nv; i++)
+        insert_trie(root, create_word(SVERBS[i], TYPE_VERB, 46));
+    /* The overlay got here first: "s" exists, but only as an unclassified stub. */
+    insert_trie(root, create_word("s", TYPE_UNKNOWN, 41));
+
+    typeahead_add_abbreviations(root);
+
+    DictionaryWord* s = find_exact_word(root, "s");
+    CHECK(s != NULL);
+    if (s && s->type != TYPE_DIRECTION) printf("FAIL: overlay's \"s\" left as type %d, want TYPE_DIRECTION (%d)\n",
+                                               (int) s->type, (int) TYPE_DIRECTION);
+    CHECK(s && s->type == TYPE_DIRECTION);
+    typeahead_set_easy(0, 1);
+    if (!suggested(root, "s")) printf("FAIL: \"s\" evicted from suggestions among %d s-verbs\n", nv);
+    CHECK(suggested(root, "s"));
+    destroy_typeahead(root);
+}
+
 int main(void) {
     TrieNode* root = create_trie_node();
 
@@ -68,6 +104,8 @@ int main(void) {
 
     typeahead_set_easy(1, 0);   /* Easy, no solution overlay (behaves like Normal) */
     check_all_modes(root, "EASY/no-solution");
+
+    check_overlay_stub_is_reclassified();
 
     printf(fails ? "\n%d FAILURES\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;

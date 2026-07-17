@@ -410,10 +410,23 @@ void typeahead_add_abbreviations(TrieNode* root) {
     };
     if (root == NULL) return;
     for (int i = 0; i < (int)(sizeof(ABBREVS) / sizeof(ABBREVS[0])); i++) {
-        // Leave a word the story already defines alone: it carries real grammar
-        // links, and re-inserting would strand the original as a leaked orphan.
-        if (find_exact_word(root, ABBREVS[i].text) != NULL) continue;
-        insert_trie(root, create_word(ABBREVS[i].text, ABBREVS[i].type, ABBREVS[i].weight));
+        DictionaryWord* w = find_exact_word(root, ABBREVS[i].text);
+        if (w == NULL) {
+            insert_trie(root, create_word(ABBREVS[i].text, ABBREVS[i].type, ABBREVS[i].weight));
+        } else if (w->type == TYPE_UNKNOWN) {
+            // Present but unclassified -- the solution overlay inserts walkthrough
+            // words the dictionary lacks as TYPE_UNKNOWN, and that is exactly where a
+            // dropped "s"/"ne" reappears; the extractor does the same for a dictionary
+            // word whose flags it can't place. Skipping it would look like success
+            // while leaving it outside cand_collect's verb/direction tier: no
+            // first-word bonus, so it loses the CAND_MAX cull to the dozens of real
+            // words sharing its prefix and is accepted but never suggested. We know
+            // what these twelve are, so classify it in place -- mutating rather than
+            // re-inserting keeps whatever links it already earned.
+            w->type = ABBREVS[i].type;
+            if (ABBREVS[i].weight > w->base_weight) w->base_weight = ABBREVS[i].weight;
+        }
+        // Otherwise the story classified it: trust that over our guess.
     }
 }
 
