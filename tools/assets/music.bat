@@ -1,36 +1,38 @@
 :; # === Linux & macOS Execution Block ===
-:; # Read properties and strip any Windows carriage returns (\r) to prevent variable corruption
-:; URL=$(grep -m 1 "^URL=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r')
-:; DEST=$(grep -m 1 "^DEST=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r')
-:; echo "Downloading from: $URL"
-:; mkdir -p "$DEST"
-:; curl -L -o temp_download.zip "$URL"
-:; unzip -qo temp_download.zip -d "$DEST"
-:; rm temp_download.zip
-:; echo "Extraction complete."
+:; set -euo pipefail
+:; cd "$(dirname "$0")"
+:; . lib/audio.sh
+:; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
+:; AUDIO_URL=$(cfg AUDIO_URL); AUDIO_DIR=$(cfg AUDIO_DIR); AUDIO_DIR=${AUDIO_DIR:-./audio}
+:; tmp=$(mktemp -d)
+:; echo "Downloading audio image: $AUDIO_URL"
+:; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
+:; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
+:; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
+:; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
+:; [ -n "$srccue" ] && [ -n "$srcbin" ] || { echo "ERROR: no bin/cue in audio download"; exit 1; }
+:; split_bincue "$srccue" "$srcbin" "$AUDIO_DIR"
+:; echo "Audio split complete -> $AUDIO_DIR"
+:; # (merge call appended in Task 5)
 :; exit
 
 @ECHO OFF
 REM === Windows Execution Block ===
 SETLOCAL
-
-REM Read properties from CONFIG.ME safely
+CD /D "%~dp0"
 FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
-    IF "%%A"=="URL" SET "URL=%%B"
-    IF "%%A"=="DEST" SET "DEST=%%B"
+    IF "%%A"=="AUDIO_URL" SET "AUDIO_URL=%%B"
+    IF "%%A"=="AUDIO_DIR" SET "AUDIO_DIR=%%B"
 )
-
-ECHO Downloading from: %URL%
-IF NOT EXIST "%DEST%" MKDIR "%DEST%"
-
-REM Windows 10+ includes curl natively
-curl -L -o temp_download.zip "%URL%"
-
-REM Use built-in PowerShell cmdlet to handle zip extraction without needing 7-Zip
-powershell -NoProfile -Command "Expand-Archive -Path 'temp_download.zip' -DestinationPath '%DEST%' -Force"
-
-DEL temp_download.zip
-ECHO Extraction complete.
-
+IF NOT DEFINED AUDIO_DIR SET "AUDIO_DIR=.\audio"
+IF NOT EXIST "%AUDIO_DIR%" MKDIR "%AUDIO_DIR%"
+SET "TMP_IMG=%TEMP%\mzaudio"
+IF EXIST "%TMP_IMG%" RMDIR /S /Q "%TMP_IMG%"
+MKDIR "%TMP_IMG%"
+ECHO Downloading audio image: %AUDIO_URL%
+curl -L -o "%TEMP%\mzaudio.zip" "%AUDIO_URL%"
+powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -DestinationPath '%TMP_IMG%' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\split.ps1" -ImgDir "%TMP_IMG%" -OutDir "%AUDIO_DIR%" -Dd ".\bin\win\dd.exe"
+ECHO Audio split complete -^> %AUDIO_DIR%
 ENDLOCAL
 GOTO :eof
