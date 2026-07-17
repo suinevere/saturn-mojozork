@@ -28,3 +28,14 @@ SaturnRingLib/Compiler/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# --- Non-open-source game files ---------------------------------------------
+# Fetched by tools/assets/games.bat; never committed. Only Zork 1/2/3 are
+# open-sourced (Activision/Microsoft) and kept in the repo.
+saturn/cd/data/Z3/*.Z3
+saturn/cd/data/Z3/*.z3
+saturn/cd/data/Z3/*.BLB
+saturn/cd/data/Z3/*.blb
+!saturn/cd/data/Z3/ZORK1.Z3
+!saturn/cd/data/Z3/ZORK2.Z3
+!saturn/cd/data/Z3/ZORK3.Z3
