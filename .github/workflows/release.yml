@@ -79,6 +79,25 @@ jobs:
           echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
           echo "zip_name=${NAME}.zip"              >> "$GITHUB_OUTPUT"
 
+      - name: Package build-it-yourself kit
+        id: kit
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
+          STAGE=$(mktemp -d)
+          KIT="$STAGE/zork-asset-kit"
+          mkdir -p "$KIT/base"
+          # Base ISO = injection input for games.bat (Zork 1/2/3 baked in).
+          cp saturn/BuildDrop/mojozork.iso "$KIT/base/mojozork.iso"
+          # Scripts + libs + bundled tools + config + docs + empty working dirs.
+          cp -r tools/assets/. "$KIT/"
+          # Ensure working dirs exist but are empty save for .gitkeep.
+          for d in game audio output; do mkdir -p "$KIT/$d"; find "$KIT/$d" -type f ! -name .gitkeep -delete; done
+          NAME="zork-asset-kit-${VER}"
+          (cd "$STAGE" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
+          echo "zip_name=${NAME}.zip"              >> "$GITHUB_OUTPUT"
+
       # Manual runs: surface the build as a workflow artifact for inspection.
       - name: Upload as workflow artifact (manual runs)
         if: github.event_name == 'workflow_dispatch'
@@ -86,6 +105,13 @@ jobs:
         with:
           name: ${{ steps.package.outputs.zip_name }}
           path: ${{ steps.package.outputs.zip_path }}
+
+      - name: Upload kit as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kit.outputs.zip_name }}
+          path: ${{ steps.kit.outputs.zip_path }}
 
       # Tag runs: attach to a release, creating it if missing.
       - name: Attach to GitHub release (tag runs)
@@ -101,3 +127,4 @@ jobs:
               --notes "Automated Saturn disc build from $TAG. Burn/mount cue/bin. See README for setup."
           fi
           gh release upload "$TAG" "${{ steps.package.outputs.zip_path }}" --clobber
+          gh release upload "$TAG" "${{ steps.kit.outputs.zip_path }}" --clobber
