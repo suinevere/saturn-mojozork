@@ -26,14 +26,15 @@ typedef enum {
     SATURN_KEY_INSERT,      /* Insert: toggle arrow-key vs Ctrl+arrow roles */
     SATURN_KEY_DELETE,      /* Delete: remove the character at the caret */
     /* Function keys, in the order the game uses them. Only the mapped ones are
-       here -- F1/F4/F7/F8/F12 have no role, so they stay unreported. */
+       here -- F1/F4/F7/F8 have no role, so they stay unreported. */
     SATURN_KEY_F2,
     SATURN_KEY_F3,
     SATURN_KEY_F5,
     SATURN_KEY_F6,
     SATURN_KEY_F9,
     SATURN_KEY_F10,
-    SATURN_KEY_F11
+    SATURN_KEY_F11,
+    SATURN_KEY_F12
 } SaturnKeyKind;
 
 typedef struct {

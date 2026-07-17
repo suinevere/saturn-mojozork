@@ -141,6 +141,8 @@ extern "C" void sound_stop_all(void) {
     }
 }
 
+extern "C" int sound_has_audio(void) { return g_have; }
+
 extern "C" void sound_set_enabled(int on) {
     g_enabled = on;
     if (!on) sound_stop_all();

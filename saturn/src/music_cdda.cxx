@@ -65,26 +65,45 @@ extern "C" int music_cdda_is_short(int track) {
     return is_short;
 }
 
+// 1 if the disc carries CD-DA audio. Track 1 (Tracks[0]) is the data track; the music
+// begins at track 2 (Tracks[1]). The per-track Control nibble decodes reliably here, so
+// we just ask whether track 2 is an audio track: yes -> the disc has music, no -> it's
+// data-only and the audio UI stays hidden. Cached, since the TOC is static for the disc.
+//
+// Small SRL/BIOS bug worth knowing (this is why earlier detections were flaky): the TOC
+// from CDC_TgetToc does not populate a track's entry unless the disc has a *pair* of
+// tracks -- a lone track comes back as Unknown (Control 0x0f). Put another way, you need
+// >= 2 tracks before track 1's entry fills in instead of reading Unknown. Our discs
+// always carry track 1 (data) plus the audio tracks, so track 2's entry is always
+// populated and this GetType() check is sound; only a hypothetical single-track disc
+// would read Unknown, which we'd correctly treat as "no audio" anyway.
+extern "C" int music_cdda_has_audio(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
+        // Check if track 2 is audio
+        cached = (toc.Tracks[1].GetType() == SRL::Cd::TableOfContents::TrackType::Audio) ? 1 : 0;
+    }
+    return cached;
+}
+
 // Ordered list of the selectable CD-DA (audio) track numbers. Track 1 is the data
 // track; the audio tracks are CD tracks 2..MUSIC_TRACK_MAX, so display index 1 maps to
-// CD track 2.
-//
-// This target's TOC cannot count the disc's real tracks in ANY field: GetType()'s
-// Control bits read 0 for every slot; LastTrack.Number reads a bogus small value (it
-// truncated the list to 3); the per-slot frame addresses only populate the TOC's first
-// ~16 entries (capping at 16 for a 31-track disc); and even track 2's address reads
-// absent on a single-track disc that nonetheless plays. Since there is no way to detect
-// the count, we don't try -- we always offer the full selectable range. Selecting a
-// track the disc doesn't carry is harmless: PlaySingle() plays by track number and just
-// does nothing for a missing track. Cached after first build.
+// CD track 2. The TOC can't count them (every field under-reports here), so once we know
+// the disc HAS audio (music_cdda_has_audio) we offer the whole selectable range and let
+// playback no-op for any track the disc doesn't actually carry -- PlaySingle() plays by
+// number. Returns 0 (empty) for a disc with no CD-DA at all. Cached after first build.
 extern "C" int music_cdda_audio_tracks(const unsigned char** out) {
-    static unsigned char list[MUSIC_SELECTABLE_MAX];
+    static unsigned char list[99];
     static int n = -1;
     if (n < 0) {
         n = 0;
-        for (int t = MUSIC_TRACK_MIN; t <= MUSIC_TRACK_MAX && n < MUSIC_SELECTABLE_MAX; t++)
-            list[n++] = (unsigned char) t;
+        SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
+        for (int t = 1; t < SRL::Cd::MaxTrackCount && n < 99; t++) {
+            if (toc.Tracks[t].GetType() == SRL::Cd::TableOfContents::TrackType::Audio)
+                list[n++] = (unsigned char) t;
+        }
     }
-    if (out) *out = list;
+    if (out) *out = (n > 0) ? list : 0;
     return n;
 }

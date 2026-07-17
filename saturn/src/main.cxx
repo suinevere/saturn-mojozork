@@ -996,6 +996,18 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
             SRL::Core::Synchronize();    // consume the edge that closed the page
             continue;
         }
+        // F12: the Sound Options page directly, unless there's nothing to configure --
+        // no CD-DA on the disc and no game .BLB -- the same availability the Options menu
+        // uses to show/hide its Sound row. (F10 Options, F11 Controls, F12 Sound all open
+        // from here.) The key is consumed either way so it never types.
+        if (ke.kind == SATURN_KEY_F12) {
+            if (music_cdda_has_audio() || sound_has_audio()) {
+                sound_options_page();
+                menu_clear_full();
+                SRL::Core::Synchronize();    // consume the edge that closed the page
+            }
+            continue;
+        }
         // Save/load function keys. These submit the game's own save/restore command
         // rather than doing the work here: the save blob lives in the interpreter,
         // so there is nothing main.cxx could write by itself. The quick variants
@@ -1419,12 +1431,107 @@ static void keyboard_controls_page(void) {
     SRL::Core::Synchronize();
 }
 
-// Sound Options (full-screen, OK/Cancel). Rows: Audio Mix, Track,
-// Music level, PCM level, OK, Cancel. Start/A = OK (commit+save+apply), Esc/B =
+// Diagnostic dump of the raw SRL::Cd::TableOfContents, reached from Sound Options. The
+// TOC is static for the disc's life, so we snapshot it once on entry. Up top we print
+// the FirstTrack / LastTrack / Session records in full (Control, Address, Number,
+// Sector/Frame, session frame-address); below is a scrollable per-track table showing,
+// for every Tracks[] slot, the raw 4-bit Control nibble, the Number, the decoded type,
+// and the 24-bit FrameAddress. This is here to hunt the "empty / no audio track" signal:
+// an absent track reads Control=15 (0x0f) with type Unk and/or FrameAddress=16777215
+// (0x00FFFFFF), while a real audio track reads type Aud with a plausible frame address.
+// Up/Down scroll one row, Left/Right page; A/B/C/Start (or Enter/Esc) returns.
+static void toc_dump_page(void) {
+    SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
+    const int total    = SRL::Cd::MaxTrackCount;   // length of Tracks[]
+    const int rows_per = 19;                        // data rows that fit under the header
+    int top = 0;
+    SRL::Core::Synchronize();   // consume the edge that opened this
+    for (;;) {
+        check_soft_reset();
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        pad_repeat_update();
+        bool up    = g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP;
+        bool down  = g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN;
+        bool left  = g_pad->WasPressed(Button::Left) || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right)|| ke.kind == SATURN_KEY_RIGHT;
+        bool done  = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::B)
+                   || g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START)
+                   || ke.kind == SATURN_KEY_ENTER || ke.kind == SATURN_KEY_ESCAPE
+                   || ke.kind == SATURN_KEY_BACKSPACE;
+        if (done) break;
+        if (up)    top--;
+        if (down)  top++;
+        if (left)  top -= rows_per;
+        if (right) top += rows_per;
+        if (top > total - rows_per) top = total - rows_per;
+        if (top < 0) top = 0;
+
+        menu_clear();
+        int x = 1, y = 0;
+        SRL::Debug::Print(x, y++, "CD TOC DUMP");
+        SRL::Debug::Print(x, y++, "First C=%d A=%d N=%d S=%d F=%d",
+            toc.FirstTrack.Control, toc.FirstTrack.Address, toc.FirstTrack.Number,
+            toc.FirstTrack.LocationBody.LocationData.Sector,
+            toc.FirstTrack.LocationBody.LocationData.Frame);
+        SRL::Debug::Print(x, y++, "Last  C=%d A=%d N=%d S=%d F=%d",
+            toc.LastTrack.Control, toc.LastTrack.Address, toc.LastTrack.Number,
+            toc.LastTrack.LocationBody.LocationData.Sector,
+            toc.LastTrack.LocationBody.LocationData.Frame);
+        SRL::Debug::Print(x, y++, "Sess  C=%d A=%d fad=%d",
+            toc.Session.Control, toc.Session.Address, toc.Session.fad);
+        y++;   // blank separator
+        SRL::Debug::Print(x,     y, "Trk");
+        SRL::Debug::Print(x + 6,  y, "Ct");
+        SRL::Debug::Print(x + 10, y, "Nm");
+        SRL::Debug::Print(x + 14, y, "Type");
+        SRL::Debug::Print(x + 22, y, "Frame");
+        y++;
+        for (int i = 0; i < rows_per; i++) {
+            int t = top + i;
+            if (t >= total) break;
+            const char *tn;
+            switch (toc.Tracks[t].GetType()) {
+                case SRL::Cd::TableOfContents::TrackType::Audio:    tn = "Aud"; break;
+                case SRL::Cd::TableOfContents::TrackType::Audio4Ch: tn = "A4c"; break;
+                case SRL::Cd::TableOfContents::TrackType::Data:     tn = "Dat"; break;
+                default:                                            tn = "Unk"; break;
+            }
+            SRL::Debug::Print(x,     y, "%d", t);
+            SRL::Debug::Print(x + 6,  y, "%d", toc.Tracks[t].Control);
+            SRL::Debug::Print(x + 10, y, "%d", toc.Tracks[t].Number);
+            SRL::Debug::Print(x + 14, y, "%s", tn);
+            SRL::Debug::Print(x + 22, y, "%d", (int) toc.Tracks[t].FrameAddress);
+            y++;
+        }
+        SRL::Debug::Print(x, 27, "%s", hint("Up/Dn scroll  <> page  B=back",
+                                            "Up/Dn scroll  <> page  Esc=back"));
+        menu_sync();
+    }
+    SRL::Core::Synchronize();
+}
+
+// Sound Options (full-screen, OK/Cancel). Which rows appear depends on what is actually
+// available: Audio Mix / Track / Music level need CD-DA on the disc (surfaced here as
+// an>0 from music_cdda_audio_tracks); PCM level needs the loaded game's .BLB
+// (sound_has_audio). OK/Cancel always show. Start/A = OK (commit+save+apply), Esc/B =
 // Cancel (restore snapshot incl. live audio). Previews play live while open.
 static void sound_options_page(void) {
     static const char *const MIX[] = { "Dynamic", "Repeat", "Sequential", "Random" };
-    const int N = 6;   // 0 Mix, 1 Track, 2 Music, 3 PCM, 4 OK, 5 Cancel
+    enum { SR_MIX, SR_TRACK, SR_MUSIC, SR_PCM, SR_TOC, SR_OK, SR_CANCEL };
+    const unsigned char* atracks; int an = music_cdda_audio_tracks(&atracks);
+    bool has_cd  = (an > 0);
+    bool has_blb = (sound_has_audio() != 0);
+
+    // Visible rows in display order: the CD trio only when the disc has audio, PCM only
+    // when the game shipped sound. sel indexes this list, not a fixed row number.
+    int rows[7], nrows = 0;
+    if (has_cd)  { rows[nrows++] = SR_MIX; rows[nrows++] = SR_TRACK; rows[nrows++] = SR_MUSIC; }
+    if (has_blb) rows[nrows++] = SR_PCM;
+    rows[nrows++] = SR_TOC;          // diagnostic: always reachable from here
+    rows[nrows++] = SR_OK;
+    rows[nrows++] = SR_CANCEL;
+
     int sel = 0;
     // Snapshot for Cancel.
     int s_mix = g_mix_mode, s_trk = g_sel_track, s_mus = g_music_level, s_pcm = g_pcm_level;
@@ -1432,7 +1539,6 @@ static void sound_options_page(void) {
     // real track. Absent any demo (and any mix/track change), we leave the stream alone
     // so opening and closing this page in-game doesn't restart the current track.
     bool previewed = false;
-    const unsigned char* atracks; int an = music_cdda_audio_tracks(&atracks);
     int aidx = 0;                     // current index into the audio-track list
     for (int i = 0; i < an; i++) if (atracks[i] == g_sel_track) { aidx = i; break; }
     if (an > 0 && atracks[aidx] != g_sel_track) g_sel_track = atracks[aidx];   // no match: snap to first
@@ -1442,36 +1548,36 @@ static void sound_options_page(void) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
         note_input_device(ke);
         pad_repeat_update();
-        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + N) % N;
-        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % N;
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + nrows) % nrows;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % nrows;
         bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
         bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
         bool ok   = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
                   || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool cancel = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                     || ke.kind == SATURN_KEY_BACKSPACE;
+        int row = rows[sel];
 
-        if (cancel) {   // revert everything, incl. live audio
+        if (cancel || (ok && row == SR_CANCEL)) {   // revert everything, incl. live audio
             g_mix_mode = s_mix; g_sel_track = s_trk; g_music_level = s_mus; g_pcm_level = s_pcm;
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
             music_set_mix(g_mix_mode, g_sel_track);
             if (previewed) music_refresh();   // only if a demo interrupted the stream
             break;
         }
-        if (sel == 0) { if (left && g_mix_mode > 0) g_mix_mode--; if (right && g_mix_mode < MIX_RANDOM) g_mix_mode++; }
-        else if (sel == 1) {
-            if (an > 0) {
-                if (left  && aidx > 0)      aidx--;
-                if (right && aidx < an - 1) aidx++;
-                g_sel_track = atracks[aidx];
-                if (left || right || ok) { music_cdda_play(g_sel_track); previewed = true; }   // demo/preview
-            }
+        if (row == SR_MIX) { if (left && g_mix_mode > 0) g_mix_mode--; if (right && g_mix_mode < MIX_RANDOM) g_mix_mode++; }
+        else if (row == SR_TRACK) {   // only present when has_cd, so an>0/atracks valid
+            if (left  && aidx > 0)      aidx--;
+            if (right && aidx < an - 1) aidx++;
+            g_sel_track = atracks[aidx];
+            if (left || right || ok) { music_cdda_play(g_sel_track); previewed = true; }   // demo/preview
         }
-        else if (sel == 2) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
-                             if (left || right) music_set_volume(g_music_level); }
-        else if (sel == 3) { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++;
-                             if (left || right) sound_set_level(g_pcm_level); }
-        else if (ok && sel == 4) {   // OK
+        else if (row == SR_MUSIC) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
+                                    if (left || right) music_set_volume(g_music_level); }
+        else if (row == SR_PCM)   { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++;
+                                    if (left || right) sound_set_level(g_pcm_level); }
+        else if (ok && row == SR_TOC) { toc_dump_page(); menu_clear_full(); }
+        else if (ok && row == SR_OK) {   // OK
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
             music_set_mix(g_mix_mode, g_sel_track);
             // Only (re)assert playback if a demo interrupted it or the mix/track actually
@@ -1484,29 +1590,41 @@ static void sound_options_page(void) {
             options_save();
             break;
         }
-        else if (ok && sel == 5) {   // Cancel row == B
-            g_mix_mode = s_mix; g_sel_track = s_trk; g_music_level = s_mus; g_pcm_level = s_pcm;
-            music_set_level(g_music_level); sound_set_level(g_pcm_level);
-            music_set_mix(g_mix_mode, g_sel_track);
-            if (previewed) music_refresh();
-            break;
-        }
 
         menu_clear();
         int x = 2, y = 1;
         SRL::Debug::Print(x, y, "SOUND OPTIONS"); y += 2;
-        SRL::Debug::Print(x, y, "%c Audio Mix", sel == 0 ? '>' : ' ');
-        SRL::Debug::Print(x + 14, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
-        SRL::Debug::Print(x, y, "%c Track", sel == 1 ? '>' : ' ');
-        if (an > 0) SRL::Debug::Print(x + 14, y++, "%d  (A=demo)", aidx + 1);   // 1-based
-        else        SRL::Debug::Print(x + 14, y++, "no audio on disc");
-        SRL::Debug::Print(x, y, "%c Music", sel == 2 ? '>' : ' ');
-        SRL::Debug::Print(x + 14, y++, "%d", g_music_level);
-        SRL::Debug::Print(x, y, "%c PCM", sel == 3 ? '>' : ' ');
-        SRL::Debug::Print(x + 14, y++, "%d", g_pcm_level);
-        y++;
-        SRL::Debug::Print(x, y++, "%c OK", sel == 4 ? '>' : ' ');
-        SRL::Debug::Print(x, y++, "%c Cancel", sel == 5 ? '>' : ' ');
+        for (int i = 0; i < nrows; i++) {
+            char cur = (i == sel) ? '>' : ' ';
+            switch (rows[i]) {
+                case SR_MIX:
+                    SRL::Debug::Print(x, y, "%c Audio Mix", cur);
+                    SRL::Debug::Print(x + 14, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
+                    break;
+                case SR_TRACK:
+                    SRL::Debug::Print(x, y, "%c Track", cur);
+                    SRL::Debug::Print(x + 14, y++, "%d  (A=demo)", aidx + 1);   // 1-based
+                    break;
+                case SR_MUSIC:
+                    SRL::Debug::Print(x, y, "%c Music", cur);
+                    SRL::Debug::Print(x + 14, y++, "%d", g_music_level);
+                    break;
+                case SR_PCM:
+                    SRL::Debug::Print(x, y, "%c PCM", cur);
+                    SRL::Debug::Print(x + 14, y++, "%d", g_pcm_level);
+                    break;
+                case SR_TOC:
+                    SRL::Debug::Print(x, y++, "%c View CD TOC", cur);
+                    break;
+                case SR_OK:
+                    y++;   // blank separator before the actions
+                    SRL::Debug::Print(x, y++, "%c OK", cur);
+                    break;
+                case SR_CANCEL:
+                    SRL::Debug::Print(x, y++, "%c Cancel", cur);
+                    break;
+            }
+        }
         y++;
         SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel", "<> change  Enter=OK  Esc=Cancel"));
         menu_sync();
@@ -1517,42 +1635,53 @@ static void sound_options_page(void) {
 // Options menu (centered box): a difficulty slider plus actions (Configure,
 // Controls, Sound Options, Return to Title, Done). Up/Down select a row; on
 // Difficulty, Left/Right change it; A/Enter activate other rows; B/Esc close.
-// Audio settings now live on the dedicated Sound Options page. Difficulty is
-// written to backup only if the player actually changed it.
+// Sound Options only appears when there is audio to configure -- CD-DA on the disc
+// or the game's .BLB; with neither, the row is hidden. Audio settings live on that
+// page. Difficulty is written to backup only if the player actually changed it.
 static void options_menu(void) {
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
     static const char *const DESC[]  = { "Walkthrough steps only",
                                          "Valid-command typeahead",
                                          "Typeahead off" };
     const int x0 = 5, y0 = 8, w = 30, h = 15;
-    const int NITEMS = 6;   // 0=Diff 1=Configure 2=Controls 3=Sound 4=Return 5=Done
+    enum { OI_DIFF, OI_CONFIG, OI_CONTROLS, OI_SOUND, OI_RETURN, OI_DONE };
+    bool sound_available = (music_cdda_has_audio() != 0) || (sound_has_audio() != 0);
+    int items[6], nitems = 0;
+    items[nitems++] = OI_DIFF;
+    items[nitems++] = OI_CONFIG;
+    items[nitems++] = OI_CONTROLS;
+    if (sound_available) items[nitems++] = OI_SOUND;
+    items[nitems++] = OI_RETURN;
+    items[nitems++] = OI_DONE;
+
     int diff = g_difficulty, sel = 0;
     SRL::Core::Synchronize();   // consume the edge that opened this
     for (;;) {
         check_soft_reset();
         SaturnKeyEvent ke = saturn_keyboard_poll();
         note_input_device(ke);
-        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + NITEMS) % NITEMS;
-        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % NITEMS;
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + nitems) % nitems;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % nitems;
         bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
         bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
-        if (sel == 0) { if (left && diff > DIFF_EASY) diff--; if (right && diff < DIFF_HARD) diff++; }
+        int item = items[sel];
+        if (item == OI_DIFF) { if (left && diff > DIFF_EASY) diff--; if (right && diff < DIFF_HARD) diff++; }
         bool act = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
                  || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
         if (back) break;
         if (act) {
-            if (sel == 1) { config_page(); }
-            else if (sel == 2) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear_full(); }
-            else if (sel == 3) { sound_options_page(); menu_clear_full(); }
-            else if (sel == 4) {   // Return to Title Screen (soft reset; never returns on Yes)
+            if (item == OI_CONFIG) { config_page(); }
+            else if (item == OI_CONTROLS) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear_full(); }
+            else if (item == OI_SOUND) { sound_options_page(); menu_clear_full(); }
+            else if (item == OI_RETURN) {   // Return to Title Screen (soft reset; never returns on Yes)
                 if (menu_confirm("Return to the title screen?", "Are you sure?")) {
                     if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
                     soft_reset_to_title();
                 }
             }
-            else if (sel == 5) break;   // Done  (sel==0 Difficulty: activate is a no-op)
+            else if (item == OI_DONE) break;   // (OI_DIFF: activate is a no-op)
         }
 
         for (int r = 0; r < h; r++) {
@@ -1564,15 +1693,21 @@ static void options_menu(void) {
             SRL::Debug::Print(x0, y0 + r, "%s", line);
         }
         SRL::Debug::Print(x0 + 11, y0 + 1, "OPTIONS");
-        SRL::Debug::Print(x0 + 2, y0 + 3, "%c Difficulty: %s %s %s", sel == 0 ? '>' : ' ',
+        SRL::Debug::Print(x0 + 2, y0 + 3, "%c Difficulty: %s %s %s", item == OI_DIFF ? '>' : ' ',
                           diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
         SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
-        SRL::Debug::Print(x0 + 2, y0 + 6, "%c Configure MojoZork", sel == 1 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 7, "%c %s", sel == 2 ? '>' : ' ',
-                          g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls");
-        SRL::Debug::Print(x0 + 2, y0 + 8,  "%c Sound Options", sel == 3 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 9,  "%c Return to Title Screen", sel == 4 ? '>' : ' ');
-        SRL::Debug::Print(x0 + 2, y0 + 10, "%c Done", sel == 5 ? '>' : ' ');
+        int ay = y0 + 6;   // action rows follow the difficulty block; Sound Options may be absent
+        for (int i = 0; i < nitems; i++) {
+            char cur = (i == sel) ? '>' : ' ';
+            switch (items[i]) {
+                case OI_DIFF: break;   // drawn above
+                case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Configure MojoZork", cur); break;
+                case OI_CONTROLS: SRL::Debug::Print(x0 + 2, ay++, "%c %s", cur, g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls"); break;
+                case OI_SOUND:    SRL::Debug::Print(x0 + 2, ay++, "%c Sound Options", cur); break;
+                case OI_RETURN:   SRL::Debug::Print(x0 + 2, ay++, "%c Return to Title Screen", cur); break;
+                case OI_DONE:     SRL::Debug::Print(x0 + 2, ay++, "%c Done", cur); break;
+            }
+        }
         SRL::Debug::Print(x0 + 2, y0 + 13, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
         menu_sync();
     }

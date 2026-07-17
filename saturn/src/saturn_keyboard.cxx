@@ -183,6 +183,7 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == 1)                { ev.kind = SATURN_KEY_F9;  return ev; }   // 0x01
     if (code == 9)                { ev.kind = SATURN_KEY_F10; return ev; }   // 0x09
     if (code == 120)              { ev.kind = SATURN_KEY_F11; return ev; }   // 0x78
+    if (code == 7)                { ev.kind = SATURN_KEY_F12; return ev; }   // 0x07
     // Ctrl+C: clear the input line (checked before the char map so it doesn't type 'c').
     if (ctrl_down && code < 128 && kbd_map[code] == 'c') { ev.kind = SATURN_KEY_CLEAR; return ev; }
     if (is_numpad_digit(code) && !keyboard_get_num()) return ev;   // NumLock off: suppress numpad digits
