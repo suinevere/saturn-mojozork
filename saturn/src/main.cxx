@@ -906,6 +906,15 @@ static void typeahead_scan_screen(TrieNode *root) {
 
 extern "C" void saturn_readline(char *buf, int maxlen) {
     if (maxlen < 2) { if (maxlen > 0) buf[0] = '\0'; return; }
+    // Disarm a quick-save destination that was never spent. F5 arms it and submits
+    // in the same breath, so it is always consumed before we are back here -- unless
+    // the story's save opcode bailed out early (a failed allocation or story re-read
+    // never reaches saturn_save_blob), in which case a stale slot would silently
+    // hijack the player's next save. Being at a prompt means it is spent or void.
+    // The restore side can't be swept the same way: "Load Save Game" arms
+    // g_restore_* before the very readline that submits its "restore".
+    g_save_device = -1;
+    g_save_slot   = -1;
     // "Load Save Game" queues a one-shot "restore" so the first turn applies the
     // pre-picked save (see g_restore_slot).
     if (g_autocmd != nullptr) {
