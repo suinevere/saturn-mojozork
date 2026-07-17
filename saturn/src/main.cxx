@@ -483,6 +483,12 @@ static void history_recall(KeyboardState *k, int older) {
     }
 }
 
+// Set by render_console: true when the view has off-screen text below it (the
+// "more v" marker is showing). render_keyboard reads it to repaint the marker in
+// real-keyboard mode, where the input line is drawn over the console's last row and
+// would otherwise wipe it.
+static bool g_more_below = false;
+
 static void render_console(void) {
     int rows = console_height();
     int total = console_line_count();
@@ -497,9 +503,14 @@ static void render_console(void) {
         if (li >= 0 && li < total)
             SRL::Debug::Print(0, TOP_MARGIN + r, "%s", console_get_line(li));
     }
-    // Edge markers when there's off-screen text above/below the window.
+    // Edge markers when there's off-screen text above/below the window. "more v" is
+    // 6 cells wide and the text layer is 40 cells (0..39), so it starts at column 34
+    // to keep its trailing 'v' on screen -- column 35 pushed the 'v' to cell 40 and
+    // clipped it. g_more_below lets render_keyboard repaint the marker after the
+    // input line (see there).
     if (start > 0 && !top_blank) SRL::Debug::Print(39, TOP_MARGIN, "^");
-    if (start + rows < total)    SRL::Debug::Print(35, TOP_MARGIN + rows - 1, "more v");
+    g_more_below = (start + rows < total);
+    if (g_more_below)            SRL::Debug::Print(34, TOP_MARGIN + rows - 1, "more v");
 }
 
 // Position the scrollback on the turn's output once it has landed (called at the
@@ -594,6 +605,9 @@ static void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, 
         SRL::Debug::PrintClearLine(base);
         SRL::Debug::PrintClearLine(row);
         draw_input_line(row, k, prediction, current_word_len, block_on);
+        // The input line shares the console's last row here, so the clear above wiped
+        // any "more v" render_console drew on it. Repaint it (same cell as there).
+        if (g_more_below) SRL::Debug::Print(34, row, "more v");
         return;
     }
     int row = base;   // input line sits directly below the console
@@ -1414,6 +1428,10 @@ static void sound_options_page(void) {
     int sel = 0;
     // Snapshot for Cancel.
     int s_mix = g_mix_mode, s_trk = g_sel_track, s_mus = g_music_level, s_pcm = g_pcm_level;
+    // A live track demo interrupts whatever was streaming, so exit must re-assert the
+    // real track. Absent any demo (and any mix/track change), we leave the stream alone
+    // so opening and closing this page in-game doesn't restart the current track.
+    bool previewed = false;
     const unsigned char* atracks; int an = music_cdda_audio_tracks(&atracks);
     int aidx = 0;                     // current index into the audio-track list
     for (int i = 0; i < an; i++) if (atracks[i] == g_sel_track) { aidx = i; break; }
@@ -1437,7 +1455,7 @@ static void sound_options_page(void) {
             g_mix_mode = s_mix; g_sel_track = s_trk; g_music_level = s_mus; g_pcm_level = s_pcm;
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
             music_set_mix(g_mix_mode, g_sel_track);
-            music_refresh();
+            if (previewed) music_refresh();   // only if a demo interrupted the stream
             break;
         }
         if (sel == 0) { if (left && g_mix_mode > 0) g_mix_mode--; if (right && g_mix_mode < MIX_RANDOM) g_mix_mode++; }
@@ -1446,7 +1464,7 @@ static void sound_options_page(void) {
                 if (left  && aidx > 0)      aidx--;
                 if (right && aidx < an - 1) aidx++;
                 g_sel_track = atracks[aidx];
-                if (left || right || ok) music_cdda_play(g_sel_track);   // demo/preview
+                if (left || right || ok) { music_cdda_play(g_sel_track); previewed = true; }   // demo/preview
             }
         }
         else if (sel == 2) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
@@ -1456,15 +1474,21 @@ static void sound_options_page(void) {
         else if (ok && sel == 4) {   // OK
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
             music_set_mix(g_mix_mode, g_sel_track);
-            if (g_mix_mode == MIX_DYNAMIC) music_refresh();   // hand back to the room engine
-            else music_start();                               // start the chosen track now
+            // Only (re)assert playback if a demo interrupted it or the mix/track actually
+            // changed; otherwise leave the current stream running so closing the page is
+            // seamless in-game.
+            if (previewed || g_mix_mode != s_mix || g_sel_track != s_trk) {
+                if (g_mix_mode == MIX_DYNAMIC) music_refresh();   // hand back to the room engine
+                else music_start();                               // start the chosen track now
+            }
             options_save();
             break;
         }
         else if (ok && sel == 5) {   // Cancel row == B
             g_mix_mode = s_mix; g_sel_track = s_trk; g_music_level = s_mus; g_pcm_level = s_pcm;
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
-            music_set_mix(g_mix_mode, g_sel_track); music_refresh();
+            music_set_mix(g_mix_mode, g_sel_track);
+            if (previewed) music_refresh();
             break;
         }
 
@@ -2130,9 +2154,12 @@ static void ensure_online_typeahead(void) {
 // times because the NetLink<->DreamPi carrier handshake is probabilistic.
 static void online_mode(void) {
     ensure_online_typeahead();   // load the Zork I vocabulary before the modem is up
-    // The vocab load's CD reads (first online session) stop CD-DA; start a fresh track
-    // so the dialer and the whole online session play music instead of going silent.
-    music_cdda_play(g_sel_track);
+    // The first online session's vocab load does CD reads that stop CD-DA, and going
+    // straight here on boot can arrive before the menu track has begun -- either way,
+    // make sure something is playing. But when the menu track is already looping (the
+    // common case: it never stopped), leave it be so it stays seamless rather than
+    // restarting from the top.
+    if (!music_cdda_is_playing()) music_cdda_play(g_sel_track);
     const char *number = g_dialnum;   // change it in Options -> Configure MojoZork
 
     // ---- connect, with auto-redial on carrier-training failure ----
