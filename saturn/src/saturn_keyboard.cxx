@@ -173,6 +173,16 @@ extern "C" SaturnKeyEvent saturn_keyboard_poll(void) {
     if (code == 136)              { ev.kind = SATURN_KEY_END;      return ev; }
     if (code == 139)              { ev.kind = SATURN_KEY_PAGEUP;   return ev; }
     if (code == 140)              { ev.kind = SATURN_KEY_PAGEDOWN; return ev; }
+    // Function keys (PS/2 set 2, same table as the rest of these codes). Every one
+    // is unmapped in kbd_map, so they could never have typed a character anyway --
+    // they sit here because that is where the other special keys live.
+    if (code == 6)                { ev.kind = SATURN_KEY_F2;  return ev; }   // 0x06
+    if (code == 4)                { ev.kind = SATURN_KEY_F3;  return ev; }   // 0x04
+    if (code == 3)                { ev.kind = SATURN_KEY_F5;  return ev; }   // 0x03
+    if (code == 11)               { ev.kind = SATURN_KEY_F6;  return ev; }   // 0x0B
+    if (code == 1)                { ev.kind = SATURN_KEY_F9;  return ev; }   // 0x01
+    if (code == 9)                { ev.kind = SATURN_KEY_F10; return ev; }   // 0x09
+    if (code == 120)              { ev.kind = SATURN_KEY_F11; return ev; }   // 0x78
     // Ctrl+C: clear the input line (checked before the char map so it doesn't type 'c').
     if (ctrl_down && code < 128 && kbd_map[code] == 'c') { ev.kind = SATURN_KEY_CLEAR; return ev; }
     if (is_numpad_digit(code) && !keyboard_get_num()) return ev;   // NumLock off: suppress numpad digits
