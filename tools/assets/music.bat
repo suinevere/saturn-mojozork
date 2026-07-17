@@ -31,8 +31,11 @@ IF EXIST "%TMP_IMG%" RMDIR /S /Q "%TMP_IMG%"
 MKDIR "%TMP_IMG%"
 ECHO Downloading audio image: %AUDIO_URL%
 curl -L -o "%TEMP%\mzaudio.zip" "%AUDIO_URL%"
+IF ERRORLEVEL 1 ( ECHO ERROR: audio download failed & EXIT /B 1 )
 powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -DestinationPath '%TMP_IMG%' -Force"
+IF ERRORLEVEL 1 ( ECHO ERROR: failed to extract audio zip & EXIT /B 1 )
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\split.ps1" -ImgDir "%TMP_IMG%" -OutDir "%AUDIO_DIR%" -Dd ".\bin\win\dd.exe"
+IF ERRORLEVEL 1 ( ECHO ERROR: audio split failed & EXIT /B 1 )
 ECHO Audio split complete -^> %AUDIO_DIR%
 ENDLOCAL
 GOTO :eof

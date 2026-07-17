@@ -25,7 +25,7 @@ split_bincue() {
     if [ $((i+1)) -lt "$n" ]; then endf=${starts[$((i+1))]}; else endf=$(( total / 2352 )); fi
     local count=$(( endf - startf )) name
     printf -v name "track%02d.bin" "${nums[$i]}"
-    dd if="$bin" of="$out/$name" bs=2352 skip="$startf" count="$count" status=none
+    dd if="$bin" of="$out/$name" bs=2352 skip="$startf" count="$count" 2>/dev/null
     echo "  split -> $name ($count sectors)"
   done
 }

@@ -18,6 +18,6 @@ for ($i=0; $i -lt $tracks.Count; $i++) {
   $end = if ($i+1 -lt $tracks.Count) { $tracks[$i+1].Start } else { [int]($total/2352) }
   $count=$end-$start
   $name = "track{0:D2}.bin" -f $tracks[$i].Num
-  & $Dd "if=$($bin.FullName)" "of=$OutDir\$name" bs=2352 skip=$start count=$count status=none
+  & $Dd "if=$($bin.FullName)" "of=$OutDir\$name" bs=2352 skip=$start count=$count 2>$null
   Write-Host "  split -> $name ($count sectors)"
 }
