@@ -4,6 +4,7 @@
 extern "C" {
 #include "console.h"
 #include "keyboard.h"
+#include "display.h"
 #include "saturn_keyboard.h"
 #include "saturn_backup.h"
 #include "saturn_glue.h"
@@ -32,6 +33,10 @@ static int g_music_level = 7;   // CD-DA music level 0..7 (default full)
 static int g_pcm_level   = 4;   // PCM sound-effect level 0..7 (default mid)
 static int g_mix_mode  = MIX_DYNAMIC;   // Audio Mix: Dynamic/Override/Sequential/Random
 static int g_sel_track = 10;            // selected/override track, also the menu track
+
+// Display colors (Options > Display). Applied to VDP2 by display_apply();
+// persisted in MOJOOPTS alongside the other options.
+static DisplayState g_display;
 
 // Online dial number (editable in Options -> Configure Z-ATURN; persisted).
 static char g_dialnum[24] = "199403";
@@ -238,6 +243,24 @@ static const int CHORD_DEFAULT[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt
 // Older saves (difficulty only, or difficulty+dial with a zeroed tail) load
 // fine: the sound byte reads as 0 (absent), which the flag encoding below
 // treats as "on" so pre-existing saves aren't silently muted.
+static void title_bg_show(void);
+static void title_bg_hide(void);
+
+// Push g_display to the hardware. Index 15 is the color index the SGL font
+// glyphs use -- and the one install_block_glyph() fills -- so this recolors
+// body text, menus, the on-screen keyboard, and the cursor in one call.
+// (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
+// Debug::Print reads ASCII::colorBank.)
+static void display_apply(void) {
+    SRL::ASCII::SetColor(display_text_rgb(g_display.text), 15);
+    if (display_is_image(&g_display)) {
+        title_bg_show();       // image backgrounds arrive in a later task
+    } else {
+        title_bg_hide();
+        SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
+    }
+}
+
 static void options_load(void) {
     uint8_t buf[64];
     for (int z = 0; z < (int) sizeof(buf); z++) buf[z] = 0;
@@ -271,6 +294,12 @@ static void options_load(void) {
         if (buf[s + 1] <= MIX_RANDOM) g_mix_mode = buf[s + 1];
         if (buf[s + 2] >= MUSIC_TRACK_MIN && buf[s + 2] <= MUSIC_TRACK_MAX) g_sel_track = buf[s + 2];
     }
+    // Display block follows the sound block: sentinel 1, then [palette][bg][text].
+    // display_decode() range-checks every field and falls back to defaults.
+    int dsp = s + 3;
+    if (dsp + DISP_BLOB_BYTES <= (int) sizeof(buf)) {
+        display_decode(buf + dsp, DISP_BLOB_BYTES, &g_display);
+    }
 }
 static void options_save(void) {
     uint8_t buf[64]; int n = 0;
@@ -285,6 +314,7 @@ static void options_save(void) {
     buf[n++] = 1;                                 // sound-block sentinel
     buf[n++] = (uint8_t) g_mix_mode;              // 0..3
     buf[n++] = (uint8_t) g_sel_track;             // 2..32
+    if (n + DISP_BLOB_BYTES <= 62) n += display_encode(&g_display, buf + n);
     saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
 }
 static void options_menu(void);   // defined below, near the other menus
@@ -2456,6 +2486,7 @@ static void online_mode(void) {
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
     saturn_bup_init();
+    display_defaults(&g_display);
     options_load();   // restore saved difficulty (defaults to Easy)
 
     static MultiPad pads;
@@ -2491,6 +2522,7 @@ int main(void) {
     // so the menu track then plays uninterrupted. On soft-reset re-entry the preload is
     // a no-op (already cached), so no read happens and the music starts cleanly.
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+    SRL::ASCII::SetColor(DISP_RGB555(0xFF, 0xFF, 0xFF), 15);
     title_bg_show();
     title_draw_art();
     SRL::Core::Synchronize();
@@ -2501,7 +2533,7 @@ int main(void) {
     music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow
 
     int seed = title_and_seed();         // redraws the same art + "Press any button", waits
-    title_bg_hide();                     // menus and gameplay run on solid black
+    display_apply();   // colors (or an image background) take over from the title
 
     // Top-level mode choice. "Play Online" runs the multizork telnet terminal
     // and returns here on disconnect; "Play Local" falls through to the offline
