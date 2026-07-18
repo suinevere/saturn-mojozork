@@ -60,6 +60,11 @@ void display_set_images(const char *const *names, int count);
 int display_image_count(void);
 int display_bg_count(void);          /* DISP_BG_COLOR_N + display_image_count() */
 
+/* DISP_PRESET_N color presets followed by one preset per registered image.
+   Image presets pair that image's background with white text. Call
+   display_set_images() first -- the count moves with the disc's TGA list. */
+int display_palette_count(void);
+
 int display_is_image(const DisplayState *d);
 const char *display_bg_name(const DisplayState *d);   /* color name or file name */
 

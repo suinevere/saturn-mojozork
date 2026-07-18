@@ -371,6 +371,89 @@ static void test_decode_multi_field_corruption(void) {
     assert(d.text == def.text);                 /* corrupt field fell back */
 }
 
+static void test_palette_count_includes_images(void) {
+    static const char *const names[] = { "FOREST.TGA", "CASTLE.TGA" };
+    display_set_images(NULL, 0);
+    assert(display_palette_count() == DISP_PRESET_N);
+    display_set_images(names, 2);
+    assert(display_palette_count() == DISP_PRESET_N + 2);
+    display_set_images(NULL, 0);
+}
+
+static void test_image_presets_pin_white_text(void) {
+    static const char *const names[] = { "FOREST.TGA", "CASTLE.TGA" };
+    display_set_images(names, 2);
+    for (int i = 0; i < 2; i++) {
+        int p = DISP_PRESET_N + i;
+        assert(display_preset_bg(p)   == DISP_BG_COLOR_N + i);
+        assert(display_preset_text(p) == DISP_TEXT_WHITE);
+        assert(strcmp(display_preset_name(p), names[i]) == 0);
+    }
+    display_set_images(NULL, 0);
+}
+
+static void test_cycle_palette_reaches_images(void) {
+    static const char *const names[] = { "FOREST.TGA", "CASTLE.TGA" };
+    DisplayState d;
+    display_set_images(names, 2);
+    display_defaults(&d);
+    /* Walk forward from the last color preset into the image presets. */
+    d.palette = DISP_PRESET_N - 1;
+    d.bg      = display_preset_bg(d.palette);
+    d.text    = display_preset_text(d.palette);
+    display_cycle_palette(&d, 1);
+    assert(d.palette == DISP_PRESET_N);
+    assert(d.bg      == DISP_BG_COLOR_N);
+    assert(d.text    == DISP_TEXT_WHITE);
+    display_cycle_palette(&d, 1);
+    assert(d.palette == DISP_PRESET_N + 1);
+    /* Past the last image it wraps to preset 0. */
+    display_cycle_palette(&d, 1);
+    assert(d.palette == 0);
+    /* Backward from preset 0 lands on the last image. */
+    display_cycle_palette(&d, -1);
+    assert(d.palette == DISP_PRESET_N + 1);
+    display_set_images(NULL, 0);
+}
+
+static void test_image_preset_name_shown_not_custom(void) {
+    static const char *const names[] = { "FOREST.TGA" };
+    DisplayState d;
+    display_set_images(names, 1);
+    d.palette = DISP_PRESET_N;
+    d.bg      = DISP_BG_COLOR_N;
+    d.text    = DISP_TEXT_WHITE;
+    assert(strcmp(display_palette_name(&d), "FOREST.TGA") == 0);
+    /* Diverging from the pinned pair reads as Custom, same as color presets. */
+    d.text = DISP_TEXT_GREEN;
+    assert(strcmp(display_palette_name(&d), "Custom") == 0);
+    display_set_images(NULL, 0);
+}
+
+static void test_decode_rejects_stale_image_preset(void) {
+    static const char *const two[]  = { "FOREST.TGA", "CASTLE.TGA" };
+    static const char *const one[]  = { "FOREST.TGA" };
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    /* Save while two images exist, selecting the second one. */
+    display_set_images(two, 2);
+    saved.palette = DISP_PRESET_N + 1;
+    saved.bg      = DISP_BG_COLOR_N + 1;
+    saved.text    = DISP_TEXT_WHITE;
+    display_encode(&saved, blob);
+
+    /* Round-trips intact while both images are present. */
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
+    assert(d.palette == DISP_PRESET_N + 1);
+
+    /* On a disc with only one image, the stale preset index is rejected. */
+    display_set_images(one, 1);
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 0);
+    assert(d.palette < display_palette_count());
+    display_set_images(NULL, 0);
+}
+
 int main(void) {
     test_tables_well_formed();
     test_known_colors();
@@ -382,6 +465,11 @@ int main(void) {
     test_legibility_guard();
     test_guard_inactive_over_images();
     test_cycle_palette();
+    test_palette_count_includes_images();
+    test_image_presets_pin_white_text();
+    test_cycle_palette_reaches_images();
+    test_image_preset_name_shown_not_custom();
+    test_decode_rejects_stale_image_preset();
     test_encode_decode_roundtrip();
     test_collisions_roundtrip();
     test_custom_state_roundtrips();

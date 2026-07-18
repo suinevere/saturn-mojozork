@@ -83,36 +83,6 @@ const char *display_text_name(int index) {
     return TEXT_NAME[index];
 }
 
-const char *display_preset_name(int index) {
-    if (index < 0 || index >= DISP_PRESET_N) return "?";
-    return PRESETS[index].name;
-}
-
-int display_preset_bg(int index) {
-    if (index < 0 || index >= DISP_PRESET_N) return DISP_BG_BLACK;
-    return PRESETS[index].bg;
-}
-
-int display_preset_text(int index) {
-    if (index < 0 || index >= DISP_PRESET_N) return DISP_TEXT_BRIGHT_GREEN;
-    return PRESETS[index].text;
-}
-
-const char *display_palette_name(const DisplayState *d) {
-    if (d->palette >= 0 && d->palette < DISP_PRESET_N
-        && d->bg   == PRESETS[d->palette].bg
-        && d->text == PRESETS[d->palette].text) {
-        return PRESETS[d->palette].name;
-    }
-    return g_custom_label;
-}
-
-void display_defaults(DisplayState *d) {
-    d->palette = 12;                        /* IBM PC (MDA): closest to the */
-    d->bg      = PRESETS[12].bg;            /* previous hardcoded appearance */
-    d->text    = PRESETS[12].text;
-}
-
 static const char *const *g_image_names = 0;
 static int g_image_count = 0;
 
@@ -125,6 +95,45 @@ void display_set_images(const char *const *names, int count) {
 
 int display_image_count(void) { return g_image_count; }
 int display_bg_count(void)    { return DISP_BG_COLOR_N + g_image_count; }
+
+/* Palette indices run [0, DISP_PRESET_N) over the microcomputer presets, then
+   one entry per registered image. An image preset pairs that image's
+   background slot with white text -- the pairing the Display page offers so a
+   picture never sits under a color that vanishes into it. */
+int display_palette_count(void) { return DISP_PRESET_N + g_image_count; }
+
+const char *display_preset_name(int index) {
+    if (index < 0 || index >= display_palette_count()) return "?";
+    if (index >= DISP_PRESET_N) return g_image_names[index - DISP_PRESET_N];
+    return PRESETS[index].name;
+}
+
+int display_preset_bg(int index) {
+    if (index < 0 || index >= display_palette_count()) return DISP_BG_BLACK;
+    if (index >= DISP_PRESET_N) return DISP_BG_COLOR_N + (index - DISP_PRESET_N);
+    return PRESETS[index].bg;
+}
+
+int display_preset_text(int index) {
+    if (index < 0 || index >= display_palette_count()) return DISP_TEXT_BRIGHT_GREEN;
+    if (index >= DISP_PRESET_N) return DISP_TEXT_WHITE;
+    return PRESETS[index].text;
+}
+
+const char *display_palette_name(const DisplayState *d) {
+    if (d->palette >= 0 && d->palette < display_palette_count()
+        && d->bg   == display_preset_bg(d->palette)
+        && d->text == display_preset_text(d->palette)) {
+        return display_preset_name(d->palette);
+    }
+    return g_custom_label;
+}
+
+void display_defaults(DisplayState *d) {
+    d->palette = 12;                        /* IBM PC (MDA): closest to the */
+    d->bg      = PRESETS[12].bg;            /* previous hardcoded appearance */
+    d->text    = PRESETS[12].text;
+}
 
 int display_is_image(const DisplayState *d) {
     return d->bg >= DISP_BG_COLOR_N && d->bg < display_bg_count();
@@ -165,16 +174,17 @@ void display_cycle_text(DisplayState *d, int dir) {
 }
 
 void display_cycle_palette(DisplayState *d, int dir) {
+    int count = display_palette_count();
     int next;
     if (display_palette_name(d) == g_custom_label) {
         /* Currently Custom: enter the list at whichever end we are heading for. */
-        next = (dir > 0) ? 0 : DISP_PRESET_N - 1;
+        next = (dir > 0) ? 0 : count - 1;
     } else {
-        next = step(d->palette, dir, DISP_PRESET_N);
+        next = step(d->palette, dir, count);
     }
     d->palette = next;
-    d->bg      = PRESETS[next].bg;
-    d->text    = PRESETS[next].text;
+    d->bg      = display_preset_bg(next);
+    d->text    = display_preset_text(next);
 }
 
 int display_encode(const DisplayState *d, unsigned char *out) {
@@ -191,7 +201,9 @@ int display_decode(const unsigned char *buf, int len, DisplayState *d) {
 
     if (!buf || len < DISP_BLOB_BYTES || buf[0] != 1) return 0;
 
-    if (buf[1] < DISP_PRESET_N)  d->palette = (int) buf[1];  else ok = 0;
+    /* Image presets exist only while their image is on the disc, so validate
+       against the live count, not the compile-time preset total. */
+    if (buf[1] < display_palette_count()) d->palette = (int) buf[1];  else ok = 0;
     /* An image index is valid only if that image is on the disc right now. */
     if (buf[2] < display_bg_count()) d->bg   = (int) buf[2];  else ok = 0;
     if (buf[3] < DISP_TEXT_N)    d->text    = (int) buf[3];  else ok = 0;
@@ -204,8 +216,8 @@ int display_decode(const unsigned char *buf, int len, DisplayState *d) {
        by this point, and every preset pair is guaranteed legible, so restore
        both fields from it rather than from display_defaults(). */
     if (clashes(d->bg, d->text)) {
-        d->bg   = PRESETS[d->palette].bg;
-        d->text = PRESETS[d->palette].text;
+        d->bg   = display_preset_bg(d->palette);
+        d->text = display_preset_text(d->palette);
         ok = 0;
     }
 
