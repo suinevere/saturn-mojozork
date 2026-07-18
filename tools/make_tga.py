@@ -34,6 +34,7 @@ from PIL import Image
 
 WIDTH, HEIGHT = 320, 224
 MAX_STEM = 8  # ISO9660 8.3; the build passes --norock to xorrisofs
+IMAGE_MAX = 8  # DISP_IMAGE_MAX in saturn/src/display.h -- extras are ignored at runtime
 
 
 def encode_tga(im):
@@ -116,6 +117,12 @@ def batch(srcdir, dstdir):
         print(f"  {'wrote' if status == 'wrote' else 'skip '} {message}")
         if status == "wrote":
             written += 1
+
+    total = len(sorted(dstdir.glob("*.TGA"))) if dstdir.is_dir() else 0
+    if total > IMAGE_MAX:
+        print(f"  WARN  {total} TGAs present but the Display Options selector shows "
+              f"only {IMAGE_MAX}; the extras will not appear. Raise DISP_IMAGE_MAX "
+              f"in saturn/src/display.h or remove a background.")
 
     return written
 

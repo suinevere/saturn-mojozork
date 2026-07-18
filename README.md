@@ -49,6 +49,10 @@ Builds on Windows, Linux, or macOS:
 
 - Git for Windows (**Git Bash**) or a POSIX shell.
 - The SaturnRingLib SH-2 cross-compiler, fetched in Step 2 below (≈ needs `curl`/`unzip`).
+- **Python 3.9+** *(optional)* — converts the background art in `tools/assets/png/`
+  into disc-ready TGAs during the build, provisioning its own virtualenv on first
+  run. Without it the build still succeeds using the TGAs already committed under
+  `saturn/cd/data/TGA/`.
 - An emulator for testing (e.g. **Mednafen** with Saturn BIOS), or real hardware.
 
 ---
@@ -208,7 +212,40 @@ Microsoft has open-sourced, while the rest are included as-is from the catalog.
 
 ---
 
-## 6. Playing online from a real Saturn
+## 6. Adding a background image
+
+The Display Options page lists every `*.TGA` it finds in `saturn/cd/data/TGA/`.
+Those files are generated from the PNGs in `tools/assets/png/` on every build —
+you do not create them by hand.
+
+1. Save your artwork as a **320x224** PNG in `tools/assets/png/`, with a name of
+   **8 characters or fewer**, e.g. `tools/assets/png/CAVE.PNG`.
+2. Rebuild: `cd saturn && ./compile.bat debug`.
+3. The new background appears in **Display Options**.
+
+> **The selector shows at most 8 backgrounds** and the disc currently ships
+> exactly 8. Adding a ninth silently does nothing — it converts fine, but the
+> Saturn stops scanning at 8. The converter prints a `WARN` line when you cross
+> that line. To actually make room, raise `DISP_IMAGE_MAX` in
+> `saturn/src/display.h` (and check `g_image_name`'s fixed-size arrays in
+> `saturn/src/main.cxx` alongside it), or retire a background.
+
+The size and name limits are enforced, not advisory: the Saturn reads these as
+ISO9660 8.3 names, and the converter skips anything that is not exactly 320x224
+rather than guessing at a crop. Both cases print a warning naming the file and
+never fail the build.
+
+Commit the generated `saturn/cd/data/TGA/*.TGA` alongside your PNG — they are
+what lets someone without Python build a complete disc.
+
+Conversion is handled by `tools/make_tga.py`, which quantizes to 255 colors and
+reserves palette index 0 (VDP2 renders index 0 as transparent) and emits 8bpp
+paletted output (an RGB555 bitmap would span two VRAM banks and render as
+static). Run `python tools/tests/test_make_tga.py` to exercise it directly.
+
+---
+
+## 7. Playing online from a real Saturn
 
 **Play Online** dials a NetLink modem into a **DreamPi** running the Netlink
 tunnel, which relays the dialed code to a multizork telnet server
@@ -241,7 +278,7 @@ client design is documented under `docs/`.
 
 ---
 
-## 7. Hosting the multizork server yourself
+## 8. Hosting the multizork server yourself
 
 The **[`docker/`](docker/)** directory is a self-contained Docker setup for the
 `multizorkd` telnet server that **Play Online** connects to. The image clones and
@@ -260,7 +297,7 @@ the DreamPi dial code at it — is in **[`docker/README.md`](docker/README.md)**
 
 ---
 
-## 8. Releases (prebuilt disc)
+## 9. Releases (prebuilt disc)
 
 CI builds the bootable disc so you don't have to install the toolchain. The
 workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) checks

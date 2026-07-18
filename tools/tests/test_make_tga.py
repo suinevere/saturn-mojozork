@@ -174,13 +174,36 @@ def test_batch_is_incremental():
         check(tga.stat().st_mtime_ns != before, "regenerated TGA has a new mtime")
 
 
+def test_batch_warns_past_image_cap():
+    print("test_batch_warns_past_image_cap")
+    import contextlib
+    import io
+
+    def run_with(n):
+        with tempfile.TemporaryDirectory() as td:
+            src, dst = Path(td) / "png", Path(td) / "tga"
+            src.mkdir()
+            for i in range(n):
+                make_png(src / f"BG{i}.png")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                make_tga.batch(src, dst)
+            return buf.getvalue()
+
+    check("WARN" not in run_with(make_tga.IMAGE_MAX),
+          f"no warning at exactly {make_tga.IMAGE_MAX} images")
+    check("WARN" in run_with(make_tga.IMAGE_MAX + 1),
+          f"warning fires at {make_tga.IMAGE_MAX + 1} images")
+
+
 def main():
     for t in (test_encode_tga_structure,
               test_encode_tga_pixel_roundtrip,
               test_batch_naming_and_case_insensitivity,
               test_batch_skips_offsize_but_continues,
               test_batch_skips_long_stems,
-              test_batch_is_incremental):
+              test_batch_is_incremental,
+              test_batch_warns_past_image_cap):
         t()
     print()
     if FAILURES:
