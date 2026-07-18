@@ -118,7 +118,7 @@ def batch(srcdir, dstdir):
         if status == "wrote":
             written += 1
 
-    total = len(sorted(dstdir.glob("*.TGA"))) if dstdir.is_dir() else 0
+    total = sum(1 for _ in dstdir.glob("*.TGA")) if dstdir.is_dir() else 0
     if total > IMAGE_MAX:
         print(f"  WARN  {total} TGAs present but the Display Options selector shows "
               f"only {IMAGE_MAX}; the extras will not appear. Raise DISP_IMAGE_MAX "
