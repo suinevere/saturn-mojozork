@@ -1981,6 +1981,30 @@ static void title_draw_art(void) {
     SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
 }
 
+// ---- title-screen background image (HOUSE.TGA on VDP2 NBG0) -----------------
+// Shown behind the title text only; menus and gameplay stay on solid black.
+// The debug text console lives on NBG3 at priority Layer7 (top), and NBG0 is
+// disabled by default, so loading the image on NBG0 at a lower priority puts it
+// safely behind all text with no other VDP2 changes.
+static void title_bg_show(void) {
+    static bool loaded = false;
+    if (!loaded) {
+        // One-time CD read + VRAM upload. Runs before the CD directory changes
+        // to Z3 (so "HOUSE.TGA" resolves at the root) and before menu CD-DA
+        // starts (the single CD head can't read data while playing audio).
+        SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA("HOUSE.TGA");
+        SRL::VDP2::NBG0::LoadBitmap(bmp);
+        delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
+        SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
+        loaded = true;
+    }
+    SRL::VDP2::NBG0::ScrollEnable();
+}
+
+static void title_bg_hide(void) {
+    SRL::VDP2::NBG0::ScrollDisable();
+}
+
 static int title_and_seed(void) {
     int frames = 0;
     int reset_hold = 0;
@@ -2456,6 +2480,7 @@ int main(void) {
     // so the menu track then plays uninterrupted. On soft-reset re-entry the preload is
     // a no-op (already cached), so no read happens and the music starts cleanly.
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
+    title_bg_show();
     title_draw_art();
     SRL::Core::Synchronize();
 
@@ -2465,6 +2490,7 @@ int main(void) {
     music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow
 
     int seed = title_and_seed();         // redraws the same art + "Press any button", waits
+    title_bg_hide();                     // menus and gameplay run on solid black
 
     // Top-level mode choice. "Play Online" runs the multizork telnet terminal
     // and returns here on disconnect; "Play Local" falls through to the offline
