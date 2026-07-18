@@ -18,7 +18,9 @@
 - **Every recipe runs under MSYS2 `sh`,** not cmd or PowerShell. Shell code must be POSIX sh.
 - **Missing Python, missing Pillow, no network, or a broken venv must print an actionable warning and exit 0.** Only a genuine converter crash may exit nonzero.
 - **Generated TGAs stay committed to git.** They are the fallback for contributors without Python.
-- **The selector holds at most 8 images** (`DISP_IMAGE_MAX` in `saturn/src/display.h`). This plan produces 7 (`HOUSE` plus six new); a resized `ANCIENT` would make exactly 8. A ninth background needs that constant raised first.
+- **The selector holds at most 8 images** (`DISP_IMAGE_MAX` in `saturn/src/display.h`). This plan produces exactly 8, which is the cap. `main.cxx:2149` scans with `found < DISP_IMAGE_MAX`, so a **ninth background is silently dropped** — no error, it simply never appears in the selector. Task 4 adds a warning for this.
+
+> **Amendment (mid-execution).** The plan was written when `ANCIENT.PNG` was 3105x4658 and expected it to be skipped, yielding 7 TGAs. The repo owner resized it to 320x224 in commit `0839362` while this plan was being drafted, so it converts successfully and the total is 8. Task 2's step text below still describes the original 7-file expectation; the delivered result was 8, verified well-formed. The off-size skip path is no longer exercised by real assets but remains covered by `test_batch_skips_offsize_but_continues`.
 
 ---
 
@@ -673,7 +675,54 @@ print('TGA dir on disc:', b'CASTLE.TGA' in d)
 
 Expected: `PNG dir on disc: False` and `TGA dir on disc: True`.
 
-- [ ] **Step 4: Update the README prerequisites**
+- [ ] **Step 4: Warn when the selector cap is exceeded**
+
+The Saturn shows at most `DISP_IMAGE_MAX` (8) backgrounds and silently ignores the rest (`saturn/src/main.cxx:2149`). The repo now sits at exactly 8, so the next background added would vanish with no explanation. Make the converter say so.
+
+Add this constant near the top of `tools/make_tga.py`, beside `MAX_STEM`:
+
+```python
+IMAGE_MAX = 8  # DISP_IMAGE_MAX in saturn/src/display.h -- extras are ignored at runtime
+```
+
+And add this check at the very end of `batch()`, immediately before `return written`:
+
+```python
+    total = len(sorted(dstdir.glob("*.TGA"))) if dstdir.is_dir() else 0
+    if total > IMAGE_MAX:
+        print(f"  WARN  {total} TGAs present but the Display Options selector shows "
+              f"only {IMAGE_MAX}; the extras will not appear. Raise DISP_IMAGE_MAX "
+              f"in saturn/src/display.h or remove a background.")
+```
+
+Add a test to `tools/tests/test_make_tga.py`, registered in `main()`'s tuple, proving the warning fires only past the cap. Capture stdout so the assertion is on real output, not on a return value:
+
+```python
+def test_batch_warns_past_image_cap():
+    print("test_batch_warns_past_image_cap")
+    import contextlib
+    import io
+
+    def run_with(n):
+        with tempfile.TemporaryDirectory() as td:
+            src, dst = Path(td) / "png", Path(td) / "tga"
+            src.mkdir()
+            for i in range(n):
+                make_png(src / f"BG{i}.png")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                make_tga.batch(src, dst)
+            return buf.getvalue()
+
+    check("WARN" not in run_with(make_tga.IMAGE_MAX),
+          f"no warning at exactly {make_tga.IMAGE_MAX} images")
+    check("WARN" in run_with(make_tga.IMAGE_MAX + 1),
+          f"warning fires at {make_tga.IMAGE_MAX + 1} images")
+```
+
+Run the suite and confirm all tests pass, including the two pre-existing byte-format tests — this change must not alter the produced bytes.
+
+- [ ] **Step 5: Update the README prerequisites**
 
 In `README.md`, replace the Prerequisites list (currently lines 48-52) with:
 
@@ -689,7 +738,7 @@ Builds on Windows, Linux, or macOS:
 - An emulator for testing (e.g. **Mednafen** with Saturn BIOS), or real hardware.
 ```
 
-- [ ] **Step 5: Add the new README section**
+- [ ] **Step 6: Add the new README section**
 
 Insert this immediately after the `---` that ends section 5 (currently `README.md:209`), before `## 6. Playing online from a real Saturn`:
 
@@ -704,6 +753,13 @@ you do not create them by hand.
    **8 characters or fewer**, e.g. `tools/assets/png/CAVE.PNG`.
 2. Rebuild: `cd saturn && ./compile.bat debug`.
 3. The new background appears in **Display Options**.
+
+> **The selector shows at most 8 backgrounds** and the disc currently ships
+> exactly 8. Adding a ninth silently does nothing — it converts fine, but the
+> Saturn stops scanning at 8. The converter prints a `WARN` line when you cross
+> that line. To actually make room, raise `DISP_IMAGE_MAX` in
+> `saturn/src/display.h` (and check `g_image_name`'s fixed-size arrays in
+> `saturn/src/main.cxx` alongside it), or retire a background.
 
 The size and name limits are enforced, not advisory: the Saturn reads these as
 ISO9660 8.3 names, and the converter skips anything that is not exactly 320x224
@@ -721,7 +777,7 @@ static). Run `python tools/tests/test_make_tga.py` to exercise it directly.
 ---
 ```
 
-- [ ] **Step 6: Renumber the following sections**
+- [ ] **Step 7: Renumber the following sections**
 
 The three headings after the insertion point shift by one:
 
@@ -731,10 +787,10 @@ The three headings after the insertion point shift by one:
 
 Verify with `grep -n "^## " README.md` that the numbered sections read 1 through 9 with no duplicates or gaps. The repo has no in-document anchor links, so nothing else needs updating.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add saturn/pre.makefile README.md
+git add saturn/pre.makefile README.md tools/make_tga.py tools/tests/test_make_tga.py
 git commit -m "Run background conversion as a pre-build step
 
 Hooks tools/convert-backgrounds.sh into SaturnRingLib's pre.makefile
@@ -752,6 +808,6 @@ End-to-end, after all four tasks:
 2. `rm -rf tools/.venv && cd saturn && ./compile.bat debug` → the venv is provisioned mid-build and the ISO is produced. *(User runs this; do not run `compile.bat` yourself.)*
 3. Second `./compile.bat debug` → conversion reports everything up to date and adds no measurable time.
 4. `git status` after a build shows no modified `saturn/cd/data/TGA/*.TGA` — the build rewrites no background when sources are unchanged. (Other build outputs such as `cd/data/0.bin` may legitimately show as modified; only the TGAs are being checked here.)
-5. Boot `saturn/BuildDrop/mojozork.iso` in Mednafen, open **Display Options**, and confirm the selector now offers `AMIGA`, `CASTLE`, `CLIFF`, `CMPLAB`, `FOREST`, `HOUSE`, and `TYPEWRTR`, each rendering without static or transparent holes.
+5. Boot `saturn/BuildDrop/mojozork.iso` in Mednafen, open **Display Options**, and confirm the selector offers all eight — `AMIGA`, `ANCIENT`, `CASTLE`, `CLIFF`, `CMPLAB`, `FOREST`, `HOUSE`, `TYPEWRTR` — each rendering without static or transparent holes. `AMIGA` is intentionally a flat two-color Workbench-style screen (blue plus white), not a detailed image; that is the source art, not a conversion fault.
 
-Known follow-up, deliberately out of scope: `ANCIENT.PNG` (3105x4658) will keep warning on every build until someone resizes it to 320x224 or deletes it.
+Known state, not a defect: the disc now ships exactly `DISP_IMAGE_MAX` (8) backgrounds. The selector is full — a ninth would be silently ignored at runtime, which is why Task 4 adds the `WARN` line.
