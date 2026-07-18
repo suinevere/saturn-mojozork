@@ -2210,10 +2210,10 @@ static bool title_bg_show(const char *file) {
         if (loaded[i] == '\0') break;   // matched up to and including the NUL
     }
     if (!same) {
-        // CD read + VRAM upload. Bitmaps are opened by bare file name, exactly
-        // as HOUSE.TGA already is -- proven to resolve regardless of the
-        // current CD directory. Must run before menu CD-DA starts: the single
-        // CD head can't read data while playing audio.
+        // CD read + VRAM upload. We open by bare file name, but scan_z3_folder
+        // leaves Z3 as the current CD directory -- cd_enter_root() below ensures
+        // the open resolves to the bitmap at root. Must run before menu CD-DA
+        // starts: the single CD head can't read data while playing audio.
         // Every image must be 256-color paletted, not truecolor: SRL's VDP2
         // bitmap allocator doubles the container size for RGB555, pushing a
         // 512x256 bitmap to 256KB and across the A0/A1 VRAM bank boundary.
