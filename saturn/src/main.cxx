@@ -2123,9 +2123,32 @@ static bool tga_name_is_usable(const char *name) {
 // scan_z3_folder() below: a private GfsDirTbl (not SRL's shared Cd table),
 // and a return to the root directory both before and after so the scan is
 // idempotent across soft resets and leaves the CD where the boot sequence
-// expects it. Unlike scan_z3_folder, this never calls GFS_SetDir -- bitmaps
-// are opened by bare file name (see title_bg_show), so there is no need to
-// leave the shared directory pointed at TGA.
+// expects it. Unlike scan_z3_folder, this never calls GFS_SetDir. Bitmaps are opened by
+// bare file name, which resolves against whatever directory is current -- so
+// title_bg_show brackets its own load with cd_enter_root()/cd_restore_z3()
+// rather than relying on ambient state. An earlier comment here claimed bare
+// names resolve regardless of current directory; that was wrong, and it is why
+// backgrounds silently failed once the Z3 catalog scan had run.
+// ---- CD current-directory discipline ---------------------------------------
+// scan_z3_folder() calls GFS_SetDir() to make Z3 the current CD directory, and
+// that persists for the rest of the session. Anything opened by bare file name
+// afterwards resolves inside Z3 -- which is why background bitmaps silently
+// failed to load once the game catalog had been scanned. Bitmap loads bracket
+// themselves with these two helpers instead of assuming a directory.
+static GfsDirName g_z3_dirnames[SRL_MAX_CD_FILES];
+static GfsDirTbl  g_z3_tbl;
+static bool       g_z3_dir_valid = false;   // set once scan_z3_folder has run
+
+static void cd_enter_root(void) {
+    SRL::Cd::ChangeDir((char *) nullptr);
+}
+
+// Re-point the CD at Z3 so story-file opens keep working. No-op before the
+// catalog scan has populated g_z3_tbl.
+static void cd_restore_z3(void) {
+    if (g_z3_dir_valid) GFS_SetDir(&g_z3_tbl);
+}
+
 static void display_scan_images(void) {
     static GfsDirName dirnames[SRL_MAX_CD_FILES];
     static GfsDirTbl  tbl;
@@ -2198,15 +2221,24 @@ static bool title_bg_show(const char *file) {
         // the second bank in VDP2_RAMCTL -- see the note at the top of
         // srl_vdp2.hpp). At 8bpp the container is exactly 128KB and fits one
         // bank.
+        // Open at the root: scan_z3_folder() leaves Z3 as the current CD
+        // directory, and a bare-name open would resolve there and fail. Every
+        // exit path below must cd_restore_z3() or story-file opens break.
+        cd_enter_root();
         SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
-        if (!bmp) return false;   // operator new returns null on OOM here (see srl_memory.hpp)
+        if (!bmp) {               // operator new returns null on OOM (srl_memory.hpp)
+            cd_restore_z3();
+            return false;
+        }
         if (bmp->GetInfo().Palette == nullptr) {
             // Truecolor (or any other non-paletted) image: not the 8bpp shape
             // this loader/VRAM layout requires. Reject before it ever reaches
             // VRAM instead of risking the bank-spanning static above.
             delete bmp;
+            cd_restore_z3();
             return false;
         }
+        cd_restore_z3();
         SRL::VDP2::NBG0::LoadBitmap(bmp);
         delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
@@ -2279,9 +2311,6 @@ static int has_z3_ext(const char *s) {
 // with a ";1" version suffix, which is stripped. Directory records "." / ".."
 // carry non-".Z3" names and are naturally filtered out.
 static int scan_z3_folder(char out[][16], int max) {
-    static GfsDirName dirnames[SRL_MAX_CD_FILES];
-    static GfsDirTbl  tbl;
-
     // GFS_SetDir below makes Z3 the current CD directory, and that persists. After a
     // soft reset we re-enter here still inside Z3, so "Z3" would resolve relative to
     // Z3 and fail. Return to the root directory first so the scan is idempotent.
@@ -2290,20 +2319,21 @@ static int scan_z3_folder(char out[][16], int max) {
     int32_t fid = GFS_NameToId((int8_t *) "Z3");
     if (fid < 0) return -1;
 
-    GFS_DIRTBL_TYPE(&tbl)    = GFS_DIR_NAME;
-    GFS_DIRTBL_DIRNAME(&tbl) = dirnames;
-    GFS_DIRTBL_NDIR(&tbl)    = SRL_MAX_CD_FILES;
+    GFS_DIRTBL_TYPE(&g_z3_tbl)    = GFS_DIR_NAME;
+    GFS_DIRTBL_DIRNAME(&g_z3_tbl) = g_z3_dirnames;
+    GFS_DIRTBL_NDIR(&g_z3_tbl)    = SRL_MAX_CD_FILES;
 
-    int32_t count = GFS_LoadDir(fid, &tbl);
+    int32_t count = GFS_LoadDir(fid, &g_z3_tbl);
     if (count < 0) return -1;
-    GFS_SetDir(&tbl);   // subsequent File() opens resolve inside Z3
+    GFS_SetDir(&g_z3_tbl);   // subsequent File() opens resolve inside Z3
+    g_z3_dir_valid = true;   // cd_restore_z3() may now re-apply this directory
 
     int n = 0;
     for (int i = 0; i < count && n < max; i++) {
         char nm[16];
         int j = 0;
         for (; j < GFS_FNAME_LEN && j < 15; j++) {
-            char c = (char) dirnames[i].fname[j];
+            char c = (char) g_z3_dirnames[i].fname[j];
             if (c == '\0' || c == ';') break;   // stop at NUL or version suffix
             nm[j] = c;
         }
