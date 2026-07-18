@@ -243,6 +243,7 @@ static const int CHORD_DEFAULT[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt
 // Older saves (difficulty only, or difficulty+dial with a zeroed tail) load
 // fine: the sound byte reads as 0 (absent), which the flag encoding below
 // treats as "on" so pre-existing saves aren't silently muted.
+static bool title_bg_show(const char *file);
 static void title_bg_show(void);
 static void title_bg_hide(void);
 
@@ -254,7 +255,13 @@ static void title_bg_hide(void);
 static void display_apply(void) {
     SRL::ASCII::SetColor(display_text_rgb(g_display.text), 15);
     if (display_is_image(&g_display)) {
-        title_bg_show();       // image backgrounds arrive in a later task
+        if (!title_bg_show(display_bg_name(&g_display))) {
+            // Load failed (or the bitmap isn't the 8bpp shape we require): fall
+            // back to a color background rather than leaving static on screen.
+            g_display.bg = display_preset_bg(g_display.palette);
+            title_bg_hide();
+            SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
+        }
     } else {
         title_bg_hide();
         SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
@@ -2090,24 +2097,116 @@ static void title_draw_art(void) {
     SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
 }
 
-// ---- title-screen background image (HOUSE.TGA on VDP2 NBG0) -----------------
+// ---- background images discovered on the disc (TGA folder) -----------------
+// Names of the bitmaps found in the disc's TGA folder, scanned once at boot.
+// display.c borrows these pointers (via display_set_images), so the storage
+// must outlive the scan -- hence static rather than stack-local.
+static char        g_image_name[DISP_IMAGE_MAX][16];
+static const char *g_image_ptr[DISP_IMAGE_MAX];
+
+// ISO9660 entries can arrive as "NAME.TGA;1" (version suffix already stripped
+// by the time this is called -- see display_scan_images). Accept only .TGA
+// files; the deeper 8bpp/one-bank check cannot be done from the name and
+// happens at load time in title_bg_show, where a failure falls back to a
+// color background.
+static bool tga_name_is_usable(const char *name) {
+    if (!name || !name[0] || name[0] == '.') return false;
+    for (int i = 0; name[i]; i++) {
+        if (name[i] == '.' && name[i+1] == 'T' && name[i+2] == 'G' && name[i+3] == 'A'
+            && name[i+4] == '\0') return true;
+    }
+    return false;
+}
+
+// Scan the disc's "TGA" directory and register any *.TGA files found with
+// display.c so the background selector can cycle into them. Modeled on
+// scan_z3_folder() below: a private GfsDirTbl (not SRL's shared Cd table),
+// and a return to the root directory both before and after so the scan is
+// idempotent across soft resets and leaves the CD where the boot sequence
+// expects it. Unlike scan_z3_folder, this never calls GFS_SetDir -- bitmaps
+// are opened by bare file name (see title_bg_show), so there is no need to
+// leave the shared directory pointed at TGA.
+static void display_scan_images(void) {
+    static GfsDirName dirnames[SRL_MAX_CD_FILES];
+    static GfsDirTbl  tbl;
+    int found = 0;
+
+    // Same idempotence dance as scan_z3_folder: get back to the root before
+    // resolving "TGA", or after a soft reset it would resolve relative to
+    // whatever directory we were left in.
+    SRL::Cd::ChangeDir((char *) nullptr);
+
+    int32_t fid = GFS_NameToId((int8_t *) "TGA");
+    if (fid >= 0) {
+        GFS_DIRTBL_TYPE(&tbl)    = GFS_DIR_NAME;
+        GFS_DIRTBL_DIRNAME(&tbl) = dirnames;
+        GFS_DIRTBL_NDIR(&tbl)    = SRL_MAX_CD_FILES;
+        int32_t count = GFS_LoadDir(fid, &tbl);
+        // Entry names live in dirnames[i].fname (int8_t[GFS_FNAME_LEN], not a
+        // bare string) -- same layout scan_z3_folder reads below. Extract into
+        // a NUL-terminated buffer, stripping any ";n" version suffix, before
+        // testing the extension or copying into the registered name.
+        for (int32_t i = 0; count > 0 && i < count && found < DISP_IMAGE_MAX; i++) {
+            char nm[16];
+            int j = 0;
+            for (; j < GFS_FNAME_LEN && j < (int) sizeof(nm) - 1; j++) {
+                char c = (char) dirnames[i].fname[j];
+                if (c == '\0' || c == ';') break;
+                nm[j] = c;
+            }
+            nm[j] = '\0';
+            if (!tga_name_is_usable(nm)) continue;
+            int k = 0;
+            for (; nm[k] && k < (int) sizeof(g_image_name[0]) - 1; k++) g_image_name[found][k] = nm[k];
+            g_image_name[found][k] = '\0';
+            g_image_ptr[found] = g_image_name[found];
+            found++;
+        }
+    }
+
+    // Leave the CD where we found it: at the root, which is where the existing
+    // boot sequence expects to be before scan_z3_folder runs.
+    SRL::Cd::ChangeDir((char *) nullptr);
+    display_set_images(found > 0 ? g_image_ptr : NULL, found);
+}
+
+// ---- title-screen background image (VDP2 NBG0) ------------------------------
 // Shown behind the title text only; menus and gameplay stay on solid black.
 // The debug text console lives on NBG3 at priority Layer7 (top), and NBG0 is
 // disabled by default, so loading the image on NBG0 at a lower priority puts it
 // safely behind all text with no other VDP2 changes.
-static void title_bg_show(void) {
-    static bool loaded = false;
-    if (!loaded) {
-        // One-time CD read + VRAM upload. Runs before the CD directory changes
-        // to Z3 (so "HOUSE.TGA" resolves at the root) and before menu CD-DA
-        // starts (the single CD head can't read data while playing audio).
-        // HOUSE.TGA must be 256-color paletted, not truecolor: SRL's VDP2 bitmap
-        // allocator doubles the container size for RGB555, pushing a 512x256
-        // bitmap to 256KB and across the A0/A1 VRAM bank boundary. Bank-spanning
-        // bitmaps render as static (slBitMapNbg0 never reserves the second bank
-        // in VDP2_RAMCTL -- see the note at the top of srl_vdp2.hpp). At 8bpp the
-        // container is exactly 128KB and fits one bank.
-        SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA("HOUSE.TGA");
+//
+// Returns false when the bitmap could not be loaded (or isn't the shape we
+// require), so the caller can fall back to a color background rather than
+// leaving static on screen.
+static bool title_bg_show(const char *file) {
+    static char loaded[16] = "";       // file currently resident in VDP2 VRAM
+    bool same = true;
+    for (int i = 0; i < (int) sizeof(loaded); i++) {
+        if (loaded[i] != file[i]) { same = false; break; }
+        if (loaded[i] == '\0') break;   // matched up to and including the NUL
+    }
+    if (!same) {
+        // CD read + VRAM upload. Bitmaps are opened by bare file name, exactly
+        // as HOUSE.TGA already is -- proven to resolve regardless of the
+        // current CD directory. Must run before menu CD-DA starts: the single
+        // CD head can't read data while playing audio.
+        // Every image must be 256-color paletted, not truecolor: SRL's VDP2
+        // bitmap allocator doubles the container size for RGB555, pushing a
+        // 512x256 bitmap to 256KB and across the A0/A1 VRAM bank boundary.
+        // Bank-spanning bitmaps render as static (slBitMapNbg0 never reserves
+        // the second bank in VDP2_RAMCTL -- see the note at the top of
+        // srl_vdp2.hpp). At 8bpp the container is exactly 128KB and fits one
+        // bank.
+        SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
+        if (!bmp) return false;   // operator new returns null on OOM here (see srl_memory.hpp)
+        if (bmp->GetInfo().Palette == nullptr) {
+            // Truecolor (or any other non-paletted) image: not the 8bpp shape
+            // this loader/VRAM layout requires. Reject before it ever reaches
+            // VRAM instead of risking the bank-spanning static above.
+            delete bmp;
+            return false;
+        }
         SRL::VDP2::NBG0::LoadBitmap(bmp);
         delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
@@ -2116,10 +2215,15 @@ static void title_bg_show(void) {
         // survive a fresh submodule checkout, so wipe the rows here instead.
         SRL::Debug::PrintClearLine(20);
         SRL::Debug::PrintClearLine(21);
-        loaded = true;
+        int k = 0;
+        for (; file[k] && k < (int) sizeof(loaded) - 1; k++) loaded[k] = file[k];
+        loaded[k] = '\0';
     }
     SRL::VDP2::NBG0::ScrollEnable();
+    return true;
 }
+
+static void title_bg_show(void) { (void) title_bg_show("HOUSE.TGA"); }
 
 static void title_bg_hide(void) {
     SRL::VDP2::NBG0::ScrollDisable();
@@ -2565,7 +2669,8 @@ static void online_mode(void) {
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
     saturn_bup_init();
-    display_defaults(&g_display);
+    display_scan_images();          // must precede options_load: display_decode()
+    display_defaults(&g_display);   // validates image indices against this list
     options_load();   // restore saved difficulty (defaults to Easy)
 
     static MultiPad pads;
