@@ -322,6 +322,7 @@ static void keyboard_controls_page(void);   // ditto -- reached from the in-game
 static void menu_clear_full(void);
 static bool menu_confirm(const char *line1, const char *line2);  // defined below
 static void sound_options_page(void);
+static void display_options_page(void);
 
 // ---- scrollback ------------------------------------------------------------
 
@@ -1662,6 +1663,81 @@ static void sound_options_page(void) {
     SRL::Core::Synchronize();
 }
 
+// Display Options (full-screen, OK/Cancel). Unlike Sound Options every row is
+// always present -- there is no hardware dependency. Left/Right applies live so
+// the result is visible behind the menu; Cancel restores the snapshot.
+static void display_options_page(void) {
+    enum { DR_PALETTE, DR_BG, DR_TEXT, DR_OK, DR_CANCEL };
+    static const int rows[] = { DR_PALETTE, DR_BG, DR_TEXT, DR_OK, DR_CANCEL };
+    const int nrows = (int)(sizeof(rows) / sizeof(rows[0]));
+
+    int sel = 0;
+    DisplayState snapshot = g_display;   // for Cancel
+    SRL::Core::Synchronize();            // consume the edge that opened this
+    for (;;) {
+        check_soft_reset();
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);
+        pad_repeat_update();
+        if (g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + nrows) % nrows;
+        if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % nrows;
+        bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
+        bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        bool ok   = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+                  || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
+        bool cancel = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
+                    || ke.kind == SATURN_KEY_BACKSPACE;
+        int row = rows[sel];
+
+        if (cancel || (ok && row == DR_CANCEL)) {
+            g_display = snapshot;
+            display_apply();
+            break;
+        }
+        int dir = right ? 1 : (left ? -1 : 0);
+        if (dir != 0) {
+            if      (row == DR_PALETTE) display_cycle_palette(&g_display, dir);
+            else if (row == DR_BG)      display_cycle_bg(&g_display, dir);
+            else if (row == DR_TEXT)    display_cycle_text(&g_display, dir);
+            if (row == DR_PALETTE || row == DR_BG || row == DR_TEXT) display_apply();
+        }
+        if (ok && row == DR_OK) { options_save(); break; }
+
+        menu_clear();
+        int x = 2, y = 1;
+        SRL::Debug::Print(x, y, "DISPLAY OPTIONS"); y += 2;
+        for (int i = 0; i < nrows; i++) {
+            char cur = (i == sel) ? '>' : ' ';
+            switch (rows[i]) {
+                case DR_PALETTE:
+                    SRL::Debug::Print(x, y, "%c System Palette", cur);
+                    SRL::Debug::Print(x + 17, y++, "< %s >", display_palette_name(&g_display));
+                    break;
+                case DR_BG:
+                    SRL::Debug::Print(x, y, "%c Background", cur);
+                    SRL::Debug::Print(x + 17, y++, "< %s >", display_bg_name(&g_display));
+                    break;
+                case DR_TEXT:
+                    SRL::Debug::Print(x, y, "%c Text", cur);
+                    SRL::Debug::Print(x + 17, y++, "< %s >", display_text_name(g_display.text));
+                    break;
+                case DR_OK:
+                    y++;   // blank separator before the actions
+                    SRL::Debug::Print(x, y++, "%c OK", cur);
+                    break;
+                case DR_CANCEL:
+                    SRL::Debug::Print(x, y++, "%c Cancel", cur);
+                    break;
+            }
+        }
+        y++;
+        SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel",
+                                             "<> change  Enter=OK  Esc=Cancel"));
+        menu_sync();
+    }
+    SRL::Core::Synchronize();
+}
+
 // Options menu (centered box): a difficulty slider plus actions (Configure,
 // Controls, Sound Options, Return to Title, Done). Up/Down select a row; on
 // Difficulty, Left/Right change it; A/Enter activate other rows; B/Esc close.
@@ -1674,12 +1750,13 @@ static void options_menu(void) {
                                          "Valid-command typeahead",
                                          "Typeahead off" };
     const int x0 = 5, y0 = 8, w = 30, h = 15;
-    enum { OI_DIFF, OI_CONFIG, OI_CONTROLS, OI_SOUND, OI_RETURN, OI_DONE };
+    enum { OI_DIFF, OI_CONFIG, OI_CONTROLS, OI_DISPLAY, OI_SOUND, OI_RETURN, OI_DONE };
     bool sound_available = (music_cdda_has_audio() != 0) || (sound_has_audio() != 0);
-    int items[6], nitems = 0;
+    int items[7], nitems = 0;
     items[nitems++] = OI_DIFF;
     items[nitems++] = OI_CONFIG;
     items[nitems++] = OI_CONTROLS;
+    items[nitems++] = OI_DISPLAY;   // always available: no hardware dependency
     if (sound_available) items[nitems++] = OI_SOUND;
     items[nitems++] = OI_RETURN;
     items[nitems++] = OI_DONE;
@@ -1704,6 +1781,7 @@ static void options_menu(void) {
         if (act) {
             if (item == OI_CONFIG) { config_page(); }
             else if (item == OI_CONTROLS) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear_full(); }
+            else if (item == OI_DISPLAY) { display_options_page(); menu_clear_full(); }
             else if (item == OI_SOUND) { sound_options_page(); menu_clear_full(); }
             else if (item == OI_RETURN) {   // Return to Title Screen (soft reset; never returns on Yes)
                 if (menu_confirm("Return to the title screen?", "Are you sure?")) {
@@ -1733,6 +1811,7 @@ static void options_menu(void) {
                 case OI_DIFF: break;   // drawn above
                 case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Configure Z-ATURN", cur); break;
                 case OI_CONTROLS: SRL::Debug::Print(x0 + 2, ay++, "%c %s", cur, g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls"); break;
+                case OI_DISPLAY:  SRL::Debug::Print(x0 + 2, ay++, "%c Display", cur); break;
                 case OI_SOUND:    SRL::Debug::Print(x0 + 2, ay++, "%c Sound Options", cur); break;
                 case OI_RETURN:   SRL::Debug::Print(x0 + 2, ay++, "%c Return to Title Screen", cur); break;
                 case OI_DONE:     SRL::Debug::Print(x0 + 2, ay++, "%c Done", cur); break;
