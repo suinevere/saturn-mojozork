@@ -1175,6 +1175,28 @@ static void menu_clear(void) {
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
 }
 
+// Draw a w x h box of +--+ chrome at (x0, y0) and center `title` on its second
+// row. Every menu page uses this so the chrome and title placement stay
+// identical; pages differ only in the box they ask for.
+//
+// The caller owns the interior: content starts at (x0 + 2, y0 + 2) by
+// convention, and must stay inside x0 + w - 2 so it never overwrites the right
+// border.
+static void menu_frame(int x0, int y0, int w, int h, const char *title) {
+    for (int r = 0; r < h; r++) {
+        char line[42]; int p = 0;
+        for (int c = 0; c < w && p < (int) sizeof(line) - 1; c++)
+            line[p++] = (r == 0 || r == h - 1) ? ((c == 0 || c == w - 1) ? '+' : '-')
+                      : ((c == 0 || c == w - 1) ? '|' : ' ');
+        line[p] = '\0';
+        SRL::Debug::Print(x0, y0 + r, "%s", line);
+    }
+    int len = 0; while (title[len]) len++;
+    int tx = x0 + (w - len) / 2;
+    if (tx < x0 + 1) tx = x0 + 1;
+    SRL::Debug::Print(tx, y0 + 1, "%s", title);
+}
+
 // Wait for any button/key (used for "press any key" prompts).
 static void menu_wait(void) {
     SRL::Core::Synchronize();
@@ -1775,8 +1797,8 @@ static void display_options_page(void) {
     SRL::Core::Synchronize();
 }
 
-// Options menu (centered box): a difficulty slider plus actions (Configure,
-// Controls, Sound Options, Return to Title, Done). Up/Down select a row; on
+// Options menu (centered box): a difficulty slider plus actions (Network,
+// Controls, Display, Sound, Return to Title, Done). Up/Down select a row; on
 // Difficulty, Left/Right change it; A/Enter activate other rows; B/Esc close.
 // Sound Options only appears when there is audio to configure -- CD-DA on the disc
 // or the game's .BLB; with neither, the row is hidden. Audio settings live on that
@@ -1829,15 +1851,7 @@ static void options_menu(void) {
             else if (item == OI_DONE) break;   // (OI_DIFF: activate is a no-op)
         }
 
-        for (int r = 0; r < h; r++) {
-            char line[40]; int p = 0;
-            for (int c = 0; c < w; c++)
-                line[p++] = (r == 0 || r == h - 1) ? ((c == 0 || c == w - 1) ? '+' : '-')
-                          : ((c == 0 || c == w - 1) ? '|' : ' ');
-            line[p] = '\0';
-            SRL::Debug::Print(x0, y0 + r, "%s", line);
-        }
-        SRL::Debug::Print(x0 + 11, y0 + 1, "OPTIONS");
+        menu_frame(x0, y0, w, h, "OPTIONS");
         SRL::Debug::Print(x0 + 2, y0 + 3, "%c Difficulty: %s %s %s", item == OI_DIFF ? '>' : ' ',
                           diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
         SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
@@ -1846,11 +1860,11 @@ static void options_menu(void) {
             char cur = (i == sel) ? '>' : ' ';
             switch (items[i]) {
                 case OI_DIFF: break;   // drawn above
-                case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Configure Z-ATURN", cur); break;
-                case OI_CONTROLS: SRL::Debug::Print(x0 + 2, ay++, "%c %s", cur, g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls"); break;
+                case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Network", cur); break;
+                case OI_CONTROLS: SRL::Debug::Print(x0 + 2, ay++, "%c Controls", cur); break;
                 case OI_DISPLAY:  SRL::Debug::Print(x0 + 2, ay++, "%c Display", cur); break;
-                case OI_SOUND:    SRL::Debug::Print(x0 + 2, ay++, "%c Sound Options", cur); break;
-                case OI_RETURN:   SRL::Debug::Print(x0 + 2, ay++, "%c Return to Title Screen", cur); break;
+                case OI_SOUND:    SRL::Debug::Print(x0 + 2, ay++, "%c Sound", cur); break;
+                case OI_RETURN:   SRL::Debug::Print(x0 + 2, ay++, "%c Return to Title", cur); break;
                 case OI_DONE:     SRL::Debug::Print(x0 + 2, ay++, "%c Done", cur); break;
             }
         }
