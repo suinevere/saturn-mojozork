@@ -1979,6 +1979,7 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
 static void title_draw_art(void) {
     SRL::Debug::Print(12, 12, "M O J O Z O R K");
     SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
+    SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
 }
 
 // ---- title-screen background image (HOUSE.TGA on VDP2 NBG0) -----------------
@@ -2002,6 +2003,11 @@ static void title_bg_show(void) {
         SRL::VDP2::NBG0::LoadBitmap(bmp);
         delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
+        // LoadBitmap leaves stray debug prints on rows 20-21 ("4bpp" / "Pal: N")
+        // from SRL itself (srl_vdp2.hpp:869,888). Patching the library would not
+        // survive a fresh submodule checkout, so wipe the rows here instead.
+        SRL::Debug::PrintClearLine(20);
+        SRL::Debug::PrintClearLine(21);
         loaded = true;
     }
     SRL::VDP2::NBG0::ScrollEnable();
