@@ -203,8 +203,14 @@ guard is inactive: there is no single background color to compare against, and
 every text color stays reachable.
 
 **Entry point.** A new `OI_DISPLAY` item in `options_menu()` (`main.cxx:1647`),
-placed between Controls and Sound. F9 is unassigned and can open the page
-directly, matching the existing F10 / F11 / F12 pattern.
+placed between Controls and Sound.
+
+No direct function-key hotkey in this pass. F9 is already bound to `restore`
+(`main.cxx:1024`, alongside F3 and F6), and the only unbound keys — F1, F4, F7,
+F8 — are deliberately unreported by `saturn_keyboard.cxx`, which maps raw Saturn
+scancodes that are not derivable from the existing table (F9 is `0x01`, F10
+`0x09`, F11 `0x78`, F12 `0x07`). Adding one means confirming its scancode on
+hardware first. Deferred as a follow-up.
 
 ## Title screen
 
@@ -226,7 +232,13 @@ Layout appended after the sound block's `[sentinel=1][mix][track]`:
 [sentinel=1][palette][bg_index][text_index]
 ```
 
-`palette` stores `0..14`, or `0xFF` for `Custom`.
+`palette` always stores a real preset index, `0..14` — never a `Custom`
+sentinel. `Custom` is a *derived* display state (the stored `bg` / `text` no
+longer match `PRESETS[palette]`), and since `bg` and `text` are saved
+alongside, it reconstructs itself on load. Writing a sentinel instead would
+discard the machine identity and reintroduce exactly the collision ambiguity
+this field exists to prevent. On load, a `palette` byte outside `0..14` is
+treated as absent and falls back to the default.
 
 Loading tolerates absence: a blob written before this feature has no such block,
 and the defaults stand. Each field is range-checked on load, exactly as the
