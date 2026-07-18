@@ -279,7 +279,16 @@ static void display_apply(void) {
         if (!title_bg_show(display_bg_name(&g_display))) {
             // Load failed (or the bitmap isn't the 8bpp shape we require): fall
             // back to a color background rather than leaving static on screen.
-            g_display.bg = display_preset_bg(g_display.palette);
+            //
+            // The palette may itself be an image preset, whose bg is the slot
+            // that just failed -- falling back to it would re-select the broken
+            // image. Drop to a color preset in that case.
+            int p = g_display.palette;
+            if (p >= DISP_PRESET_N || p < 0) p = 12;   // IBM PC (MDA), the startup default
+            g_display.palette = p;
+            g_display.bg      = display_preset_bg(p);
+            g_display.text    = display_preset_text(p);
+            text_set_color(display_text_rgb(g_display.text));
             title_bg_hide();
             SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
         }
