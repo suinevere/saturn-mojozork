@@ -69,6 +69,19 @@ void display_cycle_bg(DisplayState *d, int dir);
 void display_cycle_text(DisplayState *d, int dir);
 void display_cycle_palette(DisplayState *d, int dir);
 
+#define DISP_BLOB_BYTES 4    /* [sentinel=1][palette][bg][text] */
+
+/* Write the display block. out must have room for DISP_BLOB_BYTES.
+   Returns the number of bytes written. */
+int display_encode(const DisplayState *d, unsigned char *out);
+
+/* Read the display block. Any field that is absent, truncated, mis-sentinelled,
+   out of range, or naming an image slot the current disc does not have falls
+   back to its default. Returns 1 when the whole block was accepted, 0 when any
+   part of it was defaulted. Call display_set_images() first, so image-slot
+   validation has the real count. */
+int display_decode(const unsigned char *buf, int len, DisplayState *d);
+
 #ifdef __cplusplus
 }
 #endif

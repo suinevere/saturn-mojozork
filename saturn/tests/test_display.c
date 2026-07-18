@@ -207,6 +207,118 @@ static void test_cycle_palette(void) {
     }
 }
 
+static void test_encode_decode_roundtrip(void) {
+    DisplayState a, b;
+    unsigned char buf[8];
+    int n;
+
+    display_set_images(NULL, 0);
+    display_defaults(&a);
+    a.palette = 7; a.bg = display_preset_bg(7); a.text = display_preset_text(7);
+
+    n = display_encode(&a, buf);
+    assert(n == 4);
+    assert(buf[0] == 1);            /* sentinel */
+
+    assert(display_decode(buf, n, &b) == 1);
+    assert(b.palette == a.palette && b.bg == a.bg && b.text == a.text);
+}
+
+static void test_collisions_roundtrip(void) {
+    /* The regression the stored palette index exists to prevent: identical
+       colors must still reload as the machine the player picked. */
+    DisplayState a, b;
+    unsigned char buf[8];
+    int pairs[2][2] = { { 3, 11 }, { 12, 13 } };
+    int p, s;
+
+    display_set_images(NULL, 0);
+    for (p = 0; p < 2; p++) {
+        for (s = 0; s < 2; s++) {
+            int idx = pairs[p][s];
+            a.palette = idx;
+            a.bg = display_preset_bg(idx);
+            a.text = display_preset_text(idx);
+            display_encode(&a, buf);
+            assert(display_decode(buf, 4, &b) == 1);
+            assert(b.palette == idx);
+            assert(strcmp(display_palette_name(&b), display_preset_name(idx)) == 0);
+        }
+    }
+}
+
+static void test_custom_state_roundtrips(void) {
+    DisplayState a, b;
+    unsigned char buf[8];
+
+    display_set_images(NULL, 0);
+    display_defaults(&a);
+    a.text = DISP_TEXT_CYAN;                     /* diverged -> Custom */
+    assert(strcmp(display_palette_name(&a), "Custom") == 0);
+
+    display_encode(&a, buf);
+    assert(buf[1] == 12);                        /* the machine index survives */
+    assert(display_decode(buf, 4, &b) == 1);
+    assert(b.text == DISP_TEXT_CYAN);
+    assert(strcmp(display_palette_name(&b), "Custom") == 0);
+}
+
+static void test_decode_rejects_bad_input(void) {
+    DisplayState d, def;
+    unsigned char buf[8];
+
+    display_set_images(NULL, 0);
+    display_defaults(&def);
+
+    /* Absent block. */
+    assert(display_decode(NULL, 0, &d) == 0);
+    assert(d.palette == def.palette && d.bg == def.bg && d.text == def.text);
+
+    /* Truncated block. */
+    buf[0] = 1; buf[1] = 3; buf[2] = 0;
+    assert(display_decode(buf, 3, &d) == 0);
+    assert(d.palette == def.palette);
+
+    /* Wrong sentinel. */
+    buf[0] = 9; buf[1] = 3; buf[2] = 2; buf[3] = 3;
+    assert(display_decode(buf, 4, &d) == 0);
+    assert(d.palette == def.palette);
+
+    /* Out-of-range palette, background, and text each fall back. */
+    buf[0] = 1; buf[1] = 99; buf[2] = 2; buf[3] = 3;
+    assert(display_decode(buf, 4, &d) == 0);
+    assert(d.palette == def.palette);
+
+    buf[0] = 1; buf[1] = 3; buf[2] = 99; buf[3] = 3;
+    assert(display_decode(buf, 4, &d) == 0);
+    assert(d.bg == def.bg);
+
+    buf[0] = 1; buf[1] = 3; buf[2] = 2; buf[3] = 99;
+    assert(display_decode(buf, 4, &d) == 0);
+    assert(d.text == def.text);
+}
+
+static void test_decode_missing_image_falls_back(void) {
+    DisplayState a, b;
+    unsigned char buf[8];
+
+    /* Saved while two images were on the disc... */
+    display_set_images(IMAGES, 2);
+    display_defaults(&a);
+    a.bg = DISP_BG_COLOR_N + 1;
+    display_encode(&a, buf);
+
+    /* ...reloaded on a disc with none: the background reverts to the default
+       color. Assert the exact value -- "is a color" alone cannot fail here,
+       since every fallback path yields one. */
+    display_set_images(NULL, 0);
+    assert(display_decode(buf, 4, &b) == 0);
+    assert(!display_is_image(&b));
+    assert(b.bg == DISP_BG_BLACK);      /* the default background */
+    assert(b.palette == 12 && b.text == DISP_TEXT_BRIGHT_GREEN);   /* untouched */
+    display_set_images(IMAGES, 2);
+}
+
 int main(void) {
     test_tables_well_formed();
     test_known_colors();
@@ -218,6 +330,11 @@ int main(void) {
     test_legibility_guard();
     test_guard_inactive_over_images();
     test_cycle_palette();
+    test_encode_decode_roundtrip();
+    test_collisions_roundtrip();
+    test_custom_state_roundtrips();
+    test_decode_rejects_bad_input();
+    test_decode_missing_image_falls_back();
     printf("test_display: OK\n");
     return 0;
 }

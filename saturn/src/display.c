@@ -176,3 +176,25 @@ void display_cycle_palette(DisplayState *d, int dir) {
     d->bg      = PRESETS[next].bg;
     d->text    = PRESETS[next].text;
 }
+
+int display_encode(const DisplayState *d, unsigned char *out) {
+    out[0] = 1;                                /* block sentinel */
+    out[1] = (unsigned char) d->palette;       /* always a real preset index */
+    out[2] = (unsigned char) d->bg;
+    out[3] = (unsigned char) d->text;
+    return DISP_BLOB_BYTES;
+}
+
+int display_decode(const unsigned char *buf, int len, DisplayState *d) {
+    int ok = 1;
+    display_defaults(d);
+
+    if (!buf || len < DISP_BLOB_BYTES || buf[0] != 1) return 0;
+
+    if (buf[1] < DISP_PRESET_N)  d->palette = (int) buf[1];  else ok = 0;
+    /* An image index is valid only if that image is on the disc right now. */
+    if (buf[2] < display_bg_count()) d->bg   = (int) buf[2];  else ok = 0;
+    if (buf[3] < DISP_TEXT_N)    d->text    = (int) buf[3];  else ok = 0;
+
+    return ok;
+}
