@@ -14,6 +14,8 @@
 
 - **Never edit the `SaturnRingLib/` submodule.** All fixes live in `saturn/src/`. A fresh checkout of the pinned SDK must still build.
 - **Do not run `compile.bat`.** The user builds. Make edits and stop; on-target verification is the user's step.
+- **After any edit to `saturn/src/main.cxx`, run `cd saturn && sh syntax-check.sh`.** This type-checks against the real SRL/SGL headers via `-fsyntax-only`; it writes no object files, no ELF, no ISO, and never touches `BuildDrop/`. It is not a build and does not substitute for one. Exit 0 is required before you commit.
+  - It prints one **pre-existing** warning at `src/main.cxx:1299` (`arithmetic between different enumeration types`, in `configure_controls_page`). That warning is present on an unmodified tree — leave it alone; it is out of scope. Any *other* warning or any error is yours to fix.
 - Host tests build with: `cd saturn && /c/msys64/mingw64/bin/gcc -std=c11 -Wall -Wextra -I src tests/test_display.c src/display.c -o /tmp/test_display && /tmp/test_display`
 - Expected host test output: `test_display: OK` with zero compiler warnings.
 - Screen geometry: 40 columns (`CONSOLE_COLS`, columns 0–39), 28 usable rows (`SCREEN_ROWS` in `main.cxx:160`).
