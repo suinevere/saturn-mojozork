@@ -247,13 +247,34 @@ static bool title_bg_show(const char *file);
 static void title_bg_show(void);
 static void title_bg_hide(void);
 
+// Set the color the SGL font glyphs render in.
+//
+// SRL::ASCII::SetColor is unusable: it computes its CRAM address as
+// (colorBank >> 6), which is byte offset 64 for the default palette 1
+// (colorBank = 1 << 12, srl_ascii.hpp:23). But SRL initializes color RAM as
+// CRM16_2048 (srl_vdp2.hpp:1498) -- 16-bit entries, 2 bytes each -- so palette
+// 1 of a 4bpp cell begins at byte offset 32. The shift is off by one bit, so
+// every SetColor write lands in unused CRAM and never reaches a glyph. Text
+// looked white only because the font's default palette-1 entry 15 already is.
+//
+// ASCII::colorBank is private, so the bank cannot be read back; the layout is
+// pinned by SRL's own initialization above. Index 15 is the color the SGL font
+// glyphs use, and the one install_block_glyph() fills.
+//
+// VDP2_COLRAM (sl_def.h:981) is a bare integer address, not a pointer, so the
+// cast is required. It reaches this file via <srl.hpp>.
+#define ASCII_PAL1_CRAM (VDP2_COLRAM + 32)   /* palette 1, CRM16_2048 */
+static void text_set_color(unsigned short rgb555) {
+    ((volatile unsigned short *) ASCII_PAL1_CRAM)[15] = rgb555;
+}
+
 // Push g_display to the hardware. Index 15 is the color index the SGL font
 // glyphs use -- and the one install_block_glyph() fills -- so this recolors
 // body text, menus, the on-screen keyboard, and the cursor in one call.
 // (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
 // Debug::Print reads ASCII::colorBank.)
 static void display_apply(void) {
-    SRL::ASCII::SetColor(display_text_rgb(g_display.text), 15);
+    text_set_color(display_text_rgb(g_display.text));
     if (display_is_image(&g_display)) {
         if (!title_bg_show(display_bg_name(&g_display))) {
             // Load failed (or the bitmap isn't the 8bpp shape we require): fall
@@ -2736,7 +2757,7 @@ int main(void) {
     // so the menu track then plays uninterrupted. On soft-reset re-entry the preload is
     // a no-op (already cached), so no read happens and the music starts cleanly.
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-    SRL::ASCII::SetColor(DISP_RGB555(0xFF, 0xFF, 0xFF), 15);
+    text_set_color(DISP_RGB555(0xFF, 0xFF, 0xFF));
     title_bg_show();
     title_draw_art();
     SRL::Core::Synchronize();
