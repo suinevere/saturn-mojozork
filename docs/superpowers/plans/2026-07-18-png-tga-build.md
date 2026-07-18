@@ -18,6 +18,7 @@
 - **Every recipe runs under MSYS2 `sh`,** not cmd or PowerShell. Shell code must be POSIX sh.
 - **Missing Python, missing Pillow, no network, or a broken venv must print an actionable warning and exit 0.** Only a genuine converter crash may exit nonzero.
 - **Generated TGAs stay committed to git.** They are the fallback for contributors without Python.
+- **The selector holds at most 8 images** (`DISP_IMAGE_MAX` in `saturn/src/display.h`). This plan produces 7 (`HOUSE` plus six new); a resized `ANCIENT` would make exactly 8. A ninth background needs that constant raised first.
 
 ---
 
@@ -68,20 +69,21 @@ def check(cond, label):
         FAILURES.append(label)
 
 
-def make_png(path, w=make_tga.WIDTH, h=make_tga.HEIGHT):
+def gradient(w=make_tga.WIDTH, h=make_tga.HEIGHT):
     """A deterministic multi-hue gradient — quantizing a flat color is a weak test."""
     im = Image.new("RGB", (w, h))
     im.putdata([((x * 7) % 256, (y * 5) % 256, ((x + y) * 3) % 256)
                 for y in range(h) for x in range(w)])
-    im.save(path)
+    return im
+
+
+def make_png(path, w=make_tga.WIDTH, h=make_tga.HEIGHT):
+    gradient(w, h).save(path)
 
 
 def test_encode_tga_structure():
     print("test_encode_tga_structure")
-    im = Image.new("RGB", (make_tga.WIDTH, make_tga.HEIGHT))
-    im.putdata([((x * 7) % 256, (y * 5) % 256, ((x + y) * 3) % 256)
-                for y in range(make_tga.HEIGHT) for x in range(make_tga.WIDTH)])
-    blob = make_tga.encode_tga(im)
+    blob = make_tga.encode_tga(gradient())
 
     idlen, cmaptype, imgtype = blob[0], blob[1], blob[2]
     cmaplen = blob[5] | (blob[6] << 8)
