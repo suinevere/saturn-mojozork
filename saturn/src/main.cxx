@@ -1259,9 +1259,9 @@ static bool valid_dialnum(const char *s) {
     return true;
 }
 
-// Configure Z-ATURN: edit the server dial number with the on-screen / real
-// keyboard. A/Enter accept (after validation); Start/Esc cancel. Both return to
-// the Options menu.
+// Network: edit the server dial number with the on-screen / real keyboard.
+// A/Enter accept (after validation); Start/Esc cancel. Both return to the
+// Options menu.
 static void config_page(void) {
     KeyboardState k; keyboard_reset(&k);
     for (int i = 0; g_dialnum[i] && k.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&k, g_dialnum[i]);
@@ -1299,9 +1299,10 @@ static void config_page(void) {
             }
         }
         menu_clear();
-        SRL::Debug::Print(2, 1, "Configure Z-ATURN");
-        SRL::Debug::Print(2, 3, "Server dial number:");
-        SRL::Debug::Print(2, 4, "> %s_", k.input);
+        const int fx = 1, fy = 6, fw = 38, fh = 16;
+        menu_frame(fx, fy, fw, fh, "NETWORK");
+        SRL::Debug::Print(fx + 2, fy + 3, "Server dial number:");
+        SRL::Debug::Print(fx + 2, fy + 4, "> %s_", k.input);
         for (int r = 0; r < KB_ROWS; r++) {
             char rowbuf[KB_COLS * 2 + 1]; int p = 0;
             for (int c = 0; c < KB_COLS; c++) {
@@ -1309,10 +1310,10 @@ static void config_page(void) {
                 rowbuf[p++] = KB_LAYOUT[r][c];
             }
             rowbuf[p] = '\0';
-            SRL::Debug::Print(4, 6 + r, "%s", rowbuf);
+            SRL::Debug::Print(fx + 4, fy + 6 + r, "%s", rowbuf);
         }
-        if (err[0]) SRL::Debug::Print(2, 11, "%s", err);
-        SRL::Debug::Print(2, 13, "%s",
+        if (err[0]) SRL::Debug::Print(fx + 2, fy + 11, "%s", err);
+        SRL::Debug::Print(fx + 2, fy + 13, "%s",
             hint("C=type B=del  A=OK  Start=Cancel", "type number  Enter=OK  Esc=Cancel"));
         menu_sync();
     }
@@ -1390,10 +1391,13 @@ static void configure_controls_page(void) {
         }
 
         menu_clear();
-        int x = 2, y = 1;
-        SRL::Debug::Print(x, y, "CONFIGURE CONTROLS"); y += 2;
-        SRL::Debug::Print(x, y++, "%s", hint("Left/Right change  A/Start=OK B=Cancel",
-                                             "Left/Right change  Enter=OK Esc=Cancel"));
+        const int fx = 0, fy = 3, fw = 40, fh = 22;
+        menu_frame(fx, fy, fw, fh, "CONFIGURE CONTROLS");
+        int x = fx + 2, y = fy + 3;
+        // Shortened from "Left/Right change ...": the old strings were 38 chars
+        // and ran into the frame's right border at column 39.
+        SRL::Debug::Print(x, y++, "%s", hint("L/R change  A/Start=OK B=Cancel",
+                                             "L/R change  Enter=OK Esc=Cancel"));
         y++;
         for (int a = 0; a < FA_N; a++) {
             SRL::Debug::Print(x, y, "%c %s", sel == a ? '>' : ' ', FACE_LABEL[a]);
@@ -1437,8 +1441,9 @@ static void controls_page(void) {
         else if (sel == 2 && act) break;
 
         menu_clear();
-        int x = 2, y = 1;
-        SRL::Debug::Print(x, y, "GAMEPAD CONTROLS"); y += 2;
+        const int fx = 1, fy = 3, fw = 38, fh = 22;
+        menu_frame(fx, fy, fw, fh, "CONTROLS");
+        int x = fx + 2, y = fy + 3;
         for (int a = 0; a < FA_N; a++) {
             SRL::Debug::Print(x, y, "%s", FACE_LABEL[a]);
             SRL::Debug::Print(x + 18, y++, "%s", face_btn_name(a));
@@ -1498,8 +1503,9 @@ static void keyboard_controls_page(void) {
             keyboard_set_caps(s_caps); keyboard_set_num(s_num); break; }
 
         menu_clear();
-        int x = 2, y = 1;
-        SRL::Debug::Print(x, y, "KEYBOARD CONTROLS"); y += 2;
+        const int fx = 1, fy = 5, fw = 38, fh = 18;
+        menu_frame(fx, fy, fw, fh, "CONTROLS");
+        int x = fx + 2, y = fy + 3;
         SRL::Debug::Print(x, y++, "Insert key also flips Arrows;");
         SRL::Debug::Print(x, y++, "Ctrl+Left/Right always move caret.");
         y++;
@@ -1682,8 +1688,9 @@ static void sound_options_page(void) {
         }
 
         menu_clear();
-        int x = 2, y = 1;
-        SRL::Debug::Print(x, y, "SOUND OPTIONS"); y += 2;
+        const int fx = 1, fy = 6, fw = 38, fh = 16;
+        menu_frame(fx, fy, fw, fh, "SOUND");
+        int x = fx + 2, y = fy + 3;
         for (int i = 0; i < nrows; i++) {
             char cur = (i == sel) ? '>' : ' ';
             switch (rows[i]) {
@@ -1763,8 +1770,13 @@ static void display_options_page(void) {
         if (ok && row == DR_OK) { options_save(); break; }
 
         menu_clear();
-        int x = 2, y = 1;
-        SRL::Debug::Print(x, y, "DISPLAY OPTIONS"); y += 2;
+        // Full 40 columns rather than the 38 the other pages use: values print
+        // at x + 17 and the widest palette name ("Amstrad CPC 464") renders as
+        // "< Amstrad CPC 464 >", 19 columns, which inside a 38-wide box would
+        // land exactly on the right border.
+        const int fx = 0, fy = 7, fw = 40, fh = 14;
+        menu_frame(fx, fy, fw, fh, "DISPLAY");
+        int x = fx + 2, y = fy + 3;
         for (int i = 0; i < nrows; i++) {
             char cur = (i == sel) ? '>' : ' ';
             switch (rows[i]) {
