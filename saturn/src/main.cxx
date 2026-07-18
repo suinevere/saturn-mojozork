@@ -1770,10 +1770,14 @@ static void display_options_page(void) {
         if (ok && row == DR_OK) { options_save(); break; }
 
         menu_clear();
-        // Full 40 columns rather than the 38 the other pages use: values print
-        // at x + 17 and the widest palette name ("Amstrad CPC 464") renders as
-        // "< Amstrad CPC 464 >", 19 columns, which inside a 38-wide box would
-        // land exactly on the right border.
+        // Full 40 columns rather than the 38 the other pages use. Values print
+        // at x + 17, leaving 20 columns before the border, so "< %s >" fits a
+        // name of at most 16. Two sources feed these rows and both must stay
+        // under that: PRESETS in display.c (widest "Amstrad CPC 464", 15) and
+        // the disc image names, capped at GFS_FNAME_LEN = 12 by ISO9660 8.3.
+        // The margin is one column -- a longer preset name, or image names no
+        // longer bounded by 8.3, needs the value column moved, not just a
+        // wider box. At 38 the palette row already lands on the border.
         const int fx = 0, fy = 7, fw = 40, fh = 14;
         menu_frame(fx, fy, fw, fh, "DISPLAY");
         int x = fx + 2, y = fy + 3;
