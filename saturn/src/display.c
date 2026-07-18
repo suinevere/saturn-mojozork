@@ -196,5 +196,18 @@ int display_decode(const unsigned char *buf, int len, DisplayState *d) {
     if (buf[2] < display_bg_count()) d->bg   = (int) buf[2];  else ok = 0;
     if (buf[3] < DISP_TEXT_N)    d->text    = (int) buf[3];  else ok = 0;
 
+    /* Each field above was validated independently, but an image background
+       that fell back to a color can still land on the same color as text that
+       was independently accepted -- e.g. a saved image background paired with
+       Black text, decoded on a disc where that image is gone: bg falls back to
+       Black and both fields blank the screen. d->palette is a real preset index
+       by this point, and every preset pair is guaranteed legible, so restore
+       both fields from it rather than from display_defaults(). */
+    if (clashes(d->bg, d->text)) {
+        d->bg   = PRESETS[d->palette].bg;
+        d->text = PRESETS[d->palette].text;
+        ok = 0;
+    }
+
     return ok;
 }

@@ -309,14 +309,45 @@ static void test_decode_missing_image_falls_back(void) {
     a.text = DISP_TEXT_BLACK;
     display_encode(&a, buf);
 
-    /* ...reloaded on a disc with none: the background reverts to the default
-       color, but non-default palette and text bytes survive independently. */
+    /* ...reloaded on a disc with none: the background falls back to Black,
+       which would clash with the surviving Black text and blank the screen.
+       The pairwise guard in display_decode catches this and restores both
+       fields from the saved palette's own pair (ZX Spectrum: Light Gray/Black)
+       instead of leaving Black-on-Black. */
     display_set_images(NULL, 0);
     assert(display_decode(buf, 4, &b) == 0);
     assert(!display_is_image(&b));
-    assert(b.bg == DISP_BG_BLACK);      /* falls back to the default background */
-    assert(b.palette == 4);             /* non-default palette byte survived */
-    assert(b.text == DISP_TEXT_BLACK);  /* non-default text byte survived */
+    assert(display_bg_rgb(b.bg) != display_text_rgb(b.text));
+    assert(b.palette == 4);                    /* palette byte survived */
+    assert(b.bg == DISP_BG_LIGHT_GRAY);         /* restored from ZX Spectrum's own pair */
+    assert(b.text == DISP_TEXT_BLACK);          /* restored from ZX Spectrum's own pair */
+    display_set_images(IMAGES, 2);
+}
+
+static void test_decode_missing_image_never_clashes(void) {
+    /* General form of the regression above: any saved image background paired
+       with a text color that also exists as a background color must decode,
+       with no images registered, to a legible pair -- for every palette, since
+       the restored bg/text come from PRESETS[d->palette]. Black and Green are
+       the two colors present in both the background and text tables. */
+    static const int clashing_texts[2] = { DISP_TEXT_BLACK, DISP_TEXT_GREEN };
+    DisplayState a, b;
+    unsigned char buf[8];
+    int p, t;
+
+    for (p = 0; p < DISP_PRESET_N; p++) {
+        for (t = 0; t < 2; t++) {
+            display_set_images(IMAGES, 2);
+            a.palette = p;
+            a.bg = DISP_BG_COLOR_N;             /* first image slot */
+            a.text = clashing_texts[t];
+            display_encode(&a, buf);
+
+            display_set_images(NULL, 0);
+            display_decode(buf, 4, &b);
+            assert(display_bg_rgb(b.bg) != display_text_rgb(b.text));
+        }
+    }
     display_set_images(IMAGES, 2);
 }
 
@@ -356,6 +387,7 @@ int main(void) {
     test_custom_state_roundtrips();
     test_decode_rejects_bad_input();
     test_decode_missing_image_falls_back();
+    test_decode_missing_image_never_clashes();
     test_decode_multi_field_corruption();
     printf("test_display: OK\n");
     return 0;
