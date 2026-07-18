@@ -28,7 +28,7 @@ int main(void) {
 
     /* drain the whole fixture (loop in case it exceeds one budget) */
     while (cui_transport_rx_ready(&t))
-        term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+        term_service(&ts, &t, ZATURN_RX_BUDGET);
 
     assert(console_has("Hello sailor!"));
     printf("test_term_fixture: OK\n");

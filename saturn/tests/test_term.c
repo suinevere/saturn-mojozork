@@ -22,7 +22,7 @@ int main(void) {
     console_init(); term_init(&ts);
     mock_transport_init(&m, (const uint8_t*)"West of House\r\n>", 16);
     t = mock_transport_iface(&m);
-    term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+    term_service(&ts, &t, ZATURN_RX_BUDGET);
     assert(console_line_count() == 2);
     assert(strcmp(console_get_line(0), "West of House") == 0);
     assert(strcmp(console_get_line(1), ">") == 0);
@@ -34,7 +34,7 @@ int main(void) {
         mock_transport_init(&m, buf, (int)sizeof(buf));
     }
     t = mock_transport_iface(&m);
-    term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+    term_service(&ts, &t, ZATURN_RX_BUDGET);
     assert(strcmp(console_get_line(0), "hi!") == 0);
 
     /* per-frame cap: only max_bytes consumed, remainder left for next frame */
@@ -45,9 +45,9 @@ int main(void) {
         mock_transport_init(&m, big, (int)sizeof(big));
     }
     t = mock_transport_iface(&m);
-    int used = term_service(&ts, &t, MOJOZORK_RX_BUDGET);
-    assert(used == MOJOZORK_RX_BUDGET);
-    assert(drain_ready(&t) == 1000 - MOJOZORK_RX_BUDGET);
+    int used = term_service(&ts, &t, ZATURN_RX_BUDGET);
+    assert(used == ZATURN_RX_BUDGET);
+    assert(drain_ready(&t) == 1000 - ZATURN_RX_BUDGET);
 
     /* submit: echoes command into console, sends line + newline, resets keyboard */
     console_init(); term_init(&ts);

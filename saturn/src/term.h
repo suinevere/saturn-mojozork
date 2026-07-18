@@ -3,7 +3,7 @@
 #include "net/cui_transport.h"
 #include "keyboard.h"
 
-#define MOJOZORK_RX_BUDGET 512
+#define ZATURN_RX_BUDGET 512
 
 #ifdef __cplusplus
 extern "C" {

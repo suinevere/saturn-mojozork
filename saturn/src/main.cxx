@@ -33,7 +33,7 @@ static int g_pcm_level   = 4;   // PCM sound-effect level 0..7 (default mid)
 static int g_mix_mode  = MIX_DYNAMIC;   // Audio Mix: Dynamic/Override/Sequential/Random
 static int g_sel_track = 10;            // selected/override track, also the menu track
 
-// Online dial number (editable in Options -> Configure MojoZork; persisted).
+// Online dial number (editable in Options -> Configure Z-ATURN; persisted).
 static char g_dialnum[24] = "199403";
 
 // "Load Save Game": a save slot pre-selected from the menu, applied by the first
@@ -87,7 +87,7 @@ static void ensure_typeahead() {
 }
 
 
-#define MOJOZORK_DIAL_NUMBER "199403"
+#define ZATURN_DIAL_NUMBER "199403"
 
 // snprintf links from newlib; the SRL dummy <stdio.h> omits its declaration.
 extern "C" int snprintf(char *str, size_t size, const char *fmt, ...);
@@ -1169,7 +1169,7 @@ static bool valid_dialnum(const char *s) {
     return true;
 }
 
-// Configure MojoZork: edit the server dial number with the on-screen / real
+// Configure Z-ATURN: edit the server dial number with the on-screen / real
 // keyboard. A/Enter accept (after validation); Start/Esc cancel. Both return to
 // the Options menu.
 static void config_page(void) {
@@ -1209,7 +1209,7 @@ static void config_page(void) {
             }
         }
         menu_clear();
-        SRL::Debug::Print(2, 1, "Configure MojoZork");
+        SRL::Debug::Print(2, 1, "Configure Z-ATURN");
         SRL::Debug::Print(2, 3, "Server dial number:");
         SRL::Debug::Print(2, 4, "> %s_", k.input);
         for (int r = 0; r < KB_ROWS; r++) {
@@ -1701,7 +1701,7 @@ static void options_menu(void) {
             char cur = (i == sel) ? '>' : ' ';
             switch (items[i]) {
                 case OI_DIFF: break;   // drawn above
-                case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Configure MojoZork", cur); break;
+                case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Configure Z-ATURN", cur); break;
                 case OI_CONTROLS: SRL::Debug::Print(x0 + 2, ay++, "%c %s", cur, g_kbd_visible ? "Gamepad Controls" : "Keyboard Controls"); break;
                 case OI_SOUND:    SRL::Debug::Print(x0 + 2, ay++, "%c Sound Options", cur); break;
                 case OI_RETURN:   SRL::Debug::Print(x0 + 2, ay++, "%c Return to Title Screen", cur); break;
@@ -1977,8 +1977,7 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
 // Draw the title art (no prompt). Shown on its own during the catalog load, then
 // again by title_and_seed with the "Press any button" prompt on the same screen.
 static void title_draw_art(void) {
-    SRL::Debug::Print(12, 12, "M O J O Z O R K");
-    SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
+    SRL::Debug::Print(13, 12, "Z - A T U R N");
     SRL::Debug::Print(4, 15, "Saturn port (c) 2026 by Suinevere");
 }
 
@@ -2331,7 +2330,7 @@ static void online_mode(void) {
     // common case: it never stopped), leave it be so it stays seamless rather than
     // restarting from the top.
     if (!music_cdda_is_playing()) music_cdda_play(g_sel_track);
-    const char *number = g_dialnum;   // change it in Options -> Configure MojoZork
+    const char *number = g_dialnum;   // change it in Options -> Configure Z-ATURN
 
     // ---- connect, with auto-redial on carrier-training failure ----
     net_connect_result_t rc = NET_DIAL_FAIL;
@@ -2386,7 +2385,7 @@ static void online_mode(void) {
     char sug_last[256] = "";     // the typed word the cycle position belongs to
     int last_scan_lines = -1;    // rescan on-screen words only when output grows
     for (;;) {
-        term_service(&ts, tr, MOJOZORK_RX_BUDGET);   // RX -> console
+        term_service(&ts, tr, ZATURN_RX_BUDGET);   // RX -> console
 
         // Mark on-screen objects when the server prints new lines (room text etc.).
         int lc = console_line_count();
@@ -2512,7 +2511,7 @@ int main(void) {
     const char* game_file = nullptr;
 
     for (;;) {
-        int mode = menu_select("MojoZork", modes, 4);
+        int mode = menu_select("Z-ATURN", modes, 4);
         if (mode < 0) continue;   // Back at the root menu: nowhere to go up, so stay here
         if (mode == 3) { options_menu(); continue; }
         if (mode == 1) { online_mode(); continue; }

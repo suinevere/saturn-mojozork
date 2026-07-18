@@ -11,7 +11,7 @@ int main(void) {
     console_init();
     TermState ts; term_init(&ts);
     for (int frame = 0; frame < 120 && cui_transport_is_connected(&t); frame++) {
-        term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+        term_service(&ts, &t, ZATURN_RX_BUDGET);
         Sleep(16);
     }
     int n = console_line_count();
