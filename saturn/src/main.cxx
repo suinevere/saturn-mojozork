@@ -247,30 +247,42 @@ static bool title_bg_show(const char *file);
 static void title_bg_show(void);
 static void title_bg_hide(void);
 
-// Set the color the SGL font glyphs render in.
+// Set the color the SGL font glyphs and the block cursor render in.
 //
-// SRL::ASCII::SetColor is unusable: it computes its CRAM address as
-// (colorBank >> 6), which is byte offset 64 for the default palette 1
-// (colorBank = 1 << 12, srl_ascii.hpp:23). But SRL initializes color RAM as
-// CRM16_2048 (srl_vdp2.hpp:1498) -- 16-bit entries, 2 bytes each -- so palette
-// 1 of a 4bpp cell begins at byte offset 32. The shift is off by one bit, so
-// every SetColor write lands in unused CRAM and never reaches a glyph. Text
-// looked white only because the font's default palette-1 entry 15 already is.
+// The font lives in ASCII palette 0, not palette 1. colorBank's declarator
+// initializes it to 1 << 12 (srl_ascii.hpp:23), but Core::Initialize ->
+// VDP2::Initialize calls ASCII::SetPalette(0) (srl_vdp2.hpp:1517) before any
+// of our code runs, and nothing here calls SetPalette again. NBG3 is
+// COL_TYPE_16 (4bpp), so palette 0 is CRAM entries 0-15, bytes 0-31.
 //
-// ASCII::colorBank is private, so the bank cannot be read back; the layout is
-// pinned by SRL's own initialization above. Index 15 is the color the SGL font
-// glyphs use, and the one install_block_glyph() fills.
+// Two entries matter, and they are not adjacent:
+//
+//   entry 1  -- the glyph foreground. VDP2::Initialize seeds it via
+//               SetPrintPaletteColor(0, White), which writes 1 + (index << 8)
+//               (srl_vdp2.hpp:1489). Its other six calls (index 1..6) land on
+//               entries 257, 513, ... which a 4bpp cell cannot reach, so index
+//               0 is the only one that colors anything.
+//   entry 15 -- the cursor. install_block_glyph() fills its tile with 0xFF,
+//               and 4bpp pixel value 15 selects entry 15.
+//
+// SRL::ASCII::SetColor is not usable for the glyphs: it indexes from
+// (colorBank >> 6), which is 0 here, so SetColor(c, i) writes entry i. That
+// reaches the cursor at i=15 but never the glyphs, which is why changing Text
+// previously appeared to do nothing.
 //
 // VDP2_COLRAM (sl_def.h:981) is a bare integer address, not a pointer, so the
-// cast is required. It reaches this file via <srl.hpp>.
-#define ASCII_PAL1_CRAM (VDP2_COLRAM + 32)   /* palette 1, CRM16_2048 */
+// cast is required. It reaches this file via <srl.hpp>. The address is in the
+// SH-2's uncached mirror, so no flush is needed; the only DMA into CRAM
+// (CRAM::Palette::Load) targets bank 1 at entries 256+ and never overlaps.
 static void text_set_color(unsigned short rgb555) {
-    ((volatile unsigned short *) ASCII_PAL1_CRAM)[15] = rgb555;
+    volatile unsigned short *cram = (volatile unsigned short *) VDP2_COLRAM;
+    cram[1]  = rgb555;   // glyph foreground
+    cram[15] = rgb555;   // install_block_glyph()'s cursor tile
 }
 
-// Push g_display to the hardware. Index 15 is the color index the SGL font
-// glyphs use -- and the one install_block_glyph() fills -- so this recolors
-// body text, menus, the on-screen keyboard, and the cursor in one call.
+// Push g_display to the hardware. text_set_color writes both the glyph and the
+// cursor CRAM entries, so this recolors body text, menus, the on-screen
+// keyboard, and the cursor in one call.
 // (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
 // Debug::Print reads ASCII::colorBank.)
 static void display_apply(void) {
@@ -608,8 +620,9 @@ static void console_scroll_to_output(void) {
 // addresses font 0's char data at VDP2_VRAM_B1 + 0x18000 + charNum*0x20, where
 // charNum = char + 640 (see srl_ascii.hpp: fontBank=640, and LoadFontSG's dest
 // math). For 0x7F that lands at +0x1DFE0, the last tile LoadFontSG populated.
-// 0xFF fills every 4bpp pixel with color index 15 -- the same index the font
-// glyphs use -- so the block renders in the current text color.
+// 0xFF fills every 4bpp pixel with color index 15. That is a different CRAM
+// entry than the glyphs use (they are index 1), so text_set_color writes both
+// to keep the block the same color as the text.
 static const char CURSOR_BLOCK_STR[2] = { (char) 0x7f, '\0' };
 
 static void install_block_glyph(void) {
