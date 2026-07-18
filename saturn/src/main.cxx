@@ -1992,6 +1992,12 @@ static void title_bg_show(void) {
         // One-time CD read + VRAM upload. Runs before the CD directory changes
         // to Z3 (so "HOUSE.TGA" resolves at the root) and before menu CD-DA
         // starts (the single CD head can't read data while playing audio).
+        // HOUSE.TGA must be 256-color paletted, not truecolor: SRL's VDP2 bitmap
+        // allocator doubles the container size for RGB555, pushing a 512x256
+        // bitmap to 256KB and across the A0/A1 VRAM bank boundary. Bank-spanning
+        // bitmaps render as static (slBitMapNbg0 never reserves the second bank
+        // in VDP2_RAMCTL -- see the note at the top of srl_vdp2.hpp). At 8bpp the
+        // container is exactly 128KB and fits one bank.
         SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA("HOUSE.TGA");
         SRL::VDP2::NBG0::LoadBitmap(bmp);
         delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy

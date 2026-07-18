@@ -22,14 +22,21 @@ black for text readability.
 - The current "title art" is two `SRL::Debug::Print` lines in
   `title_draw_art()` (`saturn/src/main.cxx`); "Press any button to begin" is
   added by `title_and_seed()`.
-- `saturn/cd/data/HOUSE.TGA` exists: **320×224, 32-bit uncompressed truecolor,
-  top-left origin** (already cropped by the user from an earlier 320×268). The
-  file sits at the CD root (alongside the `Z3/` game folder).
-- SRL's TGA loader (`srl_tga.hpp`) decodes 16/24/32-bit truecolor into an
-  RGB555 `HighColor` bitmap.
+- `saturn/cd/data/HOUSE.TGA`: **320×224, 8-bit uncompressed paletted (256-color),
+  bottom-left origin**, generated from `saturn/cd/data/house.png`. The file sits
+  at the CD root (alongside the `Z3/` game folder).
+- SRL's TGA loader (`srl_tga.hpp`) decodes paletted TGA into an indexed bitmap
+  plus a CRAM palette; `BitmapInfo` maps a >128-entry palette to `Paletted256`.
 - SRL's VDP2 bitmap container sizes are 512×256 / 512×512 / 1024×256 / 1024×512.
-  A 320×224 RGB555 image fits the **512×256** container (2 VRAM banks,
-  auto-allocated to VRAM-A, clear of the text font/map which live in bank B1).
+  A 320×224 image fits the **512×256** container.
+- **The image must not be truecolor/RGB555.** `VRAM::AutoAllocateBmp` doubles the
+  container size for RGB555, so 512×256 becomes 256KB and spans the A0/A1 VRAM
+  bank boundary. Bank-spanning VDP2 bitmaps render as **static**: `slBitMapNbg0`
+  never reserves the second bank in `VDP2_RAMCTL`, and SRL's allocator tracks
+  banks only in software (see the author's note at `srl_vdp2.hpp:11-15`). At 8bpp
+  the container is exactly 128KB and fits a single bank, which works.
+- Palette index 0 is deliberately left unused: VDP2 treats index 0 on a scroll
+  screen as transparent, which would punch back-color holes through the image.
 
 ## Approach
 
@@ -86,9 +93,10 @@ static void title_bg_hide(void)   // disable NBG0
 
 ## Constraints honored
 
-- **2 VRAM banks** for the 512×256 RGB555 bitmap, auto-allocated to VRAM-A by
-  SRL's allocator; the text font (bank B1, `VDP2_VRAM_B1 + 0x1D000`) and map
-  (`+ 0x1E000`) are untouched.
+- **1 VRAM bank** for the 512×256 8bpp bitmap, auto-allocated to VRAM-A by SRL's
+  allocator; the text font (bank B1, `VDP2_VRAM_B1 + 0x1D000`) and map
+  (`+ 0x1E000`) are untouched. Staying within one bank is a correctness
+  requirement, not just a budget — see the bank-spanning note above.
 - **Text always on top:** NBG3 (`Layer7`) > NBG0 (`Layer1`).
 - **CD-read timing:** the one-time load runs before menu music and before the
   CD directory changes to `Z3`.
