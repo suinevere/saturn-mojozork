@@ -53,6 +53,22 @@ const char *display_palette_name(const DisplayState *d);
 
 void display_defaults(DisplayState *d);
 
+/* Register the bitmaps discovered in the disc's TGA folder. Names are borrowed,
+   not copied: the caller must keep the array alive for the program's lifetime.
+   count is clamped to DISP_IMAGE_MAX. */
+void display_set_images(const char *const *names, int count);
+int display_image_count(void);
+int display_bg_count(void);          /* DISP_BG_COLOR_N + display_image_count() */
+
+int display_is_image(const DisplayState *d);
+const char *display_bg_name(const DisplayState *d);   /* color name or file name */
+
+/* dir is +1 or -1. Cycling bg or text skips any candidate that would make the
+   text the same color as the background. */
+void display_cycle_bg(DisplayState *d, int dir);
+void display_cycle_text(DisplayState *d, int dir);
+void display_cycle_palette(DisplayState *d, int dir);
+
 #ifdef __cplusplus
 }
 #endif

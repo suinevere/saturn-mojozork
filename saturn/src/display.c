@@ -61,6 +61,8 @@ static const DisplayPreset PRESETS[DISP_PRESET_N] = {
     { "Mac Classic",     DISP_BG_BRIGHT_WHITE, DISP_TEXT_BLACK         }
 };
 
+static const char *const g_custom_label = "Custom";
+
 unsigned short display_bg_rgb(int index) {
     if (index < 0 || index >= DISP_BG_COLOR_N) index = DISP_BG_BLACK;
     return BG_RGB[index];
@@ -102,11 +104,75 @@ const char *display_palette_name(const DisplayState *d) {
         && d->text == PRESETS[d->palette].text) {
         return PRESETS[d->palette].name;
     }
-    return "Custom";
+    return g_custom_label;
 }
 
 void display_defaults(DisplayState *d) {
     d->palette = 12;                        /* IBM PC (MDA): closest to the */
     d->bg      = PRESETS[12].bg;            /* previous hardcoded appearance */
     d->text    = PRESETS[12].text;
+}
+
+static const char *const *g_image_names = 0;
+static int g_image_count = 0;
+
+void display_set_images(const char *const *names, int count) {
+    if (!names || count <= 0) { g_image_names = 0; g_image_count = 0; return; }
+    if (count > DISP_IMAGE_MAX) count = DISP_IMAGE_MAX;
+    g_image_names = names;
+    g_image_count = count;
+}
+
+int display_image_count(void) { return g_image_count; }
+int display_bg_count(void)    { return DISP_BG_COLOR_N + g_image_count; }
+
+int display_is_image(const DisplayState *d) {
+    return d->bg >= DISP_BG_COLOR_N && d->bg < display_bg_count();
+}
+
+const char *display_bg_name(const DisplayState *d) {
+    if (display_is_image(d)) return g_image_names[d->bg - DISP_BG_COLOR_N];
+    return display_bg_color_name(d->bg);
+}
+
+/* True when this background/text pairing would render text invisible. An image
+   background has no single color to clash with, so the guard is inactive. */
+static int clashes(int bg, int text) {
+    if (bg >= DISP_BG_COLOR_N) return 0;
+    return display_bg_rgb(bg) == display_text_rgb(text);
+}
+
+static int step(int value, int dir, int count) {
+    value += dir;
+    if (value >= count) value = 0;
+    if (value < 0)      value = count - 1;
+    return value;
+}
+
+void display_cycle_bg(DisplayState *d, int dir) {
+    int count = display_bg_count();
+    int next  = step(d->bg, dir, count);
+    int tries = count;
+    while (clashes(next, d->text) && tries-- > 0) next = step(next, dir, count);
+    d->bg = next;
+}
+
+void display_cycle_text(DisplayState *d, int dir) {
+    int next  = step(d->text, dir, DISP_TEXT_N);
+    int tries = DISP_TEXT_N;
+    while (clashes(d->bg, next) && tries-- > 0) next = step(next, dir, DISP_TEXT_N);
+    d->text = next;
+}
+
+void display_cycle_palette(DisplayState *d, int dir) {
+    int next;
+    if (display_palette_name(d) == g_custom_label) {
+        /* Currently Custom: enter the list at whichever end we are heading for. */
+        next = (dir > 0) ? 0 : DISP_PRESET_N - 1;
+    } else {
+        next = step(d->palette, dir, DISP_PRESET_N);
+    }
+    d->palette = next;
+    d->bg      = PRESETS[next].bg;
+    d->text    = PRESETS[next].text;
 }
