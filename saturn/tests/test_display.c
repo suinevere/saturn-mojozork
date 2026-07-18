@@ -416,6 +416,40 @@ static void test_cycle_palette_reaches_images(void) {
     display_set_images(NULL, 0);
 }
 
+static void test_cycle_palette_from_custom_with_images(void) {
+    /* Regression: the Custom re-entry branch of display_cycle_palette must
+       land on the last *image* preset when images are registered, not on
+       DISP_PRESET_N - 1 (the last color preset). */
+    static const char *const names[] = { "FOREST.TGA", "CASTLE.TGA" };
+    DisplayState d;
+    display_set_images(names, 2);
+
+    /* Genuine Custom state: palette 0's pair is Black/Bright Amber, so pick a
+       legible pair that does not match it. */
+    d.palette = 0;
+    d.bg      = DISP_BG_GREEN;
+    d.text    = DISP_TEXT_WHITE;
+    assert(strcmp(display_palette_name(&d), "Custom") == 0);
+
+    /* Backward from Custom lands on the last image preset. */
+    display_cycle_palette(&d, -1);
+    assert(d.palette == DISP_PRESET_N + 1);
+    assert(d.bg      == display_preset_bg(DISP_PRESET_N + 1));
+    assert(d.text    == display_preset_text(DISP_PRESET_N + 1));
+
+    /* Forward from Custom lands on preset 0. */
+    d.palette = 0;
+    d.bg      = DISP_BG_GREEN;
+    d.text    = DISP_TEXT_WHITE;
+    assert(strcmp(display_palette_name(&d), "Custom") == 0);
+    display_cycle_palette(&d, 1);
+    assert(d.palette == 0);
+    assert(d.bg      == display_preset_bg(0));
+    assert(d.text    == display_preset_text(0));
+
+    display_set_images(NULL, 0);
+}
+
 static void test_image_preset_name_shown_not_custom(void) {
     static const char *const names[] = { "FOREST.TGA" };
     DisplayState d;
@@ -468,6 +502,7 @@ int main(void) {
     test_palette_count_includes_images();
     test_image_presets_pin_white_text();
     test_cycle_palette_reaches_images();
+    test_cycle_palette_from_custom_with_images();
     test_image_preset_name_shown_not_custom();
     test_decode_rejects_stale_image_preset();
     test_encode_decode_roundtrip();
