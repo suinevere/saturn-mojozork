@@ -71,6 +71,25 @@ font's default palette-1 entry 15 is already white — the existing call at
 
 This is a defect in the pinned SaturnRingLib submodule, not in this port.
 
+> **Correction (post-implementation).** The analysis above is wrong, and the
+> first implementation of the fix inherited the error. `ASCII::colorBank` does
+> **not** keep its declarator value of `1 << 12`: `Core::Initialize` →
+> `VDP2::Initialize` calls `ASCII::SetPalette(0)` (`srl_vdp2.hpp:1517`) before
+> any port code runs, so `colorBank == 0` and the font renders from **palette
+> 0**, CRAM entries 0–15. With `colorBank == 0` the shift is harmless —
+> `SetColor(c, i)` writes entry `i` — so SRL is not defective here; it was
+> simply being called with an index that colors nothing.
+>
+> Two non-adjacent entries matter. The **glyph foreground is entry 1**, seeded
+> by `SetPrintPaletteColor(0, White)`, which writes `1 + (index << 8)`
+> (`srl_vdp2.hpp:1489`); its remaining calls (index 1–6) land on entries 257,
+> 513, … which a 4bpp cell cannot reach. The **cursor is entry 15**, from
+> `install_block_glyph()`'s `0xFF` fill. `text_set_color` writes both. See the
+> comment above `text_set_color` in `main.cxx` for the derivation.
+>
+> The "fallback" recorded under Phase 1b below — `SetPalette(0)` — is therefore
+> already the live configuration, not an alternative to try.
+
 ### CRAM occupancy (no conflict)
 
 Verified that background images do not contend with the font palette.
