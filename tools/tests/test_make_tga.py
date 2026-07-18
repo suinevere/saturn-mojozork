@@ -60,6 +60,53 @@ def test_encode_tga_structure():
     check(max(body) < cmaplen, "every index is inside the colormap")
 
 
+def four_quadrants(w=make_tga.WIDTH, h=make_tga.HEIGHT):
+    """Four exactly-distinguishable quadrant colors -- quantize losslessly so
+    decoded pixels can be checked for exact RGB equality, no tolerance."""
+    im = Image.new("RGB", (w, h))
+    red, green, blue, white = (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)
+
+    def color_at(x, y):
+        left = x < w // 2
+        top = y < h // 2
+        if top and left:
+            return red
+        if top and not left:
+            return green
+        if not top and left:
+            return blue
+        return white
+
+    im.putdata([color_at(x, y) for y in range(h) for x in range(w)])
+    return im
+
+
+def test_encode_tga_pixel_roundtrip():
+    print("test_encode_tga_pixel_roundtrip")
+    w, h = make_tga.WIDTH, make_tga.HEIGHT
+    blob = make_tga.encode_tga(four_quadrants(w, h))
+
+    cmaplen = blob[5] | (blob[6] << 8)
+    cmap_start = 18
+    body_start = cmap_start + cmaplen * 3
+
+    def colormap_entry(index):
+        off = cmap_start + index * 3
+        b, g, r = blob[off], blob[off + 1], blob[off + 2]
+        return (r, g, b)
+
+    def pixel_at(x, y):
+        # Body is bottom-to-top: body row r holds image row (h - 1 - r).
+        row = h - 1 - y
+        idx = blob[body_start + row * w + x]
+        return colormap_entry(idx)
+
+    check(pixel_at(80, 56) == (255, 0, 0), "top-left quadrant decodes to pure red")
+    check(pixel_at(240, 56) == (0, 255, 0), "top-right quadrant decodes to pure green")
+    check(pixel_at(80, 168) == (0, 0, 255), "bottom-left quadrant decodes to pure blue")
+    check(pixel_at(240, 168) == (255, 255, 255), "bottom-right quadrant decodes to pure white")
+
+
 def test_batch_naming_and_case_insensitivity():
     print("test_batch_naming_and_case_insensitivity")
     with tempfile.TemporaryDirectory() as td:
@@ -129,6 +176,7 @@ def test_batch_is_incremental():
 
 def main():
     for t in (test_encode_tga_structure,
+              test_encode_tga_pixel_roundtrip,
               test_batch_naming_and_case_insensitivity,
               test_batch_skips_offsize_but_continues,
               test_batch_skips_long_stems,

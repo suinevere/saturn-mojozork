@@ -49,8 +49,10 @@ def encode_tga(im):
     # Reserve index 0: shift colors up one slot, pixels follow.
     palette = [(0, 0, 0)] + rgb
     pixels = bytes(b + 1 for b in idx)
-    assert 0 not in pixels, "index 0 must stay unused (VDP2 reads it as transparent)"
-    assert max(pixels) < len(palette) <= 256
+    if 0 in pixels:
+        raise AssertionError("index 0 must stay unused (VDP2 reads it as transparent)")
+    if not (max(pixels) < len(palette) <= 256):
+        raise AssertionError("palette overflow: indices must fit the colormap")
 
     header = struct.pack(
         "<BBBHHBHHHHBB",
