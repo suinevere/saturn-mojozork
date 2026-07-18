@@ -41,3 +41,9 @@ saturn/cd/data/Z3/*.blb
 !saturn/cd/data/Z3/ZORK1.Z3
 !saturn/cd/data/Z3/ZORK2.Z3
 !saturn/cd/data/Z3/ZORK3.Z3
+
+# --- Asset-tool Python environment -------------------------------------------
+# Provisioned on demand by tools/convert-backgrounds.sh; never committed.
+tools/.venv/
+**/__pycache__/
+*.pyc
