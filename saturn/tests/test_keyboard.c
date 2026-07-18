@@ -5,24 +5,29 @@
 
 int main(void) {
     KeyboardState k;
+
+    /* The character literals below track KB_LAYOUT's first row; if the layout
+       changes, this guard fails first and points at what to update. */
+    assert(KB_LAYOUT[0][0] == '1' && KB_LAYOUT[0][2] == '3');
+
     keyboard_reset(&k);
     assert(k.cursor_col == 0 && k.cursor_row == 0);
-    assert(keyboard_current_char(&k) == 'a');   /* KB_LAYOUT[0][0] */
+    assert(keyboard_current_char(&k) == '1');   /* KB_LAYOUT[0][0] */
 
-    /* type 'a' */
+    /* type '1' */
     keyboard_type(&k);
-    assert(k.input_len == 1 && strcmp(k.input, "a") == 0);
+    assert(k.input_len == 1 && strcmp(k.input, "1") == 0);
 
-    /* move right twice -> 'c', type it */
+    /* move right twice -> '3', type it */
     keyboard_move(&k, 1, 0);
     keyboard_move(&k, 1, 0);
-    assert(keyboard_current_char(&k) == 'c');
+    assert(keyboard_current_char(&k) == '3');
     keyboard_type(&k);
-    assert(strcmp(k.input, "ac") == 0);
+    assert(strcmp(k.input, "13") == 0);
 
     /* backspace */
     keyboard_backspace(&k);
-    assert(strcmp(k.input, "a") == 0);
+    assert(strcmp(k.input, "1") == 0);
 
     /* left wraps from col 0 to col KB_COLS-1 */
     keyboard_reset(&k);
