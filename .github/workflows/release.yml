@@ -91,6 +91,9 @@ jobs:
           cp saturn/BuildDrop/mojozork.iso "$KIT/base/mojozork.iso"
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
           cp -r tools/assets/. "$KIT/"
+          # png/ is background source art for the build's PNG->TGA step, not kit
+          # input -- the kit injects games and audio into an already-built ISO.
+          rm -rf "$KIT/png"
           # Ensure working dirs exist but are empty save for .gitkeep.
           for d in game audio output; do mkdir -p "$KIT/$d"; find "$KIT/$d" -type f ! -name .gitkeep -delete; done
           NAME="zork-asset-kit-${VER}"
