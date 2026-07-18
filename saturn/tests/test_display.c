@@ -304,19 +304,40 @@ static void test_decode_missing_image_falls_back(void) {
 
     /* Saved while two images were on the disc... */
     display_set_images(IMAGES, 2);
-    display_defaults(&a);
-    a.bg = DISP_BG_COLOR_N + 1;
+    a.palette = 4;                 /* ZX Spectrum: Light Gray bg, Black text */
+    a.bg = DISP_BG_COLOR_N;        /* first image slot (exists at encode time) */
+    a.text = DISP_TEXT_BLACK;
     display_encode(&a, buf);
 
     /* ...reloaded on a disc with none: the background reverts to the default
-       color. Assert the exact value -- "is a color" alone cannot fail here,
-       since every fallback path yields one. */
+       color, but non-default palette and text bytes survive independently. */
     display_set_images(NULL, 0);
     assert(display_decode(buf, 4, &b) == 0);
     assert(!display_is_image(&b));
-    assert(b.bg == DISP_BG_BLACK);      /* the default background */
-    assert(b.palette == 12 && b.text == DISP_TEXT_BRIGHT_GREEN);   /* untouched */
+    assert(b.bg == DISP_BG_BLACK);      /* falls back to the default background */
+    assert(b.palette == 4);             /* non-default palette byte survived */
+    assert(b.text == DISP_TEXT_BLACK);  /* non-default text byte survived */
     display_set_images(IMAGES, 2);
+}
+
+static void test_decode_multi_field_corruption(void) {
+    DisplayState d, def;
+    unsigned char buf[8];
+
+    display_set_images(NULL, 0);
+    display_defaults(&def);
+
+    /* Valid sentinel and length, valid non-default background, but both
+       palette and text are out of range. Both corrupt fields fall back
+       independently while the valid background is accepted. */
+    buf[0] = 1;                 /* valid sentinel */
+    buf[1] = 99;                /* out-of-range palette */
+    buf[2] = DISP_BG_AMBER;     /* valid, non-default background */
+    buf[3] = 99;                /* out-of-range text */
+    assert(display_decode(buf, 4, &d) == 0);
+    assert(d.bg == DISP_BG_AMBER);              /* valid field accepted */
+    assert(d.palette == def.palette);           /* corrupt field fell back */
+    assert(d.text == def.text);                 /* corrupt field fell back */
 }
 
 int main(void) {
@@ -335,6 +356,7 @@ int main(void) {
     test_custom_state_roundtrips();
     test_decode_rejects_bad_input();
     test_decode_missing_image_falls_back();
+    test_decode_multi_field_corruption();
     printf("test_display: OK\n");
     return 0;
 }
