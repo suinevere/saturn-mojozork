@@ -229,7 +229,7 @@ Apply on OK:
 
 - Remove the inline **Music**, **PCM**, and **Track** rows. Replace with a single
   **"Sound Options"** row that opens the new page.
-- Remaining Options rows: Difficulty, Configure MojoZork, Gamepad/Keyboard
+- Remaining Options rows: Difficulty, Configure Z-ATURN, Gamepad/Keyboard
   Controls, Sound Options, Return to Title Screen, Done.
 - **Nested-page-left-on-screen fix:** the full-screen nested pages (Sound Options,
   Controls, Keyboard Controls) paint the whole screen; the Options box only

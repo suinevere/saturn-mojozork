@@ -983,7 +983,7 @@ git commit -m "Add a Sound Options page with Audio Mix, track demo/select, and v
 
 - [ ] **Step 1: Replace the inline audio rows with a Sound Options row**
 
-Rework `options_menu` so the rows are: 0 Difficulty, 1 Configure MojoZork, 2 Controls, 3 Sound Options, 4 Return to Title, 5 Done. Set `NITEMS = 6`. Remove `preview_track`, `music0`, `pcm0`, `previewed`, the Music/PCM/Track handling (old `sel == 4/5/6` branches and their preview lines), and the Track/Music/PCM Print lines. Concretely:
+Rework `options_menu` so the rows are: 0 Difficulty, 1 Configure Z-ATURN, 2 Controls, 3 Sound Options, 4 Return to Title, 5 Done. Set `NITEMS = 6`. Remove `preview_track`, `music0`, `pcm0`, `previewed`, the Music/PCM/Track handling (old `sel == 4/5/6` branches and their preview lines), and the Track/Music/PCM Print lines. Concretely:
 
 - Change `const int NITEMS = 8;` to `const int NITEMS = 6;` and delete the `MAX_TRACK`, `preview_track`, `music0`, `pcm0`, `previewed` locals.
 - In the activation block, renumber: `sel == 1` Configure, `sel == 2` Controls, `sel == 3` opens Sound Options, `sel == 4` Return to Title, `sel == 5` Done. Add:

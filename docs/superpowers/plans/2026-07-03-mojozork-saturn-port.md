@@ -679,7 +679,7 @@ extern "C" void saturn_die(const char *fmt, ...) {
 static int title_and_seed(void) {
     int frames = 0;
     while (!g_pad->WasPressed(Button::START)) {
-        SRL::Debug::Print(6, 12, "M O J O Z O R K   ---   Z O R K   I");
+        SRL::Debug::Print(6, 12, "Z - A T U R N   ---   Z O R K   I");
         SRL::Debug::Print(12, 15, "Press START to begin");
         SRL::Core::Synchronize();
         frames++;

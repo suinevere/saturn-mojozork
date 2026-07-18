@@ -20,8 +20,8 @@
   - `src/saturn_keyboard.h` — `saturn_keyboard_poll()` → `SaturnKeyEvent { SaturnKeyKind kind; char ch; }` (NONE/CHAR/BACKSPACE/ENTER/ESCAPE); `saturn_keyboard_present()`.
   - `src/main.cxx` reusable statics: `render_console(void)`, `render_keyboard(const KeyboardState&)`, `menu_select(const char* title, const char* const* items, int count)` → chosen index or -1. Gamepad is `g_pad` (`SRL::Input::Digital*`), buttons via `g_pad->WasPressed(Button::X)`.
 - **Vendored transport source:** clone **coup-saturn** locally (no longer a sibling checkout) — <https://github.com/likeagfeld/coup-saturn>. Headers to copy: `core/include/cui_transport.h`, `pal/saturn/saturn_uart16550.h`, `pal/saturn/modem.h`.
-- **Dial code:** `#define MOJOZORK_DIAL_NUMBER "199403"` (coordinated `1994XX` code; `199403` is the free gap). Runtime dial-entry field pre-fills this default.
-- **RX budget:** drain the transport each frame, capped at `MOJOZORK_RX_BUDGET` = 512 bytes (safety bound; at 9600 baud only ~16 bytes/frame actually arrive).
+- **Dial code:** `#define ZATURN_DIAL_NUMBER "199403"` (coordinated `1994XX` code; `199403` is the free gap). Runtime dial-entry field pre-fills this default.
+- **RX budget:** drain the transport each frame, capped at `ZATURN_RX_BUDGET` = 512 bytes (safety bound; at 9600 baud only ~16 bytes/frame actually arrive).
 - **No new interpreter changes.** Online mode never touches `mojozork.c` / `mojozork_saturn.c`; the local Z-machine mode is unchanged.
 
 ---
@@ -36,7 +36,7 @@
 | `src/term.h` / `src/term.c` | create | Pure-C terminal core: RX pump into console; line send + echo. No SRL/UART. |
 | `src/net/transport_uart.h` / `.c` | create | `cui_transport_t` over the NetLink modem UART (Saturn). |
 | `src/net/net_connect.h` / `.c` | create | C wrapper: probe→init→dial; owns the UART handle + connected transport. Isolates C-only modem headers from the C++ frontend. |
-| `src/main.cxx` | modify | Mode menu (Local/Online); online dial-entry + terminal loop. Adds `MOJOZORK_DIAL_NUMBER`. |
+| `src/main.cxx` | modify | Mode menu (Local/Online); online dial-entry + terminal loop. Adds `ZATURN_DIAL_NUMBER`. |
 | `tests/net/mock_transport.h` / `.c` | create | Host test double implementing `cui_transport_t` over in-memory buffers. |
 | `tests/net/transport_tcp.h` / `.c` | create | Host `cui_transport_t` over a winsock TCP socket (optional live smoke). |
 | `tests/fixtures/multizork_banner.bin` | create | Recorded server bytes for deterministic replay. |
@@ -252,7 +252,7 @@ git commit -m "add host mock transport test double"
 **Interfaces:**
 - Consumes: `cui_transport_t` (Task 1); `console_write`, `console_line_count`, `console_get_line`, `console_init` (existing `src/console.h`).
 - Produces:
-  - `#define MOJOZORK_RX_BUDGET 512`
+  - `#define ZATURN_RX_BUDGET 512`
   - `typedef struct { int iac_skip; } TermState;`
   - `void term_init(TermState *t);`
   - `int term_service(TermState *t, const cui_transport_t *tr, int max_bytes);` — reads up to `max_bytes` available bytes, strips telnet `IAC`(0xFF)+2-byte sequences (state carried across calls via `iac_skip`), feeds the rest to `console_write`. Returns bytes consumed from the transport.
@@ -285,7 +285,7 @@ int main(void) {
     console_init(); term_init(&ts);
     mock_transport_init(&m, (const uint8_t*)"West of House\r\n>", 16);
     t = mock_transport_iface(&m);
-    term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+    term_service(&ts, &t, ZATURN_RX_BUDGET);
     assert(console_line_count() == 2);
     assert(strcmp(console_get_line(0), "West of House") == 0);
     assert(strcmp(console_get_line(1), ">") == 0);
@@ -297,7 +297,7 @@ int main(void) {
         mock_transport_init(&m, buf, (int)sizeof(buf));
     }
     t = mock_transport_iface(&m);
-    term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+    term_service(&ts, &t, ZATURN_RX_BUDGET);
     assert(strcmp(console_get_line(0), "hi!") == 0);
 
     /* per-frame cap: only max_bytes consumed, remainder left for next frame */
@@ -308,9 +308,9 @@ int main(void) {
         mock_transport_init(&m, big, (int)sizeof(big));
     }
     t = mock_transport_iface(&m);
-    int used = term_service(&ts, &t, MOJOZORK_RX_BUDGET);
-    assert(used == MOJOZORK_RX_BUDGET);
-    assert(drain_ready(&t) == 1000 - MOJOZORK_RX_BUDGET);
+    int used = term_service(&ts, &t, ZATURN_RX_BUDGET);
+    assert(used == ZATURN_RX_BUDGET);
+    assert(drain_ready(&t) == 1000 - ZATURN_RX_BUDGET);
 
     printf("test_term: OK\n");
     return 0;
@@ -334,7 +334,7 @@ Create `src/term.h`:
 #define TERM_H
 #include "net/cui_transport.h"
 
-#define MOJOZORK_RX_BUDGET 512
+#define ZATURN_RX_BUDGET 512
 
 #ifdef __cplusplus
 extern "C" {
@@ -558,7 +558,7 @@ int main(void) {
 
     /* drain the whole fixture (loop in case it exceeds one budget) */
     while (cui_transport_rx_ready(&t))
-        term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+        term_service(&ts, &t, ZATURN_RX_BUDGET);
 
     assert(console_has("Hello sailor!"));
     printf("test_term_fixture: OK\n");
@@ -786,7 +786,7 @@ git commit -m "add net_connect modem dial orchestration (Saturn)"
 - Modify: `src/main.cxx`
 
 **Interfaces:**
-- Consumes: `net_connect_open/transport/close` (Task 7), `term_init/term_service/term_submit_line`, `MOJOZORK_RX_BUDGET` (Tasks 3–4), and existing `render_console`, `render_keyboard`, `menu_select`, `KeyboardState`, `keyboard_*`, `saturn_keyboard_poll`, `g_pad`.
+- Consumes: `net_connect_open/transport/close` (Task 7), `term_init/term_service/term_submit_line`, `ZATURN_RX_BUDGET` (Tasks 3–4), and existing `render_console`, `render_keyboard`, `menu_select`, `KeyboardState`, `keyboard_*`, `saturn_keyboard_poll`, `g_pad`.
 
 - [ ] **Step 1: Add includes and the dial-number define**
 
@@ -798,7 +798,7 @@ extern "C" {
 #include "net/net_connect.h"
 }
 
-#define MOJOZORK_DIAL_NUMBER "199403"
+#define ZATURN_DIAL_NUMBER "199403"
 ```
 
 - [ ] **Step 2: Add a dial-entry helper**
@@ -811,7 +811,7 @@ static bool online_dial_entry(char *out, int maxlen) {
     KeyboardState k;
     keyboard_reset(&k);
     // pre-fill with the compiled-in default
-    const char *def = MOJOZORK_DIAL_NUMBER;
+    const char *def = ZATURN_DIAL_NUMBER;
     for (int i = 0; def[i] && k.input_len < KB_INPUT_MAX - 1; i++)
         keyboard_type_char(&k, def[i]);
 
@@ -888,7 +888,7 @@ static void online_mode(void) {
 
     // ---- terminal loop ----
     for (;;) {
-        term_service(&ts, tr, MOJOZORK_RX_BUDGET);   // RX -> console
+        term_service(&ts, tr, ZATURN_RX_BUDGET);   // RX -> console
 
         SaturnKeyEvent ke = saturn_keyboard_poll();
         if (ke.kind == SATURN_KEY_CHAR)           keyboard_type_char(&k, ke.ch);
@@ -931,7 +931,7 @@ In `main()`, after `int seed = title_and_seed();` and before `const char* game_f
 ```c
     static const char *modes[] = { "Play Local (single player)", "Play Online (multizork)" };
     for (;;) {
-        int mode = menu_select("MojoZork", modes, 2);
+        int mode = menu_select("Z-ATURN", modes, 2);
         if (mode == 1) { online_mode(); continue; }   // returns to menu on disconnect
         break;                                          // 0 or cancelled -> local
     }
@@ -1049,7 +1049,7 @@ int main(void) {
     console_init();
     TermState ts; term_init(&ts);
     for (int frame = 0; frame < 120 && cui_transport_is_connected(&t); frame++) {
-        term_service(&ts, &t, MOJOZORK_RX_BUDGET);
+        term_service(&ts, &t, ZATURN_RX_BUDGET);
     }
     int n = console_line_count();
     for (int i = 0; i < n; i++) printf("%s\n", console_get_line(i));
@@ -1131,6 +1131,6 @@ Open a PR to `eaudunord/Netlink` adding the same entry so the route ships to all
 ## Self-Review Notes
 
 - **Spec coverage:** transport abstraction (T1), UART transport (T6), TCP transport (T9), terminal core RX+echo (T3–T4), connect FSM (T7), mode menu + dial entry (T8), no-Saturn-save (nothing to build — server access code), recorded fixture + deterministic test (T5), tunnel `transparent` routing entry (T10), hardware acceptance (T11). All spec sections map to a task.
-- **Type consistency:** `cui_transport_t`, `TermState`, `KeyboardState`, `net_connect_result_t`, and function names (`term_service`, `term_submit_line`, `transport_uart_make`, `net_connect_open/transport/close`, `MOJOZORK_RX_BUDGET`, `MOJOZORK_DIAL_NUMBER`) are used identically across tasks.
+- **Type consistency:** `cui_transport_t`, `TermState`, `KeyboardState`, `net_connect_result_t`, and function names (`term_service`, `term_submit_line`, `transport_uart_make`, `net_connect_open/transport/close`, `ZATURN_RX_BUDGET`, `ZATURN_DIAL_NUMBER`) are used identically across tasks.
 - **No unresolved placeholders:** the T7 UART probe uses coup's exact `{0x25895001,4}` / `{0x04895001,4}` base table and `saturn_netlink_smpc_enable()` + `saturn_uart_detect()` from the vendored header — concrete, not a placeholder.
 - **Verify-on-vendor:** Tasks 1 and 6 record the coup source commit in each vendored header so a future coup change is a traceable re-sync, not a silent drift.

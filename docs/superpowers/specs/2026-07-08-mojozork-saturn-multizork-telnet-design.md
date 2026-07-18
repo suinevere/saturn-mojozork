@@ -194,7 +194,7 @@ unbounded loop under a pathological burst. This mirrors coup's bounded recv.
 
 **Online path:**
 
-1. **Dial-entry screen.** An input field pre-filled with `MOJOZORK_DIAL_NUMBER`
+1. **Dial-entry screen.** An input field pre-filled with `ZATURN_DIAL_NUMBER`
    ("199403"); the player accepts the default or edits it (reuses the on-screen
    keyboard/line-edit). Press connect to proceed.
 2. **Connect screen** — `net_connect` FSM, one step per frame, rendering stage
@@ -210,7 +210,7 @@ unbounded loop under a pathological burst. This mirrors coup's bounded recv.
       scrollback preserved).
    5. `Synchronize()`.
 
-`#define MOJOZORK_DIAL_NUMBER "199403"` — the compiled-in default; the dial-entry
+`#define ZATURN_DIAL_NUMBER "199403"` — the compiled-in default; the dial-entry
 field lets the player override it at runtime.
 
 ## Error handling
@@ -269,7 +269,7 @@ handles persistence).
 - [ ] `term.{h,c}` (pure C).
 - [ ] `net_connect.{h,c}` (connect FSM).
 - [ ] `main.cxx`: title menu, dial-entry screen, online connect→terminal flow.
-- [ ] `MOJOZORK_DIAL_NUMBER` define.
+- [ ] `ZATURN_DIAL_NUMBER` define.
 - [ ] Recorded fixture + `test_term.c` host tests.
 - [ ] Add the `[server:199403]` entry to `/dreampi/netlink_config.ini` on the DreamPi (temporary), then PR it upstream to [eaudunord/Netlink](https://github.com/eaudunord/Netlink).
 - [ ] Manual hardware acceptance pass.
