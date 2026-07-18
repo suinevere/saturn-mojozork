@@ -196,6 +196,21 @@ def test_batch_warns_past_image_cap():
           f"warning fires at {make_tga.IMAGE_MAX + 1} images")
 
 
+def test_batch_skips_unreadable_source():
+    print("test_batch_skips_unreadable_source")
+    with tempfile.TemporaryDirectory() as td:
+        src, dst = Path(td) / "png", Path(td) / "tga"
+        src.mkdir()
+        make_png(src / "CLIFF.PNG")
+        (src / "BROKEN.png").write_bytes(b"not a real png, just garbage bytes")
+
+        written = make_tga.batch(src, dst)
+
+        check(written == 1, "the valid file still converted")
+        check((dst / "CLIFF.TGA").exists(), "valid file produced a TGA")
+        check(not (dst / "BROKEN.TGA").exists(), "unreadable source produced no TGA")
+
+
 def main():
     for t in (test_encode_tga_structure,
               test_encode_tga_pixel_roundtrip,
@@ -203,7 +218,8 @@ def main():
               test_batch_skips_offsize_but_continues,
               test_batch_skips_long_stems,
               test_batch_is_incremental,
-              test_batch_warns_past_image_cap):
+              test_batch_warns_past_image_cap,
+              test_batch_skips_unreadable_source):
         t()
     print()
     if FAILURES:

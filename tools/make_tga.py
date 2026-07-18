@@ -113,7 +113,17 @@ def batch(srcdir, dstdir):
             print(f"  ok    {dst.name} up to date")
             continue
 
-        status, message = convert_one(src, dst)
+        try:
+            status, message = convert_one(src, dst)
+        except AssertionError:
+            # A real encoder bug (e.g. palette-index-0 leaked through, or a
+            # palette overflow) must still abort the run loudly -- swallowing
+            # it here would silently ship a TGA that punches transparent
+            # holes through the VDP2 scroll screen.
+            raise
+        except Exception as exc:
+            print(f"  skip  {src.name}: unreadable ({exc})")
+            continue
         print(f"  {'wrote' if status == 'wrote' else 'skip '} {message}")
         if status == "wrote":
             written += 1
@@ -121,8 +131,10 @@ def batch(srcdir, dstdir):
     total = sum(1 for _ in dstdir.glob("*.TGA")) if dstdir.is_dir() else 0
     if total > IMAGE_MAX:
         print(f"  WARN  {total} TGAs present but the Display Options selector shows "
-              f"only {IMAGE_MAX}; the extras will not appear. Raise DISP_IMAGE_MAX "
-              f"in saturn/src/display.h or remove a background.")
+              f"only {IMAGE_MAX}; the disc scans them in ISO9660 (alphabetical) order "
+              f"and stops after {IMAGE_MAX}, so whichever file sorts LAST "
+              f"alphabetically will not appear -- not necessarily the newest one. "
+              f"Raise DISP_IMAGE_MAX in saturn/src/display.h or remove a background.")
 
     return written
 
