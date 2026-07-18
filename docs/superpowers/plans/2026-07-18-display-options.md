@@ -761,11 +761,14 @@ static void test_decode_missing_image_falls_back(void) {
     a.bg = DISP_BG_COLOR_N + 1;
     display_encode(&a, buf);
 
-    /* ...reloaded on a disc with none: the background reverts to a color. */
+    /* ...reloaded on a disc with none: the background reverts to the default
+       color. Assert the exact value -- "is a color" alone cannot fail here,
+       since every fallback path yields one. */
     display_set_images(NULL, 0);
     assert(display_decode(buf, 4, &b) == 0);
     assert(!display_is_image(&b));
-    assert(b.bg == display_preset_bg(b.palette) || b.bg < DISP_BG_COLOR_N);
+    assert(b.bg == DISP_BG_BLACK);      /* the default background */
+    assert(b.palette == 12 && b.text == DISP_TEXT_BRIGHT_GREEN);   /* untouched */
     display_set_images(IMAGES, 2);
 }
 ```
