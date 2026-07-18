@@ -38,7 +38,7 @@ static int g_sel_track = 10;            // selected/override track, also the men
 // persisted in MOJOOPTS alongside the other options.
 static DisplayState g_display;
 
-// Online dial number (editable in Options -> Configure Z-ATURN; persisted).
+// Online dial number (editable in Options -> Network; persisted).
 static char g_dialnum[24] = "199403";
 
 // "Load Save Game": a save slot pre-selected from the menu, applied by the first
@@ -1179,9 +1179,9 @@ static void menu_clear(void) {
 // row. Every menu page uses this so the chrome and title placement stay
 // identical; pages differ only in the box they ask for.
 //
-// The caller owns the interior: content starts at (x0 + 2, y0 + 2) by
-// convention, and must stay inside x0 + w - 2 so it never overwrites the right
-// border.
+// The caller owns the interior: content starts at (x0 + 2, y0 + 3) by
+// convention -- row y0 + 2 stays blank under the title -- and must stay inside
+// x0 + w - 2 so it never overwrites the right border.
 static void menu_frame(int x0, int y0, int w, int h, const char *title) {
     for (int r = 0; r < h; r++) {
         char line[42]; int p = 0;
@@ -1800,7 +1800,7 @@ static void display_options_page(void) {
 // Options menu (centered box): a difficulty slider plus actions (Network,
 // Controls, Display, Sound, Return to Title, Done). Up/Down select a row; on
 // Difficulty, Left/Right change it; A/Enter activate other rows; B/Esc close.
-// Sound Options only appears when there is audio to configure -- CD-DA on the disc
+// Sound only appears when there is audio to configure -- CD-DA on the disc
 // or the game's .BLB; with neither, the row is hidden. Audio settings live on that
 // page. Difficulty is written to backup only if the player actually changed it.
 static void options_menu(void) {
@@ -1842,7 +1842,7 @@ static void options_menu(void) {
             else if (item == OI_CONTROLS) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear_full(); }
             else if (item == OI_DISPLAY) { display_options_page(); menu_clear_full(); }
             else if (item == OI_SOUND) { sound_options_page(); menu_clear_full(); }
-            else if (item == OI_RETURN) {   // Return to Title Screen (soft reset; never returns on Yes)
+            else if (item == OI_RETURN) {   // Return to Title (soft reset; never returns on Yes)
                 if (menu_confirm("Return to the title screen?", "Are you sure?")) {
                     if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
                     soft_reset_to_title();
@@ -1855,7 +1855,7 @@ static void options_menu(void) {
         SRL::Debug::Print(x0 + 2, y0 + 3, "%c Difficulty: %s %s %s", item == OI_DIFF ? '>' : ' ',
                           diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
         SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
-        int ay = y0 + 6;   // action rows follow the difficulty block; Sound Options may be absent
+        int ay = y0 + 6;   // action rows follow the difficulty block; Sound may be absent
         for (int i = 0; i < nitems; i++) {
             char cur = (i == sel) ? '>' : ' ';
             switch (items[i]) {
@@ -2617,7 +2617,7 @@ static void online_mode(void) {
     // common case: it never stopped), leave it be so it stays seamless rather than
     // restarting from the top.
     if (!music_cdda_is_playing()) music_cdda_play(g_sel_track);
-    const char *number = g_dialnum;   // change it in Options -> Configure Z-ATURN
+    const char *number = g_dialnum;   // change it in Options -> Network
 
     // ---- connect, with auto-redial on carrier-training failure ----
     net_connect_result_t rc = NET_DIAL_FAIL;
