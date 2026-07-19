@@ -1826,9 +1826,15 @@ static void display_options_page(void) {
         // means it fragments. The two have different fixes, and guessing
         // between them has already cost two wrong attempts.
         {
+            // Plain %d only. SRL::Debug::Print goes through snprintfEx
+            // (srl_string.hpp:129), a hand-rolled formatter that switches on the
+            // single character after '%' and implements just %c, %s, %d and
+            // %0Nd. A width like "%6d" matches no case, so it prints literally
+            // *and* never consumes its argument, which garbles every value
+            // after it.
             SRL::Memory::Report r = SRL::Memory::HighWorkRam::GetReport();
-            SRL::Debug::Print(x, y++, "HWRAM free %6d  blk %3d/%3d",
-                              (int) r.FreeSize, (int) r.FreeBlocks, (int) r.UsedBlocks);
+            SRL::Debug::Print(x, y++, "free %d used %d", (int) r.FreeSize, (int) r.UsedBlocks);
+            SRL::Debug::Print(x, y++, "freeblk %d hdr %d", (int) r.FreeBlocks, (int) r.AllocationHeaders);
         }
 #endif
         SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel",
