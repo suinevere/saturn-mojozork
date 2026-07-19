@@ -57,13 +57,15 @@ static void test_fit_handles_null_title(void) {
 static void test_fit_clamps_negative_inputs(void) {
     int x0, y0, w, h;
     /* content_w and rows below zero (not just zero) must hit the negative
-       clamp on menu_layout.c:28-29, not just fall through by luck. */
-    menu_box_fit("X", -50, -40, &x0, &y0, &w, &h);
-    assert(w >= 4);
-    assert(h >= 4);
-    assert(x0 >= 0 && y0 >= 0);
-    assert(x0 + w <= 40);
-    assert(y0 + h <= 28);
+       clamp on menu_layout.c:13-14, not just fall through by luck.
+       With empty title: tlen=0, content_w clamped to 0, rows clamped to 0,
+       so bw = max(0, 0) + 4 = 4, bh = 0 + 4 = 4,
+       x0 = (40-4)/2 = 18, y0 = (28-4)/2 = 12. */
+    menu_box_fit("", -50, -40, &x0, &y0, &w, &h);
+    assert(w == 4);
+    assert(h == 4);
+    assert(x0 == 18);
+    assert(y0 == 12);
 }
 
 static void test_fit_survives_int_max_inputs(void) {

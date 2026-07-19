@@ -8,7 +8,7 @@ void menu_box_fit(const char *title, int content_w, int rows,
     /* Stop counting once tlen can no longer matter: it only ever competes
        with content_w for "widest", and both get clamped to the screen width
        below, so counting past that is wasted work on pathological input. */
-    if (title != 0) while (title[tlen] != '\0' && tlen < MENU_SCREEN_COLS) tlen++;
+    if (title != 0) while (tlen < MENU_SCREEN_COLS && title[tlen] != '\0') tlen++;
 
     if (content_w < 0) content_w = 0;
     if (rows < 0)      rows = 0;
