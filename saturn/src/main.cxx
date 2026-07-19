@@ -1819,6 +1819,18 @@ static void display_options_page(void) {
             }
         }
         y++;
+#ifdef DEBUG
+        // Temporary instrumentation for the background-cycling crash. Watch
+        // these across successive image selections: FreeSize falling and not
+        // recovering means the loader leaks; FreeSize steady while blocks climb
+        // means it fragments. The two have different fixes, and guessing
+        // between them has already cost two wrong attempts.
+        {
+            SRL::Memory::Report r = SRL::Memory::HighWorkRam::GetReport();
+            SRL::Debug::Print(x, y++, "HWRAM free %6d  blk %3d/%3d",
+                              (int) r.FreeSize, (int) r.FreeBlocks, (int) r.UsedBlocks);
+        }
+#endif
         SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel",
                                              "<> change  Enter=OK  Esc=Cancel"));
         menu_sync();
@@ -2377,25 +2389,27 @@ static bool title_bg_show(const char *file) {
             return false;
         }
 
-        // Decode in LWRAM, not the game's heap. SRL's `autonew` is
-        // new(reinterpret_cast<uint32_t>(this)) (srl_memory.hpp:1077), so every
-        // buffer the loader allocates comes from whichever zone the TGA object
-        // itself lives in. Plain `new` would put it in HighWorkRam -- the same
-        // 1MB the Z-machine story image, typeahead and console buffers use --
-        // and each load churns roughly twice the file size there (the whole file
-        // is read into a temp buffer, then the decoded pixels are allocated
-        // beside it before that buffer is freed, srl_tga.hpp:689). Cycling
-        // backgrounds fragmented that heap until an allocation failed, and SRL
-        // does not check autonew's result before decoding into it, so the fourth
-        // or so image wrote through a null pointer and locked the machine.
-        // LWRAM is a separate 1MB (srl_memory.hpp:594) that nothing else here
-        // touches, so the churn cannot reach the game's allocations.
+        // Decode in HighWorkRam. This must NOT be moved to LWRAM, however
+        // tempting: SRL's `autonew` is new(reinterpret_cast<uint32_t>(this))
+        // (srl_memory.hpp:1077), so the loader's buffers follow the TGA object
+        // into whatever zone it came from -- and the decoded pixels are then
+        // handed to Bmp2VRAM, which copies them a scanline at a time with
+        // slDMACopy (srl_vdp2.hpp:924). SCU DMA cannot source from Work RAM-L,
+        // so a pixel buffer there hangs the machine on the very first load.
+        // Allocating with plain `new` keeps the DMA source in HWRAM, reachable.
+        //
+        // The cost is that each load churns roughly twice the file size in the
+        // same 1MB the Z-machine story image uses: the whole file is read into a
+        // temp buffer, then the pixels are allocated beside it before that
+        // buffer is freed (srl_tga.hpp:689). Refuse the load rather than let SRL
+        // decode into a failed allocation -- it never checks autonew's result,
+        // so an exhausted heap turns into a write through a null pointer.
         const size_t need = (size_t) probe.Size.Bytes * 2 + 8192;   // stream + pixels + palette
-        if (SRL::Memory::LowWorkRam::GetFreeSpace() < need) {
+        if (SRL::Memory::HighWorkRam::GetFreeSpace() < need) {
             bitmap_read_end();
             return false;
         }
-        SRL::Bitmap::TGA* bmp = new (SRL::Memory::Zone::LWRam) SRL::Bitmap::TGA(file);
+        SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
         if (!bmp) {               // operator new returns null on OOM (srl_memory.hpp)
             bitmap_read_end();
             return false;
