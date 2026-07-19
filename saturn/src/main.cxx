@@ -846,7 +846,6 @@ static void check_soft_reset(void) {
     if (hold >= SOFT_RESET_HOLD) soft_reset_to_title();
 }
 
-
 // Put `cmd` on the input line and submit it, as if the player had typed it and
 // pressed Enter -- so it echoes, enters history, and reaches the interpreter by
 // the one path every other command uses. How the F-key shortcuts run the game's
@@ -2285,6 +2284,13 @@ static bool menu_confirm(const char *line1, const char *line2) {
     // (24); the digit row is 15. Budgeted unconditionally -- pad wording is
     // shorter, but sizing to it would make the box grow the moment the player
     // switched to a keyboard.
+    //
+    // Deliberately does NOT add MENU_DIGIT_COLS the way menu_select does. There
+    // the digits are a per-row prefix that shifts every item's text rightward,
+    // so the columns have to be added to the item width. Here they are a
+    // standalone row that prefixes nothing, and the 24-column floor above
+    // already covers it -- unconditionally, so the box still cannot resize when
+    // the input device changes, which is the invariant that constant protects.
     int content_w = (l1 > l2 ? l1 : l2);
     if (content_w < 24) content_w = 24;
     int x0, y0, w, h;
