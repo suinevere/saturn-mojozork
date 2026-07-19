@@ -2167,6 +2167,17 @@ static int choose_device(const char *title) {
 // while editing goes back to slot selection; A/Enter confirms. Returns 1 with
 // *out_slot/out_name set, or 0 if cancelled. out_name is empty if left blank.
 static int pick_slot_and_name(int device, int *out_slot, char *out_name, int maxchars) {
+    MenuBacking backing;        // the box owns its area while the picker is up
+
+    // Both hint variants of both states. Everything drawn inside a box counts
+    // toward its width, hints included, and the LONGER variant is budgeted
+    // unconditionally so the box does not resize when the player switches
+    // between the pad and a keyboard mid-menu.
+    static const char PICK_HINT_PAD[] = "pad picks   C=edit   B=back";
+    static const char PICK_HINT_KBD[] = "num picks   Enter=edit   Esc=back";
+    static const char EDIT_HINT_PAD[] = "C=type X=space  B=back  A=OK";
+    static const char EDIT_HINT_KBD[] = "type name  Esc=back  Enter=OK";
+
     char slotname[SAVE_SLOTS][12];
     for (int i = 0; i < SAVE_SLOTS; i++) {
         char fn[12];
@@ -2188,8 +2199,10 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
             bool pick = false, cancel = false;
             if (ke.kind == SATURN_KEY_ENTER) pick = true;
             else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
-            else if (ke.kind == SATURN_KEY_CHAR && ke.ch >= '1' && ke.ch < (char) ('1' + SAVE_SLOTS)) {
-                sel = (int) (ke.ch - '1'); pick = true;
+            else if (ke.kind == SATURN_KEY_CHAR) {
+                // Slot list never scrolls, so the window is the whole list.
+                int idx = menu_visible_digit(ke.ch, 0, SAVE_SLOTS, SAVE_SLOTS);
+                if (idx >= 0) { sel = idx; pick = true; }
             } else {
                 if (g_pad->WasPressed(Button::Up))   sel = (sel - 1 + SAVE_SLOTS) % SAVE_SLOTS;
                 if (g_pad->WasPressed(Button::Down)) sel = (sel + 1) % SAVE_SLOTS;
@@ -2239,20 +2252,57 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
         }
 
         // Same slot menu either way; the picked line becomes editable in place.
+        // Two shapes: a short slot list, or a taller box with the on-screen
+        // keyboard under it once a name is being typed. Sized per frame rather
+        // than once, because the box changes shape when `editing` flips.
+        const char *btitle = editing ? "NAME THIS SAVE" : "SAVE - PICK A SLOT";
+
+        // A slot row is a cursor mark, a space, the reserved "N) " columns
+        // (reserved whether or not drawn) and the label. saturn_bup_info caps a
+        // save comment at 10 characters, and "(empty)" is 7, so 10 is the
+        // ceiling. The edited row is the same chrome plus `maxchars` and the
+        // caret; callers pass 8, well under the row width above.
+        int row_w = 2 + MENU_DIGIT_COLS + 10;                 // 15
+        int edit_w = 2 + MENU_DIGIT_COLS + maxchars + 1;      // 14 at maxchars = 8
+        if (edit_w > row_w) row_w = edit_w;
+        int content_w;
+        int rows;
+        if (editing) {
+            int kb_w = KB_COLS * 2;                            // 26
+            int hint_w = (int) sizeof(EDIT_HINT_KBD) - 1;      // 29, the longer variant
+            if ((int) sizeof(EDIT_HINT_PAD) - 1 > hint_w) hint_w = (int) sizeof(EDIT_HINT_PAD) - 1;
+            content_w = row_w;
+            if (kb_w > content_w)   content_w = kb_w;
+            if (hint_w > content_w) content_w = hint_w;        // 29
+            // slots, blank, keyboard, blank, hint
+            rows = SAVE_SLOTS + 2 + KB_ROWS + 1;               // 12 -> h 16, fits 28
+        } else {
+            int hint_w = (int) sizeof(PICK_HINT_KBD) - 1;      // 33, the longer variant
+            if ((int) sizeof(PICK_HINT_PAD) - 1 > hint_w) hint_w = (int) sizeof(PICK_HINT_PAD) - 1;
+            content_w = row_w;
+            if (hint_w > content_w) content_w = hint_w;        // 33
+            rows = SAVE_SLOTS + 2;                             // slots, blank, hint
+        }
+        int x0, y0, w, h;
+        menu_box_fit(btitle, content_w, rows, &x0, &y0, &w, &h);
+
+        bool nums = !g_kbd_visible && !editing;   // digits are literal text while editing
+
         menu_clear();
-        SRL::Debug::Print(2, 1, editing ? "Name this save:" : "Save - pick a slot:");
+        menu_frame(x0, y0, w, h, btitle);
+        int cx = x0 + 2, cy = y0 + 3;
         for (int i = 0; i < SAVE_SLOTS; i++) {
             char mark = (i == sel) ? '>' : ' ';
             if (editing && i == sel) {
-                SRL::Debug::Print(2, 3 + i, "%c %d) %s_", mark, i + 1, k.input);
+                SRL::Debug::Print(cx, cy + i, "%c    %s_", mark, k.input);
             } else {
                 const char *label = slotname[i][0] ? slotname[i] : "(empty)";
-                SRL::Debug::Print(2, 3 + i, "%c %d) %s", mark, i + 1, label);
+                if (nums) SRL::Debug::Print(cx, cy + i, "%c %d) %s", mark, i + 1, label);
+                else      SRL::Debug::Print(cx, cy + i, "%c    %s", mark, label);
             }
         }
         if (!editing) {
-            SRL::Debug::Print(2, 4 + SAVE_SLOTS, "%s",
-                hint("pad picks   C=edit   B=back", "num picks   Enter=edit   Esc=back"));
+            SRL::Debug::Print(cx, cy + SAVE_SLOTS + 1, "%s", hint(PICK_HINT_PAD, PICK_HINT_KBD));
         } else {
             for (int r = 0; r < KB_ROWS; r++) {
                 char rowbuf[KB_COLS * 2 + 1];
@@ -2262,10 +2312,10 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
                     rowbuf[p++] = KB_LAYOUT[r][c];
                 }
                 rowbuf[p] = '\0';
-                SRL::Debug::Print(4, 4 + SAVE_SLOTS + r, "%s", rowbuf);
+                SRL::Debug::Print(cx, cy + SAVE_SLOTS + 1 + r, "%s", rowbuf);
             }
-            SRL::Debug::Print(2, 5 + SAVE_SLOTS + KB_ROWS, "%s",
-                hint("C=type X=space  B=back  A=OK", "type name  Esc=back  Enter=OK"));
+            SRL::Debug::Print(cx, cy + SAVE_SLOTS + 2 + KB_ROWS, "%s",
+                hint(EDIT_HINT_PAD, EDIT_HINT_KBD));
         }
         SRL::Core::Synchronize();
     }

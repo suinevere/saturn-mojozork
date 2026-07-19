@@ -839,7 +839,7 @@ The box has two sizes: a short one while picking a slot, and a taller one while
 editing a name, which has to fit the on-screen keyboard. Recompute on the frame
 `editing` flips rather than sizing once.
 
-- [ ] **Step 1: Add a `MenuBacking` guard and the sizing**
+- [x] **Step 1: Add a `MenuBacking` guard and the sizing**
 
 At the top of `pick_slot_and_name`, before the input loop, add:
 
@@ -847,7 +847,7 @@ At the top of `pick_slot_and_name`, before the input loop, add:
     MenuBacking backing;
 ```
 
-- [ ] **Step 2: Suppress digit selection while editing, and add it while not**
+- [x] **Step 2: Suppress digit selection while editing, and add it while not**
 
 In the not-editing branch of the input handling (the branch containing the
 existing `sel = (int) (ke.ch - '1'); pick = true;` at `main.cxx:2100`), replace
@@ -862,7 +862,7 @@ Leave the editing branch's `SATURN_KEY_CHAR` handling (`main.cxx:2128`)
 completely alone — while editing, a digit is literal text for the save name and
 must reach the field.
 
-- [ ] **Step 3: Box the drawing**
+- [x] **Step 3: Box the drawing**
 
 Replace the drawing tail (`main.cxx:2150-2178`, from `menu_clear();` down to but
 not including `SRL::Core::Synchronize();`) with:
@@ -917,7 +917,7 @@ actual values of `SAVE_SLOTS` and `KB_ROWS` before building: if
 in `rows` to `+ 1` and shift the keyboard rows up by one) rather than letting it
 clamp.
 
-- [ ] **Step 4: Confirm the unit suite still passes**
+- [x] **Step 4: Confirm the unit suite still passes**
 
 ```bash
 gcc -o /tmp/tml saturn/tests/test_menu_layout.c saturn/src/menu_layout.c -I saturn/src && /tmp/tml
@@ -926,7 +926,7 @@ gcc -o /tmp/td  saturn/tests/test_display.c     saturn/src/display.c     -I satu
 
 Expected: `test_menu_layout: OK` then `test_display: OK`
 
-- [ ] **Step 5: Hand off for a Saturn build, then commit**
+- [x] **Step 5: Hand off for a Saturn build, then commit**
 
 ```bash
 git add saturn/src/main.cxx
