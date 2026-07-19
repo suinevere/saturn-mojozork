@@ -29,6 +29,29 @@ Diagnosis only became reliable once Mednafen save states were parsed directly
 (SR/VBR/PC/PR and the register file). Guessing from symptoms produced three
 wrong fixes; the first state dump produced the right one.
 
+### Deferred (2026-07-19)
+
+Both confirmed on target, both left open by decision.
+
+**Menu frames are transparent over an image background.** `menu_frame` draws its
+interior as spaces on NBG3, and a space cell reads as CRAM entry 0, which VDP2
+treats as transparent on a scroll screen — so the image shows straight through
+the box and menu text sits directly on the picture. Fine over a solid colour,
+which is why it went unnoticed; only visible once image backgrounds worked. A
+fix needs the frame interior to be opaque without disturbing the ASCII palette
+the text colour setting writes to (entries 1 and 15 — see the correction below),
+so it is a real piece of VDP2 work rather than a one-line change.
+
+Recorded as verified working in an earlier review, wrongly: the report was
+"doesn't overlap transparent", read as a pass when it described the defect.
+
+**CD-DA stops during a background load.** One drive head, so the read silences
+the menu track. Resuming mid-track is not straightforward: SRL's `Cdda::Resume()`
+sets an absolute start (`CDC_PLY_SFAD`) against a *span* end (`CDC_PLY_EFAS`,
+the whole track length) and repeats that range forever, which left the CD block
+looping a ~3 second fragment. The standing alternative is to load on OK rather
+than live, making a menu visit cost one read instead of one per keypress.
+
 ## Problem
 
 Four defects and inconsistencies in the Saturn client's menu layer, reported together:
