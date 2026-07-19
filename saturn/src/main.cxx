@@ -2285,7 +2285,6 @@ static void cd_restore_z3(void) {
 // been lost once to an exit path that forgot its cleanup.
 static void bitmap_read_end(void) {
     cd_restore_z3();
-    music_cdda_resume_after_read();
 }
 
 static void display_scan_images(void) {
@@ -2369,12 +2368,13 @@ static bool title_bg_show(const char *file) {
         // Every exit path below must call bitmap_read_end(), which restores both
         // the CD directory and playback.
         //
-        // Live background preview in Display Options is the one place a menu
-        // reads the CD after CD-DA has started (main() otherwise front-loads
-        // every read before the music does). One drive head means the read stops
-        // playback regardless; pausing first records the frame so we resume
-        // there rather than restarting the track on every Left/Right press.
-        music_cdda_pause_for_read();
+        // NOTE: pausing/resuming CD-DA around this read (music_cdda_pause_for_read
+        // / _resume_after_read) was tried and backed out -- it left the CD block
+        // repeating a ~3 second range forever. SRL's Cdda::Resume() sets an
+        // absolute start (CDC_PLY_SFAD = LastLocation) but a *span* end
+        // (CDC_PLY_EFAS = whole track length) and repeats that range
+        // indefinitely, and the interaction with repeated pause/resume is not
+        // understood. Do not re-enable it without working that out first.
         cd_enter_tga();
         // Probe before constructing. SRL::Bitmap::TGA's constructor calls
         // Debug::Assert("File '%s' is missing!") when the open fails
