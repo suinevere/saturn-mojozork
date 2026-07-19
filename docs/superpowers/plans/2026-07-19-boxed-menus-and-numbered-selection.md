@@ -519,7 +519,7 @@ and save/restore slot select in one change."
 - Consumes: `menu_box_fit` from Task 1.
 - Produces: `static void menu_message(const char *title, const char *line1, const char *line2);` — draws a fitted, centered box and returns immediately. It does **not** wait and does **not** call `Synchronize`; the caller decides whether to `menu_wait()` or keep redrawing per frame, which the dialing screens need.
 
-- [ ] **Step 1: Add `menu_message`**
+- [x] **Step 1: Add `menu_message`**
 
 Insert immediately after `menu_wait` (which ends at `main.cxx:1347`):
 
@@ -547,7 +547,7 @@ static void menu_message(const char *title, const char *line1, const char *line2
 }
 ```
 
-- [ ] **Step 2: Box the save result screen**
+- [x] **Step 2: Box the save result screen**
 
 Replace `main.cxx:2266-2269`:
 
@@ -569,7 +569,7 @@ with:
     }
 ```
 
-- [ ] **Step 3: Box the load failure screen**
+- [x] **Step 3: Box the load failure screen**
 
 Replace `main.cxx:2287-2290`:
 
@@ -588,7 +588,7 @@ with:
         menu_wait();
 ```
 
-- [ ] **Step 4: Box the empty-catalog screen**
+- [x] **Step 4: Box the empty-catalog screen**
 
 At `main.cxx:~2847`, inside the `if (count <= 0)` branch, replace the
 `menu_clear()` plus its `SRL::Debug::Print` calls with:
@@ -604,7 +604,7 @@ Read the existing lines before replacing — keep whatever the current wording i
 if it differs from `"No games found on the disc."`, and keep the existing control
 flow (the `return nullptr` at `main.cxx:2853`) exactly as it stands.
 
-- [ ] **Step 5: Box the dialing sequence**
+- [x] **Step 5: Box the dialing sequence**
 
 In `online_mode`, replace the three full-screen clear-and-print blocks. The
 dial-attempt block at `main.cxx:2994-2998`:
@@ -666,7 +666,7 @@ immediately after `ensure_online_typeahead();` (`main.cxx:2982`). It must go out
 of scope before the terminal session starts, so if the telnet session runs inside
 the same function, wrap only the connect phase in a `{ ... }` block.
 
-- [ ] **Step 6: Confirm the unit suite still passes**
+- [x] **Step 6: Confirm the unit suite still passes**
 
 ```bash
 gcc -o /tmp/tml saturn/tests/test_menu_layout.c saturn/src/menu_layout.c -I saturn/src && /tmp/tml

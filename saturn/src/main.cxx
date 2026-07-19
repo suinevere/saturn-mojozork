@@ -1347,6 +1347,34 @@ static void menu_wait(void) {
     }
 }
 
+// Draw a centered box with one or two lines of text. Returns at once without
+// waiting or synchronizing: the save/load result screens follow it with
+// menu_wait(), while the dialing screens redraw it every frame.
+//
+// Both lines are sized into the box, so a hint passed as line2 is budgeted the
+// same as any other row. Where a caller passes hint(), the pad and keyboard
+// variants must be the SAME length ("L+R = cancel" / "Esc = cancel" are both
+// 12) so the box does not resize when the player switches input device; if a
+// pair ever differs, size the box off the longer one.
+//
+// The caller owns any MenuBacking guard. Screens that are a single blocking
+// message declare one; loops that already hold one do not need a second.
+static void menu_message(const char *title, const char *line1, const char *line2) {
+    int l1 = 0, l2 = 0;
+    while (line1 && line1[l1]) l1++;
+    while (line2 && line2[l2]) l2++;
+
+    int content_w = (l1 > l2 ? l1 : l2);
+    int rows      = (l2 > 0) ? 2 : 1;
+    int x0, y0, w, h;
+    menu_box_fit(title, content_w, rows, &x0, &y0, &w, &h);
+
+    menu_clear();
+    menu_frame(x0, y0, w, h, title);
+    if (l1) SRL::Debug::Print(x0 + 2, y0 + 3, "%s", line1);
+    if (l2) SRL::Debug::Print(x0 + 2, y0 + 4, "%s", line2);
+}
+
 // The hint line drawn at the bottom of the box (see hint() calls below), named
 // once so its width feeds both the sizing math and the draw call -- if the
 // wording changes, the box width follows automatically instead of drifting
@@ -2315,10 +2343,12 @@ extern "C" int saturn_save_blob(const uint8_t *data, uint32_t len) {
 
     int ok = saturn_bup_write(device, name, comment, data, len);
     if (ok) { g_last_device = device; g_last_slot = slot; }   // what the quick keys reuse
-    menu_clear();
-    SRL::Debug::Print(2, 4, "%s", ok ? "Saved." : "Save FAILED (no space?).");
-    SRL::Debug::Print(2, 6, "(press any key/button)");
-    menu_wait();
+    {
+        MenuBacking backing;   // opaque over an image background while this is up
+        menu_message("SAVE", ok ? "Saved." : "Save FAILED (no space?).",
+                     "(press any key/button)");
+        menu_wait();
+    }
     return ok;
 }
 
@@ -2336,9 +2366,8 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
     int ok = saturn_bup_read(device, name, buf);
     if (ok) { g_last_device = device; g_last_slot = slot; }   // what the quick keys reuse
     if (!ok) {
-        menu_clear();
-        SRL::Debug::Print(2, 4, "No save in that slot.");
-        SRL::Debug::Print(2, 6, "(press any key/button)");
+        MenuBacking backing;
+        menu_message("RESTORE", "No save in that slot.", "(press any key/button)");
         menu_wait();
     }
     return ok;
@@ -2903,11 +2932,11 @@ const char* game_select() {
     int count = g_catalog_count;
 
     if (count <= 0) {
-        menu_clear();
-        SRL::Debug::Print(2, 2, "%s", (count < 0)
+        MenuBacking backing;
+        menu_message("NO GAMES", (count < 0)
             ? "No Z3 folder found on the CD."
-            : "No .Z3 games found in the Z3 folder.");
-        SRL::Debug::Print(2, 4, "(press any key/button to go back)");
+            : "No .Z3 games found in the Z3 folder.",
+            "(press any key/button to go back)");
         menu_wait();
         return nullptr;   // back to the single/multiplayer select menu
     }
@@ -3048,13 +3077,22 @@ static void online_mode(void) {
     const char *number = g_dialnum;   // change it in Options -> Network
 
     // ---- connect, with auto-redial on carrier-training failure ----
+    // Scoped so the image-suppressing window covers the whole dialing sequence
+    // but is dropped again before the terminal session takes the screen over.
+    {
+    MenuBacking backing;
     net_connect_result_t rc = NET_DIAL_FAIL;
     for (int attempt = 1; attempt <= ONLINE_DIAL_ATTEMPTS; attempt++) {
-        for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-        SRL::Debug::Print(2, 4, "Dialing %s ... (attempt %d/%d)",
-                          number, attempt, ONLINE_DIAL_ATTEMPTS);
-        SRL::Debug::Print(2, 6, "%s", hint("L+R = cancel", "Esc = cancel"));
-        SRL::Core::Synchronize();
+        {
+            // Widest this can get is 37 columns (an 11-digit number), which is
+            // exactly what a full-width 40-column box can draw.
+            char dial[40];
+            snprintf(dial, sizeof(dial), "Dialing %s ... (attempt %d/%d)",
+                     number, attempt, ONLINE_DIAL_ATTEMPTS);
+            menu_message("ONLINE", dial,
+                         hint("L+R = cancel", "Esc = cancel"));
+            SRL::Core::Synchronize();
+        }
 
         rc = net_connect_open(number);        // blocking (~35s timeout on failure)
         if (rc == NET_OK) break;
@@ -3062,12 +3100,15 @@ static void online_mode(void) {
 
         // NET_DIAL_FAIL: brief pause (lets the DreamPi return to idle), then retry.
         if (attempt < ONLINE_DIAL_ATTEMPTS) {
-            for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-            SRL::Debug::Print(2, 4, "No carrier. Retrying...");
-            SRL::Debug::Print(2, 6, "%s", hint("L+R = cancel", "Esc = cancel"));
+            menu_message("ONLINE", "No carrier. Retrying...",
+                         hint("L+R = cancel", "Esc = cancel"));
             bool cancelled = false;
             for (int f = 0; f < 180; f++) {   // ~3s at 60Hz
                 if (online_cancel_requested()) { cancelled = true; break; }
+                // Redrawn every frame so the hint follows the input device the
+                // player is actually using during the wait.
+                menu_message("ONLINE", "No carrier. Retrying...",
+                             hint("L+R = cancel", "Esc = cancel"));
                 SRL::Core::Synchronize();
             }
             if (cancelled) { net_connect_close(); return; }
@@ -3075,13 +3116,15 @@ static void online_mode(void) {
     }
 
     if (rc != NET_OK) {
-        for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-        SRL::Debug::Print(2, 4, "%s",
-            rc == NET_NO_MODEM ? "NetLink modem not found." : "Connection failed.");
-        SRL::Debug::Print(2, 6, "(press any button)");
+        menu_message("ONLINE",
+            rc == NET_NO_MODEM ? "NetLink modem not found." : "Connection failed.",
+            "(press any button)");
         online_wait_any();
         return;
     }
+    }   // dialing box down: the terminal owns the screen from here
+
+    menu_clear_full();   // wipe the box chrome before the console draws over it
 
     const cui_transport_t *tr = net_connect_transport();
     TermState ts; term_init(&ts);
