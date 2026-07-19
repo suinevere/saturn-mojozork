@@ -247,6 +247,28 @@ static bool title_bg_show(const char *file);
 static void title_bg_show(void);
 static void title_bg_hide(void);
 
+#ifdef DEBUG
+// Breadcrumb for the background-cycling freeze. Work RAM was ruled out by the
+// HighWorkRam report holding steady across loads (free 392356 / used 8 /
+// freeblk 1 -- a single free block, so neither leaking nor fragmenting), so the
+// question is no longer "what runs out" but "which step stops returning".
+//
+// BG_STAGE writes straight to the NBG3 text layer, which VDP2 scans out
+// continuously -- it does not wait on Synchronize, so whatever is on screen when
+// the machine locks up names the last step actually entered. Row 27 sits below
+// every menu frame, so it never overdraws one.
+//
+// Declared up here, not next to title_bg_show, because display_options_page
+// prints g_bg_loads and is defined earlier in the file.
+static const char *g_bg_stage = "-";
+static int         g_bg_loads = 0;
+#define BG_STAGE(s) do { g_bg_stage = (s); \
+                         SRL::Debug::PrintClearLine(27); \
+                         SRL::Debug::Print(0, 27, "bg: %s", (s)); } while (0)
+#else
+#define BG_STAGE(s) do { } while (0)
+#endif
+
 // Set the color the SGL font glyphs and the block cursor render in.
 //
 // The font lives in ASCII palette 0, not palette 1. colorBank's declarator
@@ -1820,22 +1842,13 @@ static void display_options_page(void) {
         }
         y++;
 #ifdef DEBUG
-        // Temporary instrumentation for the background-cycling crash. Watch
-        // these across successive image selections: FreeSize falling and not
-        // recovering means the loader leaks; FreeSize steady while blocks climb
-        // means it fragments. The two have different fixes, and guessing
-        // between them has already cost two wrong attempts.
-        {
-            // Plain %d only. SRL::Debug::Print goes through snprintfEx
-            // (srl_string.hpp:129), a hand-rolled formatter that switches on the
-            // single character after '%' and implements just %c, %s, %d and
-            // %0Nd. A width like "%6d" matches no case, so it prints literally
-            // *and* never consumes its argument, which garbles every value
-            // after it.
-            SRL::Memory::Report r = SRL::Memory::HighWorkRam::GetReport();
-            SRL::Debug::Print(x, y++, "free %d used %d", (int) r.FreeSize, (int) r.UsedBlocks);
-            SRL::Debug::Print(x, y++, "freeblk %d hdr %d", (int) r.FreeBlocks, (int) r.AllocationHeaders);
-        }
+        // Work RAM is ruled out: across image loads the HighWorkRam report held
+        // steady at free 392356 / used 8 / freeblk 1 -- a single free block, so
+        // neither leaking nor fragmenting. The breadcrumb in title_bg_show
+        // (g_bg_stage) is what matters now; it names the step the load reached.
+        // Plain %d only -- SRL::Debug::Print's formatter has no width specifiers
+        // (srl_string.hpp:129).
+        SRL::Debug::Print(x, y++, "loads %d  last stage %s", g_bg_loads, g_bg_stage);
 #endif
         SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel",
                                              "<> change  Enter=OK  Esc=Cancel"));
@@ -2389,8 +2402,10 @@ static bool title_bg_show(const char *file) {
         // animation loop (srl_debug.hpp:200-220). A disc without the TGA folder
         // would take over the display instead of falling back to a color
         // background, so never hand the constructor a name that is not there.
+        BG_STAGE("1 probe");
         SRL::Cd::File probe(file);
         if (!probe.Exists()) {
+            BG_STAGE("1x missing");
             bitmap_read_end();
             return false;
         }
@@ -2412,15 +2427,19 @@ static bool title_bg_show(const char *file) {
         // so an exhausted heap turns into a write through a null pointer.
         const size_t need = (size_t) probe.Size.Bytes * 2 + 8192;   // stream + pixels + palette
         if (SRL::Memory::HighWorkRam::GetFreeSpace() < need) {
+            BG_STAGE("2x no ram");
             bitmap_read_end();
             return false;
         }
+        BG_STAGE("3 decode");
         SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
         if (!bmp) {               // operator new returns null on OOM (srl_memory.hpp)
+            BG_STAGE("3x null");
             bitmap_read_end();
             return false;
         }
         if (bmp->GetData() == nullptr) {   // opened but decoded to nothing
+            BG_STAGE("3x nodata");
             delete bmp;
             bitmap_read_end();
             return false;
@@ -2429,12 +2448,18 @@ static bool title_bg_show(const char *file) {
             // Truecolor (or any other non-paletted) image: not the 8bpp shape
             // this loader/VRAM layout requires. Reject before it ever reaches
             // VRAM instead of risking the bank-spanning static above.
+            BG_STAGE("3x truecolor");
             delete bmp;
             bitmap_read_end();
             return false;
         }
         bitmap_read_end();
+        // If the freeze lands here, the failure is in VDP2 -- the VRAM/CRAM
+        // allocation inside LoadBitmap, or the per-scanline slDMACopy -- not in
+        // the CD read or the decode, both of which have completed by now.
+        BG_STAGE("4 vram");
         SRL::VDP2::NBG0::LoadBitmap(bmp);
+        BG_STAGE("5 free");
         delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
         // LoadBitmap leaves stray debug prints on rows 20-21 ("4bpp" / "Pal: N")
@@ -2445,6 +2470,10 @@ static bool title_bg_show(const char *file) {
         int k = 0;
         for (; file[k] && k < (int) sizeof(loaded) - 1; k++) loaded[k] = file[k];
         loaded[k] = '\0';
+#ifdef DEBUG
+        g_bg_loads++;
+#endif
+        BG_STAGE("6 ok");
     }
     SRL::VDP2::NBG0::ScrollEnable();
     return true;

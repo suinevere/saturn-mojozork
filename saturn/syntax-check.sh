@@ -28,13 +28,27 @@ fi
 
 [ $# -gt 0 ] || set -- src/main.cxx
 
-exec "$CXX" -fsyntax-only -std=gnu++2b -m2 \
-    -DSRL_MODE_DEBUG -DSRL_FRAMERATE=1 \
-    -DSRL_MAX_TEXTURES=100 -DSRL_MAX_CD_BACKGROUND_JOBS=5 \
-    -DSRL_MAX_CD_FILES=256 -DSRL_MAX_CD_RETRIES=5 \
-    -DSRL_DEBUG_MAX_PRINT_LENGTH=64 -DSRL_DEBUG_MAX_LOG_LENGTH=80 \
-    -DSGL_MAX_VERTICES=2500 -DSGL_MAX_POLYGONS=1700 \
-    -DSGL_MAX_EVENTS=64 -DSGL_MAX_WORKS=256 \
-    -I"$M/dummy" -I"$M/SaturnMathPP" -I"$M/sgl/INC" -I"$M/danny/INC" \
-    -I"$SDK" -Isrc \
-    "$@"
+# Both configurations, because they compile different code. `compile.bat debug`
+# adds -DDEBUG (shared.mk:101-102), which gates instrumentation and SRL's
+# Debug::Assert body; `compile.bat release` does not. Checking only one lets a
+# broken #ifdef DEBUG block reach a real build -- which it did, costing a
+# build/test round-trip on hardware.
+check() {
+    flag="$1"; shift          # rest of "$@" is the file list
+    "$CXX" -fsyntax-only -std=gnu++2b -m2 \
+        $flag \
+        -DSRL_MODE_DEBUG -DSRL_FRAMERATE=1 \
+        -DSRL_MAX_TEXTURES=100 -DSRL_MAX_CD_BACKGROUND_JOBS=5 \
+        -DSRL_MAX_CD_FILES=256 -DSRL_MAX_CD_RETRIES=5 \
+        -DSRL_DEBUG_MAX_PRINT_LENGTH=64 -DSRL_DEBUG_MAX_LOG_LENGTH=80 \
+        -DSGL_MAX_VERTICES=2500 -DSGL_MAX_POLYGONS=1700 \
+        -DSGL_MAX_EVENTS=64 -DSGL_MAX_WORKS=256 \
+        -I"$M/dummy" -I"$M/SaturnMathPP" -I"$M/sgl/INC" -I"$M/danny/INC" \
+        -I"$SDK" -Isrc \
+        "$@"
+}
+
+echo "syntax-check: DEBUG build"
+check -DDEBUG "$@"
+echo "syntax-check: release build"
+check "" "$@"
