@@ -86,6 +86,54 @@ static void test_fit_survives_int_max_inputs(void) {
     assert(y0 + h <= 28);
 }
 
+static void test_plain_digit_picks_a_row_forward(void) {
+    int dir = 0;
+    assert(menu_row_digit('3', 5, &dir) == 2);
+    assert(dir == 1);
+    assert(menu_row_digit('1', 5, &dir) == 0);
+    assert(dir == 1);
+}
+
+static void test_shifted_digit_picks_a_row_backward(void) {
+    int dir = 0;
+    assert(menu_row_digit('#', 5, &dir) == 2);   /* Shift+3 */
+    assert(dir == -1);
+    assert(menu_row_digit('!', 5, &dir) == 0);   /* Shift+1 */
+    assert(dir == -1);
+    assert(menu_row_digit('(', 9, &dir) == 8);   /* Shift+9 */
+    assert(dir == -1);
+}
+
+static void test_digit_past_the_row_count_is_rejected(void) {
+    int dir = 0;
+    assert(menu_row_digit('7', 5, &dir) == -1);
+    assert(menu_row_digit('&', 5, &dir) == -1);  /* Shift+7 */
+}
+
+static void test_non_selecting_characters_are_rejected(void) {
+    int dir = 0;
+    assert(menu_row_digit('0', 5, &dir) == -1);  /* rows are 1-9, never 0 */
+    assert(menu_row_digit('a', 5, &dir) == -1);
+    assert(menu_row_digit(' ', 5, &dir) == -1);
+}
+
+static void test_visible_digit_maps_through_the_scroll_window(void) {
+    /* 30 games, window of 16 starting at 10: "3" is the third visible row. */
+    assert(menu_visible_digit('3', 10, 16, 30) == 12);
+    assert(menu_visible_digit('1', 25, 16, 30) == 25);
+}
+
+static void test_visible_digit_rejects_rows_past_the_end(void) {
+    /* only 5 items, so the 9th visible row does not exist */
+    assert(menu_visible_digit('9', 0, 16, 5) == -1);
+    assert(menu_visible_digit('6', 0, 16, 5) == -1);
+}
+
+static void test_visible_digit_ignores_shift(void) {
+    /* a list pick has no "backward"; only plain digits select */
+    assert(menu_visible_digit('#', 0, 16, 30) == -1);
+}
+
 int main(void) {
     test_fit_centers_a_normal_box();
     test_fit_widens_for_a_long_title();
@@ -94,6 +142,13 @@ int main(void) {
     test_fit_handles_null_title();
     test_fit_clamps_negative_inputs();
     test_fit_survives_int_max_inputs();
+    test_plain_digit_picks_a_row_forward();
+    test_shifted_digit_picks_a_row_backward();
+    test_digit_past_the_row_count_is_rejected();
+    test_non_selecting_characters_are_rejected();
+    test_visible_digit_maps_through_the_scroll_window();
+    test_visible_digit_rejects_rows_past_the_end();
+    test_visible_digit_ignores_shift();
     printf("test_menu_layout: OK\n");
     return 0;
 }
