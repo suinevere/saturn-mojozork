@@ -3084,8 +3084,12 @@ static void online_mode(void) {
     net_connect_result_t rc = NET_DIAL_FAIL;
     for (int attempt = 1; attempt <= ONLINE_DIAL_ATTEMPTS; attempt++) {
         {
-            // Widest this can get is 37 columns (an 11-digit number), which is
-            // exactly what a full-width 40-column box can draw.
+            // Widest this can get is 37 columns, which is exactly what a
+            // full-width 40-column box can draw -- no margin left. That fit
+            // depends on BOTH DIALNUM_MAX (11) and ONLINE_DIAL_ATTEMPTS
+            // staying a single digit; raising either pushes this past 37.
+            // menu_box_fit clamps width to 40 silently, so an overflow here
+            // does not report an error, it just overwrites the right border.
             char dial[40];
             snprintf(dial, sizeof(dial), "Dialing %s ... (attempt %d/%d)",
                      number, attempt, ONLINE_DIAL_ATTEMPTS);
