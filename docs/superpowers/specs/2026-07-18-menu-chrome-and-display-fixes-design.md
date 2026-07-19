@@ -49,6 +49,25 @@ The comment at `main.cxx:2126-2127` asserts the opposite — that bare-name open
 are "proven to resolve regardless of the current CD directory". That claim is
 false and is why the bug survived review.
 
+> **Correction 2 (post-implementation).** The directory diagnosis above is
+> right about *why* bare-name opens fail inside `Z3`, but the remedy it
+> prescribes — `SRL::Cd::ChangeDir((char *) nullptr)` — does not work, and
+> adding it to `title_bg_show` broke the one path that used to load (the title
+> screen, which was already at root).
+>
+> `ChangeDir(nullptr)` walks up with `Cd::ChangeDir("..")` and bails on
+> `!= ErrorCode::ErrorOk` (`srl_cd.hpp:679`). But `ChangeDir(name)` returns
+> `GFS_SetDir()`'s value, which is the **file count** on success, not
+> `GFS_ERR_OK` (`== 0`, `sega_gfs.h:59`). Any successful step out of a non-empty
+> directory is therefore read as an error, so the function returns before its
+> root-detection loop — after having already moved the current directory. It
+> does not reach root.
+>
+> Root is now captured the same way `Z3` is: `cd_capture_root()` snapshots the
+> root `GfsDirTbl` while root is current (after `GFS_Reset()`), and
+> `cd_enter_root()` re-applies it with `GFS_SetDir`. No reliance on
+> `ChangeDir(nullptr)` anywhere.
+
 ### Text color (item 3)
 
 `SRL::ASCII::SetColor` is unusable as shipped. At `srl_ascii.hpp:138`:

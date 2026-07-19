@@ -2212,8 +2212,36 @@ static GfsDirName g_z3_dirnames[SRL_MAX_CD_FILES];
 static GfsDirTbl  g_z3_tbl;
 static bool       g_z3_dir_valid = false;   // set once scan_z3_folder has run
 
+// Root is captured the same way Z3 is, rather than asking SRL to walk back up.
+// SRL::Cd::ChangeDir(nullptr) ("go to root") cannot be used: its loop reads
+//
+//     if ((err = Cd::ChangeDir("..")) != ErrorCode::ErrorOk) return err;
+//
+// (srl_cd.hpp:679) but ChangeDir(name) returns GFS_SetDir()'s value, which is
+// the *file count* on success, not GFS_ERR_OK (== 0, sega_gfs.h:59). So any
+// successful step up a non-empty directory is read as an error and the function
+// returns before its root-detection loop runs -- after having already called
+// GFS_SetDir on SRL's shared table. It does not reach root; it leaves the
+// current directory somewhere unintended. That is why background loads failed
+// even at the title screen, where we were already at root before the call.
+static GfsDirName g_root_dirnames[SRL_MAX_CD_FILES];
+static GfsDirTbl  g_root_tbl;
+static bool       g_root_dir_valid = false;
+
+// Snapshot the root directory record. Must be called while root is current --
+// i.e. straight after GFS_Reset(), before any GFS_SetDir. fid 0 is "." (the
+// same self-entry SRL reads via GFS_GetDirInfo(0, ...)), so loading it while at
+// root captures root's own contents.
+static void cd_capture_root(void) {
+    GFS_DIRTBL_TYPE(&g_root_tbl)    = GFS_DIR_NAME;
+    GFS_DIRTBL_DIRNAME(&g_root_tbl) = g_root_dirnames;
+    GFS_DIRTBL_NDIR(&g_root_tbl)    = SRL_MAX_CD_FILES;
+    g_root_dir_valid = GFS_LoadDir(0, &g_root_tbl) >= 0;
+}
+
+// No-op if the snapshot failed: staying put beats moving somewhere unintended.
 static void cd_enter_root(void) {
-    SRL::Cd::ChangeDir((char *) nullptr);
+    if (g_root_dir_valid) GFS_SetDir(&g_root_tbl);
 }
 
 // Re-point the CD at Z3 so story-file opens keep working. No-op before the
@@ -2230,7 +2258,7 @@ static void display_scan_images(void) {
     // Same idempotence dance as scan_z3_folder: get back to the root before
     // resolving "TGA", or after a soft reset it would resolve relative to
     // whatever directory we were left in.
-    SRL::Cd::ChangeDir((char *) nullptr);
+    cd_enter_root();
 
     int32_t fid = GFS_NameToId((int8_t *) "TGA");
     if (fid >= 0) {
@@ -2262,7 +2290,7 @@ static void display_scan_images(void) {
 
     // Leave the CD where we found it: at the root, which is where the existing
     // boot sequence expects to be before scan_z3_folder runs.
-    SRL::Cd::ChangeDir((char *) nullptr);
+    cd_enter_root();
     display_set_images(found > 0 ? g_image_ptr : NULL, found);
 }
 
@@ -2298,8 +2326,24 @@ static bool title_bg_show(const char *file) {
         // directory, and a bare-name open would resolve there and fail. Every
         // exit path below must cd_restore_z3() or story-file opens break.
         cd_enter_root();
+        // Probe before constructing. SRL::Bitmap::TGA's constructor calls
+        // Debug::Assert("File '%s' is missing!") when the open fails
+        // (srl_tga.hpp:820), and in a DEBUG build Assert is not a silent no-op:
+        // it clears the screen, forces the back plane red and sits in an
+        // animation loop (srl_debug.hpp:200-220). A disc without the TGA folder
+        // would take over the display instead of falling back to a color
+        // background, so never hand the constructor a name that is not there.
+        if (!SRL::Cd::File(file).Exists()) {
+            cd_restore_z3();
+            return false;
+        }
         SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
         if (!bmp) {               // operator new returns null on OOM (srl_memory.hpp)
+            cd_restore_z3();
+            return false;
+        }
+        if (bmp->GetData() == nullptr) {   // opened but decoded to nothing
+            delete bmp;
             cd_restore_z3();
             return false;
         }
@@ -2387,7 +2431,7 @@ static int scan_z3_folder(char out[][16], int max) {
     // GFS_SetDir below makes Z3 the current CD directory, and that persists. After a
     // soft reset we re-enter here still inside Z3, so "Z3" would resolve relative to
     // Z3 and fail. Return to the root directory first so the scan is idempotent.
-    SRL::Cd::ChangeDir((char *) nullptr);
+    cd_enter_root();
 
     int32_t fid = GFS_NameToId((int8_t *) "Z3");
     if (fid < 0) return -1;
@@ -2772,6 +2816,7 @@ static void online_mode(void) {
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
     saturn_bup_init();
+    cd_capture_root();              // must precede any GFS_SetDir: cd_enter_root() needs it
     display_scan_images();          // must precede options_load: display_decode()
     display_defaults(&g_display);   // validates image indices against this list
     options_load();   // restore saved difficulty (defaults to Easy)
@@ -2791,6 +2836,8 @@ int main(void) {
     g_title_jmp_armed = true;
     g_reboot_menu = false;
     GFS_Reset();
+    cd_capture_root();   // GFS_Reset returns us to root; re-snapshot it there
+    g_z3_dir_valid = false;   // the pre-reset Z3 table is stale until re-scanned
     console_init();
 
     // Clear engine statics before the menu track. A soft reset longjmps here with
