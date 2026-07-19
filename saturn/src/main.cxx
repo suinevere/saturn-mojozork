@@ -2212,6 +2212,13 @@ static void options_menu(void) {
             else if (item == OI_DONE) break;   // (OI_DIFF: activate is a no-op)
         }
 
+        // Wipe NBG3 before redrawing the box, like every other page's loop.
+        // MenuBacking only windows the image out of the box interior; it does
+        // nothing to leftover text OUTSIDE the box. Without this, the menu that
+        // opened Options (e.g. the Single/Multiplayer list, which is wider than
+        // this box) shows through around it. The image background stays -- only
+        // the text layer is cleared.
+        menu_clear();
         menu_frame(x0, y0, w, h, "OPTIONS");
         // Content runs from column 7 to the last drawable column 33 (border at
         // 34). The numbered difficulty row is the widest at 27 characters
