@@ -207,6 +207,12 @@ git commit -m "Add host-testable menu box sizing arithmetic"
 - Consumes: the header and unit from Task 1.
 - Produces: `int menu_row_digit(char ch, int nrows, int *dir);` and `int menu_visible_digit(char ch, int top, int visible, int count);`
 
+The pure mapping stays here and stays host-tested. Task 7 adds a thin C++
+adapter (`menu_digit_row`) in `main.cxx` that wraps this for the six option
+pages, so the jump-and-act call site is one line rather than nine pasted copies.
+The adapter cannot live in this unit: it takes C++ `bool&` references bound to
+each page's existing `left` / `right` locals.
+
 - [ ] **Step 1: Write the failing tests**
 
 Add to `saturn/tests/test_menu_layout.c`, above `main`:
@@ -981,72 +987,70 @@ Expected: `test_display: OK` — the longest name is 15, comfortably under 17. I
 this FAILS, a name is longer than measured; stop and shorten the name rather than
 loosening the assertion back.
 
-- [ ] **Step 3: Add digit handling to `sound_options_page`**
+- [ ] **Step 3: Add the C++ adapter**
 
-In `sound_options_page` (`main.cxx:1758`), insert immediately after the `bool
-cancel = ...` declaration and **before** `int row = rows[sel];`:
-
-```cpp
-        // A digit jumps to a row and acts on it in one press: value rows cycle
-        // forward on a plain digit and backward on the shifted symbol, action
-        // rows activate. `sel` indexes the visible row list, which is what
-        // menu_row_digit's 0-based result already means.
-        if (ke.kind == SATURN_KEY_CHAR) {
-            int ddir = 0;
-            int drow = menu_row_digit(ke.ch, nrows, &ddir);
-            if (drow >= 0) {
-                sel = drow;
-                if (ddir > 0) right = true; else left = true;
-                ok = true;
-            }
-        }
-```
-
-Setting `ok` unconditionally is safe on this page: `SR_MIX`, `SR_MUSIC`, and
-`SR_PCM` ignore `ok` entirely; `SR_TRACK` already treats `left || right || ok`
-identically; `SR_TOC` and `SR_OK` are action rows that should activate; and
-`SR_CANCEL` with `ok` set is exactly the revert-and-exit the row means.
-
-- [ ] **Step 4: Add digit handling to `display_options_page`**
-
-Same insertion in `display_options_page` (`main.cxx:1879`), after its `bool
-cancel = ...` and before its row dispatch. `nrows` there is a `const int`
-computed from the `rows[]` array, so the call is identical:
+The jump-and-act call site is otherwise identical on all six pages. Write it
+once, immediately after `menu_frame` ends (`main.cxx:1336`):
 
 ```cpp
-        if (ke.kind == SATURN_KEY_CHAR) {
-            int ddir = 0;
-            int drow = menu_row_digit(ke.ch, nrows, &ddir);
-            if (drow >= 0) {
-                sel = drow;
-                if (ddir > 0) right = true; else left = true;
-                ok = true;
-            }
-        }
+// A digit jumps to a row and acts on it in one press: value rows cycle forward
+// on a plain digit and backward on the shifted symbol, action rows activate.
+// The mapping itself lives in menu_layout.c and is unit-tested; this is only
+// the C++ binding, which the layout unit cannot express because it needs
+// references to each page's own bool locals.
+//
+// Returns true if a digit selected a row, leaving the caller to set its own
+// activation flag -- pages disagree on whether that is named `ok` or `act`.
+static bool menu_digit_row(const SaturnKeyEvent &ke, int nrows,
+                           int &sel, bool &left, bool &right) {
+    if (ke.kind != SATURN_KEY_CHAR) return false;
+    int ddir = 0;
+    int drow = menu_row_digit(ke.ch, nrows, &ddir);
+    if (drow < 0) return false;
+    sel = drow;
+    if (ddir > 0) right = true; else left = true;
+    return true;
+}
 ```
 
-- [ ] **Step 5: Add digit handling to the four `act` pages**
+- [ ] **Step 4: Call it from the two `ok` pages**
 
-The same block, with `ok` replaced by `act` and the row count per page:
-
-- `controls_page` (`main.cxx:1564`) — row count `3`
-- `keyboard_controls_page` (`main.cxx:1614`) — row count `N` (already declared, `= 6`)
-- `configure_controls_page` (`main.cxx:1487`) — row count `R_CANCEL + 1`
-- `options_menu` (`main.cxx:1967`) — row count is its visible-row count; read the loop bound it already uses for Up/Down wraparound and pass that same expression
+In `sound_options_page` (`main.cxx:1758`), insert after the `bool cancel = ...`
+declaration and **before** `int row = rows[sel];`:
 
 ```cpp
-        if (ke.kind == SATURN_KEY_CHAR) {
-            int ddir = 0;
-            int drow = menu_row_digit(ke.ch, <row count from the list above>, &ddir);
-            if (drow >= 0) {
-                sel = drow;
-                if (ddir > 0) right = true; else left = true;
-                act = true;
-            }
-        }
+        if (menu_digit_row(ke, nrows, sel, left, right)) ok = true;
 ```
 
-In `keyboard_controls_page`, place this **before** its `bool toggle = left ||
+Setting `ok` is safe on this page: `SR_MIX`, `SR_MUSIC`, and `SR_PCM` ignore it;
+`SR_TRACK` already treats `left || right || ok` identically; `SR_TOC` and `SR_OK`
+are action rows that should activate; and `SR_CANCEL` with `ok` set is exactly
+the revert-and-exit that row means.
+
+In `display_options_page` (`main.cxx:1879`), the same line after its `bool cancel
+= ...` and before its row dispatch. Its `nrows` is a `const int` from the
+`rows[]` array, so the call is identical:
+
+```cpp
+        if (menu_digit_row(ke, nrows, sel, left, right)) ok = true;
+```
+
+- [ ] **Step 5: Call it from the four `act` pages**
+
+Same line with `act`, and the row count per page:
+
+```cpp
+        if (menu_digit_row(ke, <row count>, sel, left, right)) act = true;
+```
+
+| Page | Line | `<row count>` |
+|---|---|---|
+| `controls_page` | `main.cxx:1564` | `3` |
+| `keyboard_controls_page` | `main.cxx:1614` | `N` (already declared, `= 6`) |
+| `configure_controls_page` | `main.cxx:1487` | `R_CANCEL + 1` |
+| `options_menu` | `main.cxx:1967` | its visible-row count — read the loop bound it already uses for Up/Down wraparound and pass that same expression |
+
+In `keyboard_controls_page`, place the call **before** its `bool toggle = left ||
 right || act;` line so the digit feeds into `toggle`.
 
 In `options_menu` every row is a sub-page or an action, so `left`/`right` are
