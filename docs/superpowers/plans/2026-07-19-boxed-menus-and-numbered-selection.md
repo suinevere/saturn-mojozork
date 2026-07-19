@@ -965,7 +965,7 @@ boolean differs: `sound_options_page` and `display_options_page` call it **`ok`*
 `controls_page`, `configure_controls_page`, `keyboard_controls_page`, and
 `options_menu` call it **`act`**. Use the right one per page.
 
-- [ ] **Step 1: Tighten the display value-width guard (failing test first)**
+- [x] **Step 1: Tighten the display value-width guard (failing test first)**
 
 `saturn/tests/test_display.c` asserts preset names are `<= 22` (with the comment
 "value drawn at x+16"). Once the 3-column prefix shifts the value column to
@@ -980,7 +980,7 @@ Change that assertion in `test_display.c`:
         assert(strlen(display_preset_name(i)) <= 17);
 ```
 
-- [ ] **Step 2: Run to confirm it still passes**
+- [x] **Step 2: Run to confirm it still passes**
 
 ```bash
 gcc -o /tmp/td saturn/tests/test_display.c saturn/src/display.c -I saturn/src && /tmp/td
@@ -990,7 +990,7 @@ Expected: `test_display: OK` — the longest name is 15, comfortably under 17. I
 this FAILS, a name is longer than measured; stop and shorten the name rather than
 loosening the assertion back.
 
-- [ ] **Step 3: Add the C++ adapter**
+- [x] **Step 3: Add the C++ adapter**
 
 The jump-and-act call site is otherwise identical on all six pages. Write it
 once, immediately after `menu_frame` ends (`main.cxx:1336`):
@@ -1016,7 +1016,7 @@ static bool menu_digit_row(const SaturnKeyEvent &ke, int nrows,
 }
 ```
 
-- [ ] **Step 4: Call it from the two `ok` pages**
+- [x] **Step 4: Call it from the two `ok` pages**
 
 In `sound_options_page` (`main.cxx:1758`), insert after the `bool cancel = ...`
 declaration and **before** `int row = rows[sel];`:
@@ -1038,7 +1038,7 @@ In `display_options_page` (`main.cxx:1879`), the same line after its `bool cance
         if (menu_digit_row(ke, nrows, sel, left, right)) ok = true;
 ```
 
-- [ ] **Step 5: Call it from the four `act` pages**
+- [x] **Step 5: Call it from the four `act` pages**
 
 Same line with `act`, and the row count per page:
 
@@ -1059,7 +1059,7 @@ right || act;` line so the digit feeds into `toggle`.
 In `options_menu` every row is a sub-page or an action, so `left`/`right` are
 ignored there — setting them is harmless.
 
-- [ ] **Step 6: Add the `N) ` prefix to each page's row rendering**
+- [x] **Step 6: Add the `N) ` prefix to each page's row rendering**
 
 In each of the six pages' drawing blocks, declare once before the row loop:
 
@@ -1097,14 +1097,14 @@ Use `i + 1` where the loop variable is the visible row index (`sound_options_pag
 `display_options_page`), and the row constant `+ 1` where rows are printed
 individually (`configure_controls_page`'s `R_RESET`, `R_DONE`, `R_CANCEL`).
 
-- [ ] **Step 7: Confirm `config_page` needs no change**
+- [x] **Step 7: Confirm `config_page` needs no change**
 
 `config_page` (`main.cxx:1404`) is dial-number text entry, where a digit is
 literal input and must reach the field. It already calls `menu_frame`
 (`main.cxx:1443`). Verify both facts by reading it, then leave it untouched. It
 gets **no** digit handling and **no** `N) ` prefixes.
 
-- [ ] **Step 8: Confirm the unit suite still passes**
+- [x] **Step 8: Confirm the unit suite still passes**
 
 ```bash
 gcc -o /tmp/tml saturn/tests/test_menu_layout.c saturn/src/menu_layout.c -I saturn/src && /tmp/tml
@@ -1119,7 +1119,7 @@ Ask the user to run `saturn/compile.bat`. This task touches six functions; expec
 errors from `ok` vs `act` mismatches and fix them against each page's actual
 declaration.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add saturn/src/main.cxx saturn/tests/test_display.c

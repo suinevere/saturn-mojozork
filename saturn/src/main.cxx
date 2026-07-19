@@ -1300,6 +1300,25 @@ static void menu_frame(int x0, int y0, int w, int h, const char *title) {
     SRL::Debug::Print(tx, y0 + 1, "%s", title);
 }
 
+// A digit jumps to a row and acts on it in one press: value rows cycle forward
+// on a plain digit and backward on the shifted symbol, action rows activate.
+// The mapping itself lives in menu_layout.c and is unit-tested; this is only
+// the C++ binding, which the layout unit cannot express because it needs
+// references to each page's own bool locals.
+//
+// Returns true if a digit selected a row, leaving the caller to set its own
+// activation flag -- pages disagree on whether that is named `ok` or `act`.
+static bool menu_digit_row(const SaturnKeyEvent &ke, int nrows,
+                           int &sel, bool &left, bool &right) {
+    if (ke.kind != SATURN_KEY_CHAR) return false;
+    int ddir = 0;
+    int drow = menu_row_digit(ke.ch, nrows, &ddir);
+    if (drow < 0) return false;
+    sel = drow;
+    if (ddir > 0) right = true; else left = true;
+    return true;
+}
+
 // Modal Y/N confirm, asking `question`. On Yes, soft-resets to the title screen
 // in-process (the same return-to-title as the A+B+C+Start chord); configured
 // options in backup RAM are retained. On No, returns false so the caller resumes.
@@ -1604,6 +1623,10 @@ static void configure_controls_page(void) {
             for (int a = 0; a < CA_N; a++) g_chord_slot[a] = s_chord[a];
             break;
         }
+        // Only the 9 assignable rows are numbered: there are 12 rows here and
+        // just 9 digits, so Reset/OK/Cancel keep their unnumbered padding and
+        // stay reachable by Up/Down only.
+        if (menu_digit_row(ke, NASSIGN, sel, left, right)) act = true;
         if (up)   sel = (sel - 1 + R_CANCEL + 1) % (R_CANCEL + 1);
         if (down) sel = (sel + 1) % (R_CANCEL + 1);
         if (sel == R_DONE)  { if (act) { options_save(); break; } }         // OK
@@ -1632,20 +1655,32 @@ static void configure_controls_page(void) {
         SRL::Debug::Print(x, y++, "%s", hint("L/R change  A/Start=OK B=Cancel",
                                              "L/R change  Enter=OK Esc=Cancel"));
         y++;
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
+        // The value column carries MENU_DIGIT_COLS in BOTH modes so it does not
+        // move when the player switches device. x + 20 + 3 = column 25; the
+        // widest value is "Z+Left/Right" (12), ending at 36, and the box's
+        // right border is at column 39.
+        const int vx = x + 20 + MENU_DIGIT_COLS;
         for (int a = 0; a < FA_N; a++) {
-            SRL::Debug::Print(x, y, "%c %s", sel == a ? '>' : ' ', FACE_LABEL[a]);
-            SRL::Debug::Print(x + 20, y++, "%s", face_btn_name(a));
+            char cur = sel == a ? '>' : ' ';
+            if (nums) SRL::Debug::Print(x, y, "%c %d) %s", cur, a + 1, FACE_LABEL[a]);
+            else      SRL::Debug::Print(x, y, "%c    %s", cur, FACE_LABEL[a]);
+            SRL::Debug::Print(vx, y++, "%s", face_btn_name(a));
         }
         for (int a = 0; a < CA_N; a++) {
-            SRL::Debug::Print(x, y, "%c %s", sel == FA_N + a ? '>' : ' ', CHORD_LABEL[a]);
-            SRL::Debug::Print(x + 20, y++, "%s", slot_name(g_chord_slot[a]));
+            char cur = sel == FA_N + a ? '>' : ' ';
+            if (nums) SRL::Debug::Print(x, y, "%c %d) %s", cur, FA_N + a + 1, CHORD_LABEL[a]);
+            else      SRL::Debug::Print(x, y, "%c    %s", cur, CHORD_LABEL[a]);
+            SRL::Debug::Print(vx, y++, "%s", slot_name(g_chord_slot[a]));
         }
-        SRL::Debug::Print(x + 2, y, "Caps Toggle");
-        SRL::Debug::Print(x + 20, y++, "L+R (fixed)");
+        // Fixed, unselectable row: indented by the reserved digit columns in
+        // both modes so it stays aligned with the numbered labels above.
+        SRL::Debug::Print(x + 2 + MENU_DIGIT_COLS, y, "Caps Toggle");
+        SRL::Debug::Print(vx, y++, "L+R (fixed)");
         y++;
-        SRL::Debug::Print(x, y++, "%c Reset to Defaults", sel == R_RESET ? '>' : ' ');
-        SRL::Debug::Print(x, y++, "%c OK", sel == R_DONE ? '>' : ' ');
-        SRL::Debug::Print(x, y++, "%c Cancel", sel == R_CANCEL ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c    Reset to Defaults", sel == R_RESET ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c    OK", sel == R_DONE ? '>' : ' ');
+        SRL::Debug::Print(x, y++, "%c    Cancel", sel == R_CANCEL ? '>' : ' ');
         menu_sync();
     }
     SRL::Core::Synchronize();
@@ -1670,6 +1705,9 @@ static void controls_page(void) {
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
         if (back) break;
+        // Rows 1 and 3 are actions and 2 is a toggle driven by left||right||act,
+        // so direction is irrelevant on every row of this page.
+        if (menu_digit_row(ke, 3, sel, left, right)) act = true;
         if (sel == 0 && act) configure_controls_page();
         else if (sel == 1 && (left || right || act)) keyboard_set_caps(!keyboard_get_caps());
         else if (sel == 2 && act) break;
@@ -1691,10 +1729,18 @@ static void controls_page(void) {
         SRL::Debug::Print(x, y, "Caps Toggle");
         SRL::Debug::Print(x + 18, y++, "L+R");
         y++;
-        SRL::Debug::Print(x, y++, "%c Configure Mapping", sel == 0 ? '>' : ' ');
-        SRL::Debug::Print(x, y++, "%c Keyboard Caps: %s", sel == 1 ? '>' : ' ',
-                          keyboard_get_caps() ? "On" : "Off");
-        SRL::Debug::Print(x, y++, "%c Done", sel == 2 ? '>' : ' ');
+        // Only these three rows are selectable; the mapping table above is a
+        // read-only display and keeps its own columns. No value column moves
+        // here -- each selectable row prints its value inline.
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
+        if (nums) SRL::Debug::Print(x, y++, "%c 1) Configure Mapping", sel == 0 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y++, "%c    Configure Mapping", sel == 0 ? '>' : ' ');
+        if (nums) SRL::Debug::Print(x, y++, "%c 2) Keyboard Caps: %s", sel == 1 ? '>' : ' ',
+                                    keyboard_get_caps() ? "On" : "Off");
+        else      SRL::Debug::Print(x, y++, "%c    Keyboard Caps: %s", sel == 1 ? '>' : ' ',
+                                    keyboard_get_caps() ? "On" : "Off");
+        if (nums) SRL::Debug::Print(x, y++, "%c 3) Done", sel == 2 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y++, "%c    Done", sel == 2 ? '>' : ' ');
         menu_sync();
     }
     SRL::Core::Synchronize();
@@ -1727,6 +1773,10 @@ static void keyboard_controls_page(void) {
             keyboard_set_caps(s_caps); keyboard_set_num(s_num);
             break;
         }
+        // Rows 0-3 are two-state toggles, so direction does not matter; rows 4
+        // and 5 are OK/Cancel actions. Placed before `toggle` so a digit feeds
+        // straight into it.
+        if (menu_digit_row(ke, N, sel, left, right)) act = true;
         bool toggle = left || right || act;
         if      (sel == 0 && toggle) g_caret_arrows = !g_caret_arrows;
         else if (sel == 1 && toggle) keyboard_set_insert(!keyboard_get_insert());
@@ -1744,17 +1794,30 @@ static void keyboard_controls_page(void) {
         SRL::Debug::Print(x, y++, "Insert key also flips Arrows;");
         SRL::Debug::Print(x, y++, "Ctrl+Left/Right always move caret.");
         y++;
-        SRL::Debug::Print(x, y, "%c Arrows move", sel == 0 ? '>' : ' ');
+        // The value column stays at x + 18 in BOTH modes -- it must NOT take the
+        // usual MENU_DIGIT_COLS shift. At x + 21 = column 24 the widest value,
+        // "Off (overwrite)" (15), would end on column 38, which is this box's
+        // right border (fx=1, fw=38). It does not need to move: the longest
+        // numbered label, "N) Insert mode", ends at column 18, still two
+        // columns clear of the value at 21.
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
+        if (nums) SRL::Debug::Print(x, y, "%c 1) Arrows move", sel == 0 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y, "%c    Arrows move", sel == 0 ? '>' : ' ');
         SRL::Debug::Print(x + 18, y++, "%s", g_caret_arrows ? "Caret" : "Suggestions");
-        SRL::Debug::Print(x, y, "%c Insert mode", sel == 1 ? '>' : ' ');
+        if (nums) SRL::Debug::Print(x, y, "%c 2) Insert mode", sel == 1 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y, "%c    Insert mode", sel == 1 ? '>' : ' ');
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_insert() ? "On (insert)" : "Off (overwrite)");
-        SRL::Debug::Print(x, y, "%c Caps Lock", sel == 2 ? '>' : ' ');
+        if (nums) SRL::Debug::Print(x, y, "%c 3) Caps Lock", sel == 2 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y, "%c    Caps Lock", sel == 2 ? '>' : ' ');
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_caps() ? "On" : "Off");
-        SRL::Debug::Print(x, y, "%c Num Lock", sel == 3 ? '>' : ' ');
+        if (nums) SRL::Debug::Print(x, y, "%c 4) Num Lock", sel == 3 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y, "%c    Num Lock", sel == 3 ? '>' : ' ');
         SRL::Debug::Print(x + 18, y++, "%s", keyboard_get_num() ? "On" : "Off");
         y++;
-        SRL::Debug::Print(x, y++, "%c OK", sel == 4 ? '>' : ' ');
-        SRL::Debug::Print(x, y++, "%c Cancel", sel == 5 ? '>' : ' ');
+        if (nums) SRL::Debug::Print(x, y++, "%c 5) OK", sel == 4 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y++, "%c    OK", sel == 4 ? '>' : ' ');
+        if (nums) SRL::Debug::Print(x, y++, "%c 6) Cancel", sel == 5 ? '>' : ' ');
+        else      SRL::Debug::Print(x, y++, "%c    Cancel", sel == 5 ? '>' : ' ');
         y++;
         SRL::Debug::Print(x, y++, "%s", hint("A/Start=OK  B=Cancel", "Enter=OK  Esc=Cancel"));
         menu_sync();
@@ -1888,6 +1951,10 @@ static void sound_options_page(void) {
                   || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool cancel = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                     || ke.kind == SATURN_KEY_BACKSPACE;
+        // A digit picks a visible row and acts on it: the three level/mix rows
+        // ignore `ok`, SR_TRACK already treats left/right/ok alike, and SR_TOC,
+        // SR_OK and SR_CANCEL are action rows that should activate.
+        if (menu_digit_row(ke, nrows, sel, left, right)) ok = true;
         int row = rows[sel];
 
         if (cancel || (ok && row == SR_CANCEL)) {   // revert everything, incl. live audio
@@ -1927,34 +1994,47 @@ static void sound_options_page(void) {
         const int fx = 1, fy = 6, fw = 38, fh = 16;
         menu_frame(fx, fy, fw, fh, "SOUND");
         int x = fx + 2, y = fy + 3;
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
+        // The value column carries MENU_DIGIT_COLS in BOTH modes so it does not
+        // move when the player switches device. x + 14 + 3 = column 20; the
+        // widest value is "< Sequential >" (14), ending at 33, and the box's
+        // right border is at column 38.
+        const int vx = x + 14 + MENU_DIGIT_COLS;
         for (int i = 0; i < nrows; i++) {
             char cur = (i == sel) ? '>' : ' ';
             switch (rows[i]) {
                 case SR_MIX:
-                    SRL::Debug::Print(x, y, "%c Audio Mix", cur);
-                    SRL::Debug::Print(x + 14, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) Audio Mix", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    Audio Mix", cur);
+                    SRL::Debug::Print(vx, y++, "%s %s %s", g_mix_mode > 0 ? "<" : " ", MIX[g_mix_mode], g_mix_mode < MIX_RANDOM ? ">" : " ");
                     break;
                 case SR_TRACK:
-                    SRL::Debug::Print(x, y, "%c Track", cur);
-                    SRL::Debug::Print(x + 14, y++, "%d  (A=demo)", aidx + 1);   // 1-based
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) Track", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    Track", cur);
+                    SRL::Debug::Print(vx, y++, "%d  (A=demo)", aidx + 1);   // 1-based
                     break;
                 case SR_MUSIC:
-                    SRL::Debug::Print(x, y, "%c Music", cur);
-                    SRL::Debug::Print(x + 14, y++, "%d", g_music_level);
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) Music", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    Music", cur);
+                    SRL::Debug::Print(vx, y++, "%d", g_music_level);
                     break;
                 case SR_PCM:
-                    SRL::Debug::Print(x, y, "%c PCM", cur);
-                    SRL::Debug::Print(x + 14, y++, "%d", g_pcm_level);
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) PCM", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    PCM", cur);
+                    SRL::Debug::Print(vx, y++, "%d", g_pcm_level);
                     break;
                 case SR_TOC:
-                    SRL::Debug::Print(x, y++, "%c View CD TOC", cur);
+                    if (nums) SRL::Debug::Print(x, y++, "%c %d) View CD TOC", cur, i + 1);
+                    else      SRL::Debug::Print(x, y++, "%c    View CD TOC", cur);
                     break;
                 case SR_OK:
                     y++;   // blank separator before the actions
-                    SRL::Debug::Print(x, y++, "%c OK", cur);
+                    if (nums) SRL::Debug::Print(x, y++, "%c %d) OK", cur, i + 1);
+                    else      SRL::Debug::Print(x, y++, "%c    OK", cur);
                     break;
                 case SR_CANCEL:
-                    SRL::Debug::Print(x, y++, "%c Cancel", cur);
+                    if (nums) SRL::Debug::Print(x, y++, "%c %d) Cancel", cur, i + 1);
+                    else      SRL::Debug::Print(x, y++, "%c    Cancel", cur);
                     break;
             }
         }
@@ -1990,6 +2070,10 @@ static void display_options_page(void) {
                   || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool cancel = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                     || ke.kind == SATURN_KEY_BACKSPACE;
+        // A digit picks a row and acts on it. The three cycler rows ignore `ok`
+        // (they read `dir` from left/right below); DR_OK and DR_CANCEL are
+        // action rows that should activate.
+        if (menu_digit_row(ke, nrows, sel, left, right)) ok = true;
         int row = rows[sel];
 
         if (cancel || (ok && row == DR_CANCEL)) {
@@ -2014,30 +2098,44 @@ static void display_options_page(void) {
         // The margin is one column -- a longer preset name, or image names no
         // longer bounded by 8.3, needs the value column moved, not just a
         // wider box. At 38 the palette row already lands on the border.
+        //
+        // This is the one page where the value column CANNOT take the usual
+        // MENU_DIGIT_COLS shift: at x + 20 the widest value ("< Amstrad CPC
+        // 464 >", 19) would run to column 40 and overwrite the border, and the
+        // box is already the full screen width so it cannot grow. The 3 columns
+        // come out of the LABEL side instead -- "System Palette" was shortened
+        // to "Palette" so that the longest numbered label ("N) Background",
+        // ending at column 17) still clears the value column at 19.
         const int fx = 0, fy = 7, fw = 40, fh = 14;
         menu_frame(fx, fy, fw, fh, "DISPLAY");
         int x = fx + 2, y = fy + 3;
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
         for (int i = 0; i < nrows; i++) {
             char cur = (i == sel) ? '>' : ' ';
             switch (rows[i]) {
                 case DR_PALETTE:
-                    SRL::Debug::Print(x, y, "%c System Palette", cur);
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) Palette", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    Palette", cur);
                     SRL::Debug::Print(x + 17, y++, "< %s >", display_palette_name(&g_display));
                     break;
                 case DR_BG:
-                    SRL::Debug::Print(x, y, "%c Background", cur);
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) Background", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    Background", cur);
                     SRL::Debug::Print(x + 17, y++, "< %s >", display_bg_name(&g_display));
                     break;
                 case DR_TEXT:
-                    SRL::Debug::Print(x, y, "%c Text", cur);
+                    if (nums) SRL::Debug::Print(x, y, "%c %d) Text", cur, i + 1);
+                    else      SRL::Debug::Print(x, y, "%c    Text", cur);
                     SRL::Debug::Print(x + 17, y++, "< %s >", display_text_name(g_display.text));
                     break;
                 case DR_OK:
                     y++;   // blank separator before the actions
-                    SRL::Debug::Print(x, y++, "%c OK", cur);
+                    if (nums) SRL::Debug::Print(x, y++, "%c %d) OK", cur, i + 1);
+                    else      SRL::Debug::Print(x, y++, "%c    OK", cur);
                     break;
                 case DR_CANCEL:
-                    SRL::Debug::Print(x, y++, "%c Cancel", cur);
+                    if (nums) SRL::Debug::Print(x, y++, "%c %d) Cancel", cur, i + 1);
+                    else      SRL::Debug::Print(x, y++, "%c    Cancel", cur);
                     break;
             }
         }
@@ -2083,9 +2181,15 @@ static void options_menu(void) {
         if (g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % nitems;
         bool left  = g_pad->WasPressed(Button::Left)  || ke.kind == SATURN_KEY_LEFT;
         bool right = g_pad->WasPressed(Button::Right) || ke.kind == SATURN_KEY_RIGHT;
+        // Digit handling has to run before `item` is read, since it can move
+        // `sel`. Every row but OI_DIFF is a sub-page or an action, so direction
+        // only matters on the difficulty slider; the rest ignore left/right and
+        // OI_DIFF ignores the activation.
+        bool digit = menu_digit_row(ke, nitems, sel, left, right);
         int item = items[sel];
         if (item == OI_DIFF) { if (left && diff > DIFF_EASY) diff--; if (right && diff < DIFF_HARD) diff++; }
-        bool act = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
+        bool act = digit
+                 || g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C)
                  || g_pad->WasPressed(Button::START) || ke.kind == SATURN_KEY_ENTER;
         bool back = g_pad->WasPressed(Button::B) || ke.kind == SATURN_KEY_ESCAPE
                   || ke.kind == SATURN_KEY_BACKSPACE;
@@ -2105,21 +2209,34 @@ static void options_menu(void) {
         }
 
         menu_frame(x0, y0, w, h, "OPTIONS");
-        SRL::Debug::Print(x0 + 2, y0 + 3, "%c Difficulty: %s %s %s", item == OI_DIFF ? '>' : ' ',
+        // Content runs from column 7 to the last drawable column 33 (border at
+        // 34). The numbered difficulty row is the widest at 27 characters
+        // ("> 1) Difficulty: < Medium >"), landing exactly on 33. The DESC line
+        // below it is already 27 wide and is NOT indented further for that
+        // reason -- it is a sub-caption, not a selectable row.
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
+        char dmark = item == OI_DIFF ? '>' : ' ';
+        // OI_DIFF is always items[0], so its number is always 1.
+        if (nums) SRL::Debug::Print(x0 + 2, y0 + 3, "%c 1) Difficulty: %s %s %s", dmark,
+                          diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
+        else      SRL::Debug::Print(x0 + 2, y0 + 3, "%c    Difficulty: %s %s %s", dmark,
                           diff > DIFF_EASY ? "<" : " ", NAMES[diff], diff < DIFF_HARD ? ">" : " ");
         SRL::Debug::Print(x0 + 2, y0 + 4, "    %s", DESC[diff]);
         int ay = y0 + 6;   // action rows follow the difficulty block; Sound may be absent
         for (int i = 0; i < nitems; i++) {
             char cur = (i == sel) ? '>' : ' ';
+            const char *label = 0;
             switch (items[i]) {
-                case OI_DIFF: break;   // drawn above
-                case OI_CONFIG:   SRL::Debug::Print(x0 + 2, ay++, "%c Network", cur); break;
-                case OI_CONTROLS: SRL::Debug::Print(x0 + 2, ay++, "%c Controls", cur); break;
-                case OI_DISPLAY:  SRL::Debug::Print(x0 + 2, ay++, "%c Display", cur); break;
-                case OI_SOUND:    SRL::Debug::Print(x0 + 2, ay++, "%c Sound", cur); break;
-                case OI_RETURN:   SRL::Debug::Print(x0 + 2, ay++, "%c Return to Title", cur); break;
-                case OI_DONE:     SRL::Debug::Print(x0 + 2, ay++, "%c Done", cur); break;
+                case OI_DIFF: continue;   // drawn above
+                case OI_CONFIG:   label = "Network";         break;
+                case OI_CONTROLS: label = "Controls";        break;
+                case OI_DISPLAY:  label = "Display";         break;
+                case OI_SOUND:    label = "Sound";           break;
+                case OI_RETURN:   label = "Return to Title"; break;
+                case OI_DONE:     label = "Done";            break;
             }
+            if (nums) SRL::Debug::Print(x0 + 2, ay++, "%c %d) %s", cur, i + 1, label);
+            else      SRL::Debug::Print(x0 + 2, ay++, "%c    %s", cur, label);
         }
         SRL::Debug::Print(x0 + 2, y0 + 13, "%s", hint("Up/Dn A=pick  <>=diff", "Up/Dn Enter  B=back"));
         menu_sync();

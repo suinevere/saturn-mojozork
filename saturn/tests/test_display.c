@@ -15,8 +15,15 @@ static void test_tables_well_formed(void) {
         assert(display_preset_text(i) >= 0 && display_preset_text(i) < DISP_TEXT_N);
         assert(display_preset_name(i) != NULL);
         assert(display_preset_name(i)[0] != '\0');
-        /* Must fit the selector field: 40-column screen, value drawn at x+16. */
-        assert(strlen(display_preset_name(i)) <= 22);
+        /* Must fit the selector field. The DISPLAY box is the full 40 columns
+           (fx=0, fw=40), so its right border sits at column 39 and the last
+           drawable column is 38. Content starts at x = 2 and the value prints
+           at x + 17 = 19 as "< %s >", which is the name plus 4. That leaves
+           38 - 19 + 1 - 4 = 16 columns for the name itself. The old bound of 22
+           was never achievable; it is tightened here because Task 7's row
+           numbers consume the label side's slack, so the value column can no
+           longer be moved right to rescue a long name. */
+        assert(strlen(display_preset_name(i)) <= 16);
     }
     for (i = 0; i < DISP_BG_COLOR_N; i++)  assert(display_bg_color_name(i) != NULL);
     for (i = 0; i < DISP_TEXT_N; i++)      assert(display_text_name(i)     != NULL);
