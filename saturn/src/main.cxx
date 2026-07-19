@@ -2401,9 +2401,14 @@ static bool tga_load_nbg0(const char *file) {
 
     // Header and palette both live in the first sector for every image we ship
     // (18 + 256*4 = 1042 at worst). Bail rather than handle a split palette.
-    static uint8_t hdr[2048];
+    //
+    // GFS DMAs sector data straight into the destination, so every buffer handed
+    // to LoadBytes must be 4-byte aligned. Declared as uint32_t for that reason:
+    // a bare uint8_t array carries no alignment guarantee.
+    static uint32_t hdrbuf[512];               // 2048 bytes, 4-byte aligned
+    uint8_t *const hdr = (uint8_t *) hdrbuf;
     const int32_t ss = (f.Size.SectorSize > 0) ? f.Size.SectorSize : 2048;
-    if (ss > (int32_t) sizeof(hdr)) return false;
+    if (ss > (int32_t) sizeof(hdrbuf)) return false;
     if (f.LoadBytes(0, ss, hdr) <= 0) return false;
 
     const int idlen    = hdr[0];
@@ -2445,21 +2450,32 @@ static bool tga_load_nbg0(const char *file) {
         colors[i] = c;
     }
 
-    uint8_t *pix = new uint8_t[npix];
-    if (pix == nullptr) { delete colors; return false; }
+    // Read from the sector the pixels start in, into the *base* of the
+    // allocation, then slide them down over the leading partial sector.
+    //
+    // The destination of a LoadBytes must be 4-byte aligned, because GFS DMAs
+    // the sector data into it. Reading the tail to `pix + got` -- an arbitrary
+    // byte offset -- is what broke the title load: HOUSE.TGA's 169-entry palette
+    // puts pixel data at byte 525, leaving an odd destination, and the SH-2
+    // raised an address error. The frozen save state showed PR inside
+    // gftr_execTrn and R4 = 0x060660b3, an odd heap address.
+    //
+    // Sliding afterwards also keeps the pixels at the allocation base, which
+    // matters a second time: SRL's Bmp2VRAM DMAs each scanline from this
+    // pointer, so it must not sit at a byte offset either.
+    const uint32_t skip = (uint32_t) (pixoff % ss);   // partial sector before the pixels
+    const uint32_t span = skip + npix;                 // bytes to read from that sector on
+    if (SRL::Memory::HighWorkRam::GetFreeSpace() < span + 4096) { delete colors; return false; }
 
-    // Whatever pixel data already came in with the header sector, then the rest
-    // straight from sector 1 -- we consumed exactly through the end of sector 0.
-    uint32_t got = 0;
-    if ((uint32_t) pixoff < (uint32_t) ss) {
-        uint32_t n = (uint32_t) ss - (uint32_t) pixoff;
-        if (n > npix) n = npix;
-        for (uint32_t i = 0; i < n; i++) pix[i] = hdr[pixoff + i];
-        got = n;
-    }
-    if (got < npix && f.LoadBytes(1, (int32_t) (npix - got), pix + got) <= 0) {
+    uint8_t *pix = new uint8_t[span];
+    if (pix == nullptr) { delete colors; return false; }
+    if (((unsigned int) pix & 3) != 0) {   // allocator should 4-align; refuse if not
         delete pix; delete colors; return false;
     }
+    if (f.LoadBytes((size_t) (pixoff / ss), (int32_t) span, pix) <= 0) {
+        delete pix; delete colors; return false;
+    }
+    if (skip > 0) for (uint32_t i = 0; i < npix; i++) pix[i] = pix[skip + i];
 
     // TGA's default origin is bottom-left; VDP2 wants the top row first.
     if (!topdown) {
