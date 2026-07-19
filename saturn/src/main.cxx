@@ -291,14 +291,6 @@ static void text_set_color(unsigned short rgb555) {
 // keyboard, and the cursor in one call.
 // (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
 // Debug::Print reads ASCII::colorBank.)
-// CRAM entry 0 is the NBG3 pixel value a blank cell uses. It reads as
-// transparent while the layer's transparency is on, and as this colour once
-// MenuBacking turns it off -- so it tracks the chosen background colour and is
-// harmless to write either way.
-static void cram_bg_entry_set(void) {
-    ((volatile unsigned short *) VDP2_COLRAM)[0] = display_bg_rgb(g_display.bg);
-}
-
 // Returns false when the requested background could not be shown, so a caller
 // cycling through presets can step over the bad one instead of settling on the
 // fallback this installs.
@@ -310,7 +302,6 @@ static bool display_apply(void) {
     // right before the picture arrives, not after. An image preset pairs with
     // black, which is why stepping onto one resets the background and text.
     SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
-    cram_bg_entry_set();   // keeps an open menu's backing on the new colour
     if (display_is_image(&g_display)) {
         if (!title_bg_show(display_image_file(g_display.image))) {
             // Load failed (or the bitmap isn't the 8bpp shape we require): fall
@@ -1260,12 +1251,49 @@ static void menu_clear(void) {
 // ---- opaque backing for menus over an image --------------------------------
 // NBG3 (the text layer) treats palette entry 0 as transparent, so a menu frame
 // drawn over an image background shows the picture through its interior and the
-// text sits directly on the artwork. TransparentDisable turns entry 0 into a
-// real colour instead (srl_vdp2.hpp:724), making the whole layer opaque -- the
-// image is hidden for as long as a menu is open and returns when it closes.
+// text sits directly on the artwork.
 //
+// A VDP2 window fixes just the box: NBG0 (the image) is switched off inside the
+// menu rectangle, the back plane colour shows through there, and NBG3's text
+// draws over it as usual. Outside the box the picture is untouched.
+//
+// SGL exposes no constants for this, so the encoding was read out of the
+// library. slScrWindowMode(scrn, mode) is
+//
+//     mov.l IMM_VDP2_WCTLA, r0    ; 0x060ffd90
+//     mov.b r5, @(r0, r4)
+//
+// -- a byte store of `mode` at 0x060ffd90 + scrn, into SGL's work-RAM shadow of
+// WCTLA..WCTLD which it flushes at vblank. The scn constants confirm the
+// mapping: NBG1=0, NBG0=1, NBG3=2, NBG2=3, SPR=4, RBG0=5 is exactly those four
+// 16-bit registers in big-endian byte order, so `mode` is the raw per-screen
+// WCTL byte. slScrWindow0 takes plain pixel coordinates (it shifts X left
+// itself for the 320-dot mode's half-dot units) and clears the line-window
+// pointer, so a rectangle is all it is.
+#define WIN_W0_ENABLE  0x02   // WCTL bit 1: window 0 applies to this screen
+#define WIN_W0_INSIDE  0x00   // WCTL bit 0: the rect's inside is the window
+#define WIN_W0_OUTSIDE 0x01   // ...its outside is
+
+// The one bit that could not be settled from the library: whether the screen is
+// suppressed inside the window or outside it. If the image turns out to be
+// hidden *everywhere except* the menu box, swap INSIDE for OUTSIDE here and
+// nothing else changes.
+#define WIN_NBG0_MENU  (WIN_W0_ENABLE | WIN_W0_INSIDE)
+
+// Point window 0 at a character-cell box. Cells are 8x8 and the display is
+// 320x224, so the rectangle is just the box scaled up, clamped to the screen.
+static void menu_window_rect(int x0, int y0, int w, int h) {
+    int x1 = x0 * 8,             y1 = y0 * 8;
+    int x2 = (x0 + w) * 8 - 1,   y2 = (y0 + h) * 8 - 1;
+    if (x2 > 319) x2 = 319;
+    if (y2 > 223) y2 = 223;
+    if (x1 < 0)   x1 = 0;
+    if (y1 < 0)   y1 = 0;
+    slScrWindow0((uint16_t) x1, (uint16_t) y1, (uint16_t) x2, (uint16_t) y2);
+}
+
 // Refcounted, because pages nest: Options opens Display, and the inner page
-// closing must not clear the backing while the outer one is still up.
+// closing must not clear the windowing while the outer one is still up.
 //
 // Scoped rather than paired calls. Every one of the seven pages has several
 // exit paths, and "remember to undo this on all of them" is the exact shape of
@@ -1274,13 +1302,10 @@ static int g_menu_backing_depth = 0;
 
 struct MenuBacking {
     MenuBacking() {
-        if (g_menu_backing_depth++ == 0) {
-            cram_bg_entry_set();
-            SRL::VDP2::NBG3::TransparentDisable();
-        }
+        if (g_menu_backing_depth++ == 0) slScrWindowModeNbg0(WIN_NBG0_MENU);
     }
     ~MenuBacking() {
-        if (--g_menu_backing_depth == 0) SRL::VDP2::NBG3::TransparentEnable();
+        if (--g_menu_backing_depth == 0) slScrWindowModeNbg0(0);   // window off
     }
 };
 
@@ -1292,6 +1317,10 @@ struct MenuBacking {
 // convention -- row y0 + 2 stays blank under the title -- and must stay inside
 // x0 + w - 2 so it never overwrites the right border.
 static void menu_frame(int x0, int y0, int w, int h, const char *title) {
+    // Aim the image-suppressing window at this box. Done on every draw rather
+    // than once on open, so a nested page's box takes over while it is up and
+    // the outer one's is restored the moment it redraws.
+    menu_window_rect(x0, y0, w, h);
     for (int r = 0; r < h; r++) {
         char line[42]; int p = 0;
         for (int c = 0; c < w && p < (int) sizeof(line) - 1; c++)
@@ -3109,7 +3138,7 @@ int main(void) {
     // held by a page we jumped out of never ran. Clear it by hand, or NBG3
     // stays opaque and the title image is hidden for the rest of the session.
     g_menu_backing_depth = 0;
-    SRL::VDP2::NBG3::TransparentEnable();
+    slScrWindowModeNbg0(0);
     // Re-list /TGA for the same reason. Z3 is re-scanned lazily by
     // preload_game_catalog(), but nothing else refreshes the bitmap table, and
     // title_bg_show() needs it a few lines below. Only on re-entry: the first
