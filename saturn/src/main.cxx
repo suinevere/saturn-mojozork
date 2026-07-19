@@ -296,19 +296,26 @@ static void text_set_color(unsigned short rgb555) {
 // fallback this installs.
 static bool display_apply(void) {
     text_set_color(display_text_rgb(g_display.text));
+    // Set the back plane before any image load. It is what shows through the
+    // menu frames, whose interiors are transparent NBG3 cells, and it is on
+    // screen for the second or two the CD read takes -- so the colour has to be
+    // right before the picture arrives, not after. An image preset pairs with
+    // black, which is why stepping onto one resets the background and text.
+    SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
     if (display_is_image(&g_display)) {
-        if (!title_bg_show(display_bg_name(&g_display))) {
+        if (!title_bg_show(display_image_file(g_display.image))) {
             // Load failed (or the bitmap isn't the 8bpp shape we require): fall
             // back to a color background rather than leaving static on screen.
             //
-            // The palette may itself be an image preset, whose bg is the slot
-            // that just failed -- falling back to it would re-select the broken
-            // image. Drop to a color preset in that case.
+            // The palette may itself be the image preset that just failed --
+            // keeping it would re-select the broken picture. Drop to a color
+            // preset in that case.
             int p = g_display.palette;
             if (p >= DISP_PRESET_N || p < 0) p = 12;   // IBM PC (MDA), the startup default
             g_display.palette = p;
             g_display.bg      = display_preset_bg(p);
             g_display.text    = display_preset_text(p);
+            g_display.image   = DISP_IMAGE_NONE;
             text_set_color(display_text_rgb(g_display.text));
             title_bg_hide();
             SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
@@ -316,7 +323,6 @@ static bool display_apply(void) {
         }
     } else {
         title_bg_hide();
-        SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
     }
     return true;
 }
@@ -329,20 +335,21 @@ enum DisplayCycleRow { DCR_PALETTE, DCR_BG, DCR_TEXT };
 // Cycle one row and push it to the hardware, stepping over any image that will
 // not load.
 //
-// The step matters: display_apply() installs a colour-preset fallback when a
-// load fails, and that rewrites the very index being cycled. Without restoring
-// it, the next press would resume from the fallback and land on the same bad
-// image again -- so one unloadable file made every image past it unreachable.
+// Only the System Palette row can hit that: it is the one carrying pictures now.
+// The step matters there because display_apply() installs a colour-preset
+// fallback when a load fails, and that rewrites the very index being cycled --
+// without restoring it, the next press would resume from the fallback and land
+// on the same bad image, making every image past it unreachable.
 static void display_cycle_row(DisplayCycleRow which, int dir) {
-    if (which == DCR_TEXT) {
-        display_cycle_text(&g_display, dir);
-        display_apply();
+    if (which != DCR_PALETTE) {
+        if (which == DCR_BG) display_cycle_bg(&g_display, dir);
+        else                 display_cycle_text(&g_display, dir);
+        display_apply();     // colours only; nothing here can fail to load
         return;
     }
-    int tries = (which == DCR_PALETTE) ? display_palette_count() : display_bg_count();
+    int tries = display_palette_count();
     while (tries-- > 0) {
-        if (which == DCR_PALETTE) display_cycle_palette(&g_display, dir);
-        else                      display_cycle_bg(&g_display, dir);
+        display_cycle_palette(&g_display, dir);
         DisplayState want = g_display;
         if (display_apply()) return;   // showing what was asked for
         g_display = want;              // keep our place and step past the bad entry

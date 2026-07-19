@@ -94,23 +94,59 @@ void display_set_images(const char *const *names, int count) {
 }
 
 int display_image_count(void) { return g_image_count; }
-int display_bg_count(void)    { return DISP_BG_COLOR_N + g_image_count; }
+
+/* The Background row offers colors only. Pictures are chosen from the System
+   Palette row, where each comes paired with the black background and white
+   text that keep menu text legible over artwork. */
+int display_bg_count(void)    { return DISP_BG_COLOR_N; }
+
+const char *display_image_file(int slot) {
+    if (!g_image_names || slot < 0 || slot >= g_image_count) return "";
+    return g_image_names[slot] ? g_image_names[slot] : "";
+}
+
+const char *display_image_label(int slot) {
+    /* Two buffers so a single screen draw can hold two labels at once -- the
+       System Palette row prints one while display_palette_name resolves
+       another. */
+    static char ring[2][DISP_IMAGE_NAME_MAX];
+    static int turn = 0;
+    const char *src = display_image_file(slot);
+    char *out = ring[turn];
+    int i = 0;
+
+    turn = (turn + 1) & 1;
+    for (; src[i] && src[i] != '.' && i < DISP_IMAGE_NAME_MAX - 1; i++) {
+        char c = src[i];
+        if (i == 0) { if (c >= 'a' && c <= 'z') c = (char) (c - 'a' + 'A'); }
+        else        { if (c >= 'A' && c <= 'Z') c = (char) (c - 'A' + 'a'); }
+        out[i] = c;
+    }
+    out[i] = '\0';
+    return out;
+}
 
 /* Palette indices run [0, DISP_PRESET_N) over the microcomputer presets, then
-   one entry per registered image. An image preset pairs that image's
-   background slot with white text -- the pairing the Display page offers so a
-   picture never sits under a color that vanishes into it. */
+   one entry per registered image. */
 int display_palette_count(void) { return DISP_PRESET_N + g_image_count; }
+
+int display_preset_image(int index) {
+    if (index < DISP_PRESET_N || index >= display_palette_count()) return DISP_IMAGE_NONE;
+    return index - DISP_PRESET_N;
+}
 
 const char *display_preset_name(int index) {
     if (index < 0 || index >= display_palette_count()) return "?";
-    if (index >= DISP_PRESET_N) return g_image_names[index - DISP_PRESET_N];
+    if (index >= DISP_PRESET_N) return display_image_label(index - DISP_PRESET_N);
     return PRESETS[index].name;
 }
 
+/* An image preset puts its picture over black with white text: black so the
+   frames and letterboxing around the image read as deliberate, white so menu
+   text stays legible whatever the artwork does. */
 int display_preset_bg(int index) {
     if (index < 0 || index >= display_palette_count()) return DISP_BG_BLACK;
-    if (index >= DISP_PRESET_N) return DISP_BG_COLOR_N + (index - DISP_PRESET_N);
+    if (index >= DISP_PRESET_N) return DISP_BG_BLACK;
     return PRESETS[index].bg;
 }
 
@@ -122,8 +158,9 @@ int display_preset_text(int index) {
 
 const char *display_palette_name(const DisplayState *d) {
     if (d->palette >= 0 && d->palette < display_palette_count()
-        && d->bg   == display_preset_bg(d->palette)
-        && d->text == display_preset_text(d->palette)) {
+        && d->bg    == display_preset_bg(d->palette)
+        && d->text  == display_preset_text(d->palette)
+        && d->image == display_preset_image(d->palette)) {
         return display_preset_name(d->palette);
     }
     return g_custom_label;
@@ -133,21 +170,19 @@ void display_defaults(DisplayState *d) {
     d->palette = 12;                        /* IBM PC (MDA): closest to the */
     d->bg      = PRESETS[12].bg;            /* previous hardcoded appearance */
     d->text    = PRESETS[12].text;
+    d->image   = DISP_IMAGE_NONE;
 }
 
 int display_is_image(const DisplayState *d) {
-    return d->bg >= DISP_BG_COLOR_N && d->bg < display_bg_count();
+    return d->image >= 0 && d->image < g_image_count;
 }
 
 const char *display_bg_name(const DisplayState *d) {
-    if (display_is_image(d)) return g_image_names[d->bg - DISP_BG_COLOR_N];
     return display_bg_color_name(d->bg);
 }
 
-/* True when this background/text pairing would render text invisible. An image
-   background has no single color to clash with, so the guard is inactive. */
+/* True when this background/text pairing would render text invisible. */
 static int clashes(int bg, int text) {
-    if (bg >= DISP_BG_COLOR_N) return 0;
     return display_bg_rgb(bg) == display_text_rgb(text);
 }
 
@@ -185,6 +220,7 @@ void display_cycle_palette(DisplayState *d, int dir) {
     d->palette = next;
     d->bg      = display_preset_bg(next);
     d->text    = display_preset_text(next);
+    d->image   = display_preset_image(next);
 }
 
 /* Registered name for an image slot, or "" when the slot is not present. */
@@ -213,16 +249,14 @@ int display_encode(const DisplayState *d, unsigned char *out) {
     const char *name = "";
     int i;
 
-    out[0] = 2;                                /* block sentinel: name-bearing form */
-    out[1] = (d->palette >= DISP_PRESET_N)   ? DISP_BLOB_IMAGE : (unsigned char) d->palette;
-    out[2] = (d->bg      >= DISP_BG_COLOR_N) ? DISP_BLOB_IMAGE : (unsigned char) d->bg;
+    out[0] = 3;                                /* block sentinel: bg color + image name */
+    out[1] = (d->palette >= DISP_PRESET_N) ? DISP_BLOB_IMAGE : (unsigned char) d->palette;
+    out[2] = (unsigned char) d->bg;            /* always a color now */
     out[3] = (unsigned char) d->text;
 
-    /* One name covers both fields. bg is what is actually on screen, so it wins
-       when the two somehow name different images -- a state the selector only
-       reaches by picking an image preset and then changing the background,
-       which already reads as "Custom". */
-    if (d->bg >= DISP_BG_COLOR_N)          name = image_slot_name(d->bg - DISP_BG_COLOR_N);
+    /* The picture on screen. A palette still on an image preset names the same
+       one; if the two ever disagree, what is displayed wins. */
+    if (d->image >= 0)                     name = image_slot_name(d->image);
     else if (d->palette >= DISP_PRESET_N)  name = image_slot_name(d->palette - DISP_PRESET_N);
 
     for (i = 0; i < DISP_IMAGE_NAME_MAX - 1 && name[i]; i++)
@@ -239,13 +273,13 @@ int display_decode(const unsigned char *buf, int len, DisplayState *d) {
     if (!buf || len < 4) return 0;
 
     if (buf[0] == 1) {
-        /* Older form: slot numbers, no name. Colors still mean what they said,
-           but an image slot cannot be trusted to be the same picture, so it is
-           refused rather than guessed at. */
+        /* Original form: slot numbers, no name. Colors still mean what they
+           said, but an image slot cannot be trusted to be the same picture, so
+           it is refused rather than guessed at. */
         if (buf[1] < DISP_PRESET_N)   d->palette = (int) buf[1];  else ok = 0;
         if (buf[2] < DISP_BG_COLOR_N) d->bg      = (int) buf[2];  else ok = 0;
         if (buf[3] < DISP_TEXT_N)     d->text    = (int) buf[3];  else ok = 0;
-    } else if (buf[0] == 2) {
+    } else if (buf[0] == 2 || buf[0] == 3) {
         const char *name = (const char *) (buf + 4);
         int slot, n = 0;
 
@@ -261,23 +295,30 @@ int display_decode(const unsigned char *buf, int len, DisplayState *d) {
         } else ok = 0;
 
         if (buf[2] == DISP_BLOB_IMAGE) {
-            if (slot >= 0) d->bg = DISP_BG_COLOR_N + slot;  else ok = 0;
+            /* Sentinel-2 form packed the image into bg, so the color beneath it
+               was never stored. Black is what an image preset pairs with. */
+            d->bg = DISP_BG_BLACK;
+            if (slot < 0) ok = 0;
         } else if (buf[2] < DISP_BG_COLOR_N) {
             d->bg = (int) buf[2];
         } else ok = 0;
 
         if (buf[3] < DISP_TEXT_N) d->text = (int) buf[3];  else ok = 0;
+
+        /* A name present means a picture was showing. Drop it, reporting the
+           loss, when this disc no longer carries it. */
+        if (name[0]) {
+            if (slot >= 0) d->image = slot;  else ok = 0;
+        }
     } else {
         return 0;
     }
 
-    /* Each field above was validated independently, but an image background
-       that fell back to a color can still land on the same color as text that
-       was independently accepted -- e.g. a saved image background paired with
-       Black text, decoded on a disc where that image is gone: bg falls back to
-       Black and both fields blank the screen. d->palette is a real preset index
-       by this point, and every preset pair is guaranteed legible, so restore
-       both fields from it rather than from display_defaults(). */
+    /* Each field above was validated independently, so an accepted background
+       can still land on the same color as an accepted text -- most easily when
+       a picture that was hiding the pairing is gone from this disc. d->palette
+       is a real preset index by this point and every preset pair is legible, so
+       restore both from it rather than from display_defaults(). */
     if (clashes(d->bg, d->text)) {
         d->bg   = display_preset_bg(d->palette);
         d->text = display_preset_text(d->palette);

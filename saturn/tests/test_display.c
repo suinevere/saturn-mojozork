@@ -79,7 +79,8 @@ static void test_image_registration(void) {
 
     display_set_images(IMAGES, 2);
     assert(display_image_count() == 2);
-    assert(display_bg_count() == DISP_BG_COLOR_N + 2);
+    /* Registering images does not widen the Background row: it is colors only. */
+    assert(display_bg_count() == DISP_BG_COLOR_N);
 
     /* Over-cap registration clamps rather than overflowing. */
     display_set_images(IMAGES, DISP_IMAGE_MAX + 5);
@@ -94,28 +95,36 @@ static void test_bg_name_and_is_image(void) {
     assert(!display_is_image(&d));
     assert(strcmp(display_bg_name(&d), "Black") == 0);
 
-    d.bg = DISP_BG_COLOR_N;          /* first image slot */
+    /* An image is a separate field now; the Background row keeps naming a
+       color, which is what shows through the menu frames over the picture. */
+    d.image = 0;
     assert(display_is_image(&d));
-    assert(strcmp(display_bg_name(&d), "HOUSE.TGA") == 0);
-    /* An image is never a preset background, so the palette reads Custom. */
+    assert(strcmp(display_bg_name(&d), "Black") == 0);
+    /* Default palette is a color preset, so carrying an image reads Custom. */
     assert(strcmp(display_palette_name(&d), "Custom") == 0);
 }
 
-static void test_cycle_bg_wraps_through_images(void) {
+static void test_cycle_bg_stays_in_colors(void) {
     DisplayState d;
+    int i;
     display_set_images(IMAGES, 2);
     display_defaults(&d);
     d.text = DISP_TEXT_BRIGHT_AMBER;   /* matches no bg color: guard inactive */
     d.bg = DISP_BG_BRIGHT_WHITE;       /* last color */
 
     display_cycle_bg(&d, 1);
-    assert(d.bg == DISP_BG_COLOR_N);       /* into the images */
-    display_cycle_bg(&d, 1);
-    assert(d.bg == DISP_BG_COLOR_N + 1);
-    display_cycle_bg(&d, 1);
-    assert(d.bg == DISP_BG_BLACK);         /* wraps back to the first color */
+    assert(d.bg == DISP_BG_BLACK);     /* wraps straight back, no images */
     display_cycle_bg(&d, -1);
-    assert(d.bg == DISP_BG_COLOR_N + 1);   /* and backwards past the end */
+    assert(d.bg == DISP_BG_BRIGHT_WHITE);
+
+    /* Every reachable value is a color, in both directions. */
+    for (i = 0; i < 40; i++) { display_cycle_bg(&d, 1);  assert(d.bg < DISP_BG_COLOR_N); }
+    for (i = 0; i < 40; i++) { display_cycle_bg(&d, -1); assert(d.bg < DISP_BG_COLOR_N); }
+
+    /* Cycling the background never disturbs the picture on top of it. */
+    d.image = 1;
+    display_cycle_bg(&d, 1);
+    assert(d.image == 1);
 }
 
 static void test_legibility_guard(void) {
@@ -149,17 +158,21 @@ static void test_legibility_guard(void) {
     }
 }
 
-static void test_guard_inactive_over_images(void) {
+static void test_guard_follows_bg_color_under_image(void) {
     DisplayState d;
     int i, seen_black = 0;
     display_set_images(IMAGES, 2);
     display_defaults(&d);
-    d.bg = DISP_BG_COLOR_N;      /* image background: every text color reachable */
+    /* The guard is about the background *color*, which is still black here, so
+       Black text stays unreachable even with a picture over it. */
+    d.image = 0;
+    d.bg    = DISP_BG_BLACK;
     for (i = 0; i < DISP_TEXT_N; i++) {
         display_cycle_text(&d, 1);
+        assert(display_bg_rgb(d.bg) != display_text_rgb(d.text));
         if (d.text == DISP_TEXT_BLACK) seen_black = 1;
     }
-    assert(seen_black);
+    assert(!seen_black);
 }
 
 static void test_cycle_palette(void) {
@@ -218,7 +231,7 @@ static void test_encode_decode_roundtrip(void) {
 
     n = display_encode(&a, buf);
     assert(n == DISP_BLOB_BYTES);
-    assert(buf[0] == 2);            /* sentinel: name-bearing form */
+    assert(buf[0] == 3);            /* sentinel: bg color + image name */
 
     assert(display_decode(buf, n, &b) == 1);
     assert(b.palette == a.palette && b.bg == a.bg && b.text == a.text);
@@ -305,7 +318,8 @@ static void test_decode_missing_image_falls_back(void) {
     /* Saved while two images were on the disc... */
     display_set_images(IMAGES, 2);
     a.palette = 4;                 /* ZX Spectrum: Light Gray bg, Black text */
-    a.bg = DISP_BG_COLOR_N;        /* first image slot (exists at encode time) */
+    a.bg = DISP_BG_BLACK;
+    a.image = 0;                   /* first image slot (exists at encode time) */
     a.text = DISP_TEXT_BLACK;
     display_encode(&a, buf);
 
@@ -339,7 +353,8 @@ static void test_decode_missing_image_never_clashes(void) {
         for (t = 0; t < 2; t++) {
             display_set_images(IMAGES, 2);
             a.palette = p;
-            a.bg = DISP_BG_COLOR_N;             /* first image slot */
+            a.bg = DISP_BG_BLACK;
+            a.image = 0;                        /* first image slot */
             a.text = clashing_texts[t];
             display_encode(&a, buf);
 
@@ -380,15 +395,19 @@ static void test_palette_count_includes_images(void) {
     display_set_images(NULL, 0);
 }
 
-static void test_image_presets_pin_white_text(void) {
+static void test_image_presets_pin_black_bg_and_white_text(void) {
     static const char *const names[] = { "FOREST.TGA", "CASTLE.TGA" };
+    static const char *const labels[] = { "Forest", "Castle" };
     display_set_images(names, 2);
     for (int i = 0; i < 2; i++) {
         int p = DISP_PRESET_N + i;
-        assert(display_preset_bg(p)   == DISP_BG_COLOR_N + i);
-        assert(display_preset_text(p) == DISP_TEXT_WHITE);
-        assert(strcmp(display_preset_name(p), names[i]) == 0);
+        assert(display_preset_image(p) == i);
+        assert(display_preset_bg(p)    == DISP_BG_BLACK);
+        assert(display_preset_text(p)  == DISP_TEXT_WHITE);
+        assert(strcmp(display_preset_name(p), labels[i]) == 0);
     }
+    /* Color presets carry no image. */
+    for (int i = 0; i < DISP_PRESET_N; i++) assert(display_preset_image(i) == DISP_IMAGE_NONE);
     display_set_images(NULL, 0);
 }
 
@@ -403,7 +422,8 @@ static void test_cycle_palette_reaches_images(void) {
     d.text    = display_preset_text(d.palette);
     display_cycle_palette(&d, 1);
     assert(d.palette == DISP_PRESET_N);
-    assert(d.bg      == DISP_BG_COLOR_N);
+    assert(d.image   == 0);
+    assert(d.bg      == DISP_BG_BLACK);     /* reset under the picture */
     assert(d.text    == DISP_TEXT_WHITE);
     display_cycle_palette(&d, 1);
     assert(d.palette == DISP_PRESET_N + 1);
@@ -455,11 +475,18 @@ static void test_image_preset_name_shown_not_custom(void) {
     DisplayState d;
     display_set_images(names, 1);
     d.palette = DISP_PRESET_N;
-    d.bg      = DISP_BG_COLOR_N;
+    d.bg      = DISP_BG_BLACK;
     d.text    = DISP_TEXT_WHITE;
-    assert(strcmp(display_palette_name(&d), "FOREST.TGA") == 0);
-    /* Diverging from the pinned pair reads as Custom, same as color presets. */
+    d.image   = 0;
+    assert(strcmp(display_palette_name(&d), "Forest") == 0);
+    /* Diverging from the pinned trio reads as Custom, same as color presets. */
     d.text = DISP_TEXT_GREEN;
+    assert(strcmp(display_palette_name(&d), "Custom") == 0);
+    d.text = DISP_TEXT_WHITE;
+    d.bg   = DISP_BG_BLUE;
+    assert(strcmp(display_palette_name(&d), "Custom") == 0);
+    d.bg    = DISP_BG_BLACK;
+    d.image = DISP_IMAGE_NONE;
     assert(strcmp(display_palette_name(&d), "Custom") == 0);
     display_set_images(NULL, 0);
 }
@@ -473,7 +500,8 @@ static void test_decode_rejects_stale_image_preset(void) {
     /* Save while two images exist, selecting the second one. */
     display_set_images(two, 2);
     saved.palette = DISP_PRESET_N + 1;
-    saved.bg      = DISP_BG_COLOR_N + 1;
+    saved.bg      = DISP_BG_BLACK;
+    saved.image   = 1;
     saved.text    = DISP_TEXT_WHITE;
     display_encode(&saved, blob);
 
@@ -502,7 +530,8 @@ static void test_decode_resolves_image_after_reorder(void) {
     /* Save CASTLE, which is slot 2 on the disc we saved from. */
     display_set_images(before, 3);
     saved.palette = DISP_PRESET_N + 2;
-    saved.bg      = DISP_BG_COLOR_N + 2;
+    saved.bg      = DISP_BG_BLACK;
+    saved.image   = 2;
     saved.text    = DISP_TEXT_WHITE;
     display_encode(&saved, blob);
 
@@ -510,8 +539,8 @@ static void test_decode_resolves_image_after_reorder(void) {
        positionally would hand back FOREST. */
     display_set_images(after, 3);
     assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
-    assert(d.bg == DISP_BG_COLOR_N + 0);
-    assert(strcmp(display_bg_name(&d), "CASTLE.TGA") == 0);
+    assert(d.image == 0);
+    assert(strcmp(display_image_file(d.image), "CASTLE.TGA") == 0);
     assert(d.palette == DISP_PRESET_N + 0);
     display_set_images(NULL, 0);
 }
@@ -524,7 +553,8 @@ static void test_decode_follows_image_when_earlier_one_removed(void) {
 
     display_set_images(before, 3);
     saved.palette = DISP_PRESET_N + 2;      /* CASTLE */
-    saved.bg      = DISP_BG_COLOR_N + 2;
+    saved.bg      = DISP_BG_BLACK;
+    saved.image   = 2;
     saved.text    = DISP_TEXT_WHITE;
     display_encode(&saved, blob);
 
@@ -533,7 +563,7 @@ static void test_decode_follows_image_when_earlier_one_removed(void) {
        show nothing at all. */
     display_set_images(after, 2);
     assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
-    assert(strcmp(display_bg_name(&d), "CASTLE.TGA") == 0);
+    assert(strcmp(display_image_file(d.image), "CASTLE.TGA") == 0);
     display_set_images(NULL, 0);
 }
 
@@ -545,7 +575,8 @@ static void test_decode_image_gone_falls_back(void) {
 
     display_set_images(before, 2);
     saved.palette = DISP_PRESET_N + 1;      /* FOREST */
-    saved.bg      = DISP_BG_COLOR_N + 1;
+    saved.bg      = DISP_BG_BLACK;
+    saved.image   = 1;
     saved.text    = DISP_TEXT_WHITE;
     display_encode(&saved, blob);
 
@@ -599,7 +630,7 @@ static void test_legacy_blob_image_index_rejected(void) {
     display_set_images(one, 1);
     legacy[0] = 1;
     legacy[1] = DISP_PRESET_N;              /* image preset */
-    legacy[2] = DISP_BG_COLOR_N;            /* image slot */
+    legacy[2] = 0xFF;                       /* sentinel-1 form: out-of-range bg */
     legacy[3] = DISP_TEXT_WHITE;
     assert(display_decode(legacy, 4, &d) == 0);
     assert(!display_is_image(&d));
@@ -613,13 +644,131 @@ static void test_decode_truncated_name_block(void) {
 
     display_set_images(one, 1);
     saved.palette = DISP_PRESET_N;
-    saved.bg      = DISP_BG_COLOR_N;
+    saved.bg      = DISP_BG_BLACK;
+    saved.image   = 0;
     saved.text    = DISP_TEXT_WHITE;
     display_encode(&saved, blob);
 
     /* Sentinel says a name follows, but the block is cut short. */
     assert(display_decode(blob, DISP_BLOB_BYTES - 1, &d) == 0);
     assert(!display_is_image(&d));
+    display_set_images(NULL, 0);
+}
+
+/* --- images as their own field --------------------------------------------- */
+
+static void test_image_label_drops_extension_and_capitalizes(void) {
+    static const char *const names[] = { "HOUSE.TGA", "TYPEWRTR.TGA", "CMPLAB.TGA" };
+    display_set_images(names, 3);
+    assert(strcmp(display_image_label(0), "House")    == 0);
+    assert(strcmp(display_image_label(1), "Typewrtr") == 0);
+    assert(strcmp(display_image_label(2), "Cmplab")   == 0);
+    /* The file name itself is untouched -- it still has to open on the disc. */
+    assert(strcmp(display_image_file(0), "HOUSE.TGA") == 0);
+    /* Unregistered slots are empty, not garbage. */
+    assert(display_image_label(3)[0] == '\0');
+    assert(display_image_label(-1)[0] == '\0');
+    display_set_images(NULL, 0);
+}
+
+static void test_two_labels_live_at_once(void) {
+    /* The Display page prints one label while resolving another, so a single
+       static buffer would make both read the same. */
+    static const char *const names[] = { "HOUSE.TGA", "FOREST.TGA" };
+    const char *a, *b;
+    display_set_images(names, 2);
+    a = display_image_label(0);
+    b = display_image_label(1);
+    assert(strcmp(a, "House")  == 0);
+    assert(strcmp(b, "Forest") == 0);
+    display_set_images(NULL, 0);
+}
+
+static void test_selecting_image_preset_resets_bg_and_text(void) {
+    static const char *const names[] = { "FOREST.TGA" };
+    DisplayState d;
+    display_set_images(names, 1);
+    display_defaults(&d);
+
+    /* Come from a loud color pair, so the reset is visible. */
+    d.palette = 1;                          /* Monochrome P3: amber on black text */
+    d.bg      = DISP_BG_AMBER;
+    d.text    = DISP_TEXT_BLACK;
+
+    /* Step onto the image preset. */
+    d.palette = DISP_PRESET_N - 1;
+    d.bg      = display_preset_bg(d.palette);
+    d.text    = display_preset_text(d.palette);
+    display_cycle_palette(&d, 1);
+
+    assert(d.palette == DISP_PRESET_N);
+    assert(d.image   == 0);
+    assert(d.bg      == DISP_BG_BLACK);
+    assert(d.text    == DISP_TEXT_WHITE);
+    display_set_images(NULL, 0);
+}
+
+static void test_leaving_image_preset_clears_the_image(void) {
+    static const char *const names[] = { "FOREST.TGA" };
+    DisplayState d;
+    display_set_images(names, 1);
+    display_defaults(&d);
+
+    d.palette = DISP_PRESET_N;
+    d.bg      = DISP_BG_BLACK;
+    d.text    = DISP_TEXT_WHITE;
+    d.image   = 0;
+
+    display_cycle_palette(&d, 1);           /* wraps to color preset 0 */
+    assert(d.palette == 0);
+    assert(d.image   == DISP_IMAGE_NONE);
+    assert(!display_is_image(&d));
+    display_set_images(NULL, 0);
+}
+
+static void test_bg_color_under_image_survives_a_save(void) {
+    /* The color beneath a picture is what shows through the menu frames, so it
+       has to round-trip independently of the picture. */
+    static const char *const names[] = { "FOREST.TGA" };
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    display_set_images(names, 1);
+    saved.palette = DISP_PRESET_N;
+    saved.bg      = DISP_BG_BLUE;           /* deliberately not the preset's black */
+    saved.text    = DISP_TEXT_WHITE;
+    saved.image   = 0;
+    display_encode(&saved, blob);
+
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
+    assert(d.image == 0);
+    assert(d.bg    == DISP_BG_BLUE);
+    assert(d.text  == DISP_TEXT_WHITE);
+    /* Diverged from the preset's black, so it reads Custom. */
+    assert(strcmp(display_palette_name(&d), "Custom") == 0);
+    display_set_images(NULL, 0);
+}
+
+static void test_sentinel2_blob_decodes_image_over_black(void) {
+    /* The previous format packed the image into bg, so no color was stored
+       under it. It must still load, showing that picture over black. */
+    static const char *const names[] = { "FOREST.TGA" };
+    unsigned char old[DISP_BLOB_BYTES];
+    DisplayState d;
+    int i;
+
+    display_set_images(names, 1);
+    for (i = 0; i < DISP_BLOB_BYTES; i++) old[i] = 0;
+    old[0] = 2;                             /* previous sentinel */
+    old[1] = 0xFF;                          /* palette: the named image */
+    old[2] = 0xFF;                          /* bg: the named image */
+    old[3] = DISP_TEXT_WHITE;
+    for (i = 0; names[0][i]; i++) old[4 + i] = (unsigned char) names[0][i];
+
+    assert(display_decode(old, DISP_BLOB_BYTES, &d) == 1);
+    assert(d.image   == 0);
+    assert(d.bg      == DISP_BG_BLACK);
+    assert(d.palette == DISP_PRESET_N);
     display_set_images(NULL, 0);
 }
 
@@ -630,12 +779,12 @@ int main(void) {
     test_defaults_and_palette_name();
     test_image_registration();
     test_bg_name_and_is_image();
-    test_cycle_bg_wraps_through_images();
+    test_cycle_bg_stays_in_colors();
     test_legibility_guard();
-    test_guard_inactive_over_images();
+    test_guard_follows_bg_color_under_image();
     test_cycle_palette();
     test_palette_count_includes_images();
-    test_image_presets_pin_white_text();
+    test_image_presets_pin_black_bg_and_white_text();
     test_cycle_palette_reaches_images();
     test_cycle_palette_from_custom_with_images();
     test_image_preset_name_shown_not_custom();
@@ -647,6 +796,12 @@ int main(void) {
     test_legacy_blob_still_decodes();
     test_legacy_blob_image_index_rejected();
     test_decode_truncated_name_block();
+    test_image_label_drops_extension_and_capitalizes();
+    test_two_labels_live_at_once();
+    test_selecting_image_preset_resets_bg_and_text();
+    test_leaving_image_preset_clears_the_image();
+    test_bg_color_under_image_survives_a_save();
+    test_sentinel2_blob_decodes_image_over_black();
     test_encode_decode_roundtrip();
     test_collisions_roundtrip();
     test_custom_state_roundtrips();

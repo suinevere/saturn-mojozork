@@ -34,10 +34,13 @@
 extern "C" {
 #endif
 
+#define DISP_IMAGE_NONE (-1)
+
 typedef struct {
     int palette;   /* preset index 0..display_palette_count()-1; "Custom" is derived, never stored */
-    int bg;        /* 0..DISP_BG_COLOR_N-1 = color; >= DISP_BG_COLOR_N = image slot */
+    int bg;        /* 0..DISP_BG_COLOR_N-1: always a color */
     int text;      /* 0..DISP_TEXT_N-1 */
+    int image;     /* image slot, or DISP_IMAGE_NONE */
 } DisplayState;
 
 unsigned short display_bg_rgb(int index);          /* color indices only */
@@ -59,15 +62,29 @@ void display_defaults(DisplayState *d);
    count is clamped to DISP_IMAGE_MAX. */
 void display_set_images(const char *const *names, int count);
 int display_image_count(void);
-int display_bg_count(void);          /* DISP_BG_COLOR_N + display_image_count() */
+int display_bg_count(void);          /* DISP_BG_COLOR_N: the Background row is colors only */
+
+/* The image's name as it must be opened on the disc ("HOUSE.TGA"), or "" when
+   the slot is not registered. */
+const char *display_image_file(int slot);
+
+/* The same image as shown to the player: extension dropped and capitalized,
+   so "HOUSE.TGA" reads "House". Returns "" for an unregistered slot. The
+   result is held in a small rotating buffer -- fine for the two or three uses
+   in one screen draw, but copy it if you need to keep it. */
+const char *display_image_label(int slot);
 
 /* DISP_PRESET_N color presets followed by one preset per registered image.
-   Image presets pair that image's background with white text. Call
-   display_set_images() first -- the count moves with the disc's TGA list. */
+   An image preset shows that picture over a black background with white text.
+   Call display_set_images() first -- the count moves with the disc's TGA
+   list. */
 int display_palette_count(void);
 
+/* Image slot a preset selects, or DISP_IMAGE_NONE for a color preset. */
+int display_preset_image(int index);
+
 int display_is_image(const DisplayState *d);
-const char *display_bg_name(const DisplayState *d);   /* color name or file name */
+const char *display_bg_name(const DisplayState *d);   /* the background color's name */
 
 /* dir is +1 or -1. Cycling bg or text skips any candidate that would make the
    text the same color as the background. */
@@ -79,15 +96,22 @@ void display_cycle_palette(DisplayState *d, int dir);
    which GFS_FNAME_LEN caps at 12. */
 #define DISP_IMAGE_NAME_MAX 13
 
-/* [sentinel=2][palette][bg][text][image name, NUL-padded]
+/* [sentinel=3][palette][bg][text][image name, NUL-padded]
 
-   palette and bg hold 0xFF when they refer to an image; the name that follows
-   says which one. Slot numbers alone were not enough: they index the disc's
-   TGA scan order, so adding, removing or reordering a file silently pointed a
-   saved setting at a different picture.
+   bg is always a background color, and the name says which picture sits over
+   it -- empty for none. Both are stored because they are independent: an image
+   hides the color it sits on, but the color is still what shows through the
+   menu frames, and it survives switching the picture off.
 
-   A sentinel of 1 is the older four-byte form, still read. It carries no name,
-   so its color fields are honored and any image reference is refused. */
+   palette holds 0xFF when it refers to an image preset; the name identifies
+   which. Slot numbers alone were not enough: they index the disc's TGA scan
+   order, so adding, removing or reordering a file silently pointed a saved
+   setting at a different picture.
+
+   Two older forms are still read. Sentinel 2 packed the image into bg (0xFF
+   meaning "the named image"), which loses the color underneath -- it decodes
+   to that image over black. Sentinel 1 is the original four-byte form with no
+   name at all, so its colors are honored and any image reference refused. */
 #define DISP_BLOB_BYTES (4 + DISP_IMAGE_NAME_MAX)
 
 /* Write the display block. out must have room for DISP_BLOB_BYTES.
