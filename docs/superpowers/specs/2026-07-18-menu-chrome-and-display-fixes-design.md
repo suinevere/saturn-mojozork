@@ -2,7 +2,32 @@
 
 **Date:** 2026-07-18
 **Branch:** `sound-options`
-**Status:** approved, ready for planning
+**Status:** implemented; backgrounds confirmed working on target 2026-07-19
+
+## Outcome (2026-07-19)
+
+Item 1 (backgrounds never render) is fixed and verified on target. The root
+cause section below was wrong three times over, and each wrong answer shipped a
+build before the next was found. What it actually took:
+
+1. **`/TGA`, not the root** (`c221183`). The bitmaps live in `/TGA`; GFS
+   resolves a bare name against the current directory only, so no amount of
+   arguing about *which* directory to return to could work while the loader
+   never entered the one holding the files.
+2. **`ChangeDir(nullptr)` does not reach root** (`90330e0`). Its loop bails on
+   `!= ErrorCode::ErrorOk`, but `ChangeDir(name)` returns a *file count* on
+   success. Root is now captured as a `GfsDirTbl` and re-applied.
+3. **SRL's TGA decoder replaced** (`f0e7742`). Its `DecodePaletted` never
+   null-checks its allocation and indexes the destination with a `uint32_t`
+   derived from a signed descending counter.
+4. **The CD read needs a 4-byte-aligned destination** (`358feda`). GFS DMAs
+   sector data into the buffer; every image on the disc has an unaligned pixel
+   offset (525 or 786), so reading the tail to `pix + got` raised an SH-2
+   address error.
+
+Diagnosis only became reliable once Mednafen save states were parsed directly
+(SR/VBR/PC/PR and the register file). Guessing from symptoms produced three
+wrong fixes; the first state dump produced the right one.
 
 ## Problem
 
