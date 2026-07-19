@@ -2355,6 +2355,135 @@ static void display_scan_images(void) {
     display_set_images(found > 0 ? g_image_ptr : NULL, found);
 }
 
+// ---- minimal 8bpp TGA loader ------------------------------------------------
+// Replaces SRL::Bitmap::TGA for backgrounds. Its DecodePaletted
+// (srl_tga.hpp:376-394) has two defects that made cycling backgrounds trip an
+// SH-2 exception after three or four loads -- the frozen save state showed
+// PC inside the VBR handler at 0x06000956 with every interrupt masked:
+//
+//   * `this->imageData = autonew uint8_t[pixels];` is never null-checked before
+//     it is written through.
+//   * the destination is indexed by a uint32_t computed from a *signed*,
+//     descending row counter, so any early decrement wraps the index and writes
+//     before the buffer.
+//
+// Either is a silent out-of-bounds write per load, which is why the failure
+// took several loads to appear and did not depend on which image was chosen.
+//
+// This reads only what it needs: one sector for the header and palette, then
+// the pixel data straight into a single w*h buffer. Peak is about half SRL's,
+// which read the whole file into a temp buffer and decoded into a second one.
+//
+// Accepts only uncompressed 8bpp colour-mapped TGA (type 1) with a 24- or
+// 32-bit palette -- exactly what tools/make_house_tga.py emits. Anything else
+// is rejected rather than guessed at, so a stray file falls back to a colour
+// background instead of decoding into nonsense.
+struct RawBitmap final : SRL::Bitmap::IBitmap {
+    uint8_t                *Pixels;
+    SRL::Bitmap::Palette   *Pal;
+    uint16_t                W, H;
+    RawBitmap() : Pixels(nullptr), Pal(nullptr), W(0), H(0) {}
+    ~RawBitmap() override {
+        if (Pal != nullptr)    delete Pal;       // ~Palette frees its Colors
+        if (Pixels != nullptr) delete Pixels;
+    }
+    uint8_t *GetData() override { return Pixels; }
+    SRL::Bitmap::BitmapInfo GetInfo() const override {
+        return SRL::Bitmap::BitmapInfo(W, H, Pal);
+    }
+};
+
+// Load `file` from the current CD directory into NBG0. Returns false without
+// touching VDP2 if anything about the file is not the shape described above.
+static bool tga_load_nbg0(const char *file) {
+    SRL::Cd::File f(file);
+    if (!f.Exists()) return false;
+
+    // Header and palette both live in the first sector for every image we ship
+    // (18 + 256*4 = 1042 at worst). Bail rather than handle a split palette.
+    static uint8_t hdr[2048];
+    const int32_t ss = (f.Size.SectorSize > 0) ? f.Size.SectorSize : 2048;
+    if (ss > (int32_t) sizeof(hdr)) return false;
+    if (f.LoadBytes(0, ss, hdr) <= 0) return false;
+
+    const int idlen    = hdr[0];
+    const int cmaptype = hdr[1];
+    const int imgtype  = hdr[2];
+    const int cmaplen  = hdr[5] | (hdr[6] << 8);
+    const int cmapbits = hdr[7];
+    const int w        = hdr[12] | (hdr[13] << 8);
+    const int h        = hdr[14] | (hdr[15] << 8);
+    const int bpp      = hdr[16];
+    const int topdown  = (hdr[17] >> 5) & 1;   // descriptor bit 5: 1 = top origin
+
+    if (cmaptype != 1 || imgtype != 1 || bpp != 8)      return false;
+    if (cmaplen <= 0 || cmaplen > 256)                  return false;
+    if (cmapbits != 24 && cmapbits != 32)               return false;
+    if (w <= 0 || h <= 0 || w > 1024 || h > 512)        return false;
+
+    const int      cmapbytes = cmaplen * (cmapbits / 8);
+    const int      pixoff    = 18 + idlen + cmapbytes;
+    const uint32_t npix      = (uint32_t) w * (uint32_t) h;
+    if (pixoff > ss)                                    return false;
+    if ((uint32_t) pixoff + npix > (uint32_t) f.Size.Bytes) return false;
+    if (SRL::Memory::HighWorkRam::GetFreeSpace() < npix + 4096) return false;
+
+    // Palette always 256 entries so BitmapInfo picks Paletted256 and the VRAM
+    // container stays 128KB -- one bank. A shorter palette would select a 4bpp
+    // mode and a different layout. TGA stores map entries as B,G,R.
+    SRL::Types::HighColor *colors = new SRL::Types::HighColor[256];
+    if (colors == nullptr) return false;
+    for (int i = 0; i < 256; i++) {
+        SRL::Types::HighColor c;
+        c.Opaque = (i == 0) ? 0 : 1;   // index 0 reads as transparent on a scroll screen
+        if (i < cmaplen) {
+            const uint8_t *e = hdr + 18 + idlen + i * (cmapbits / 8);
+            c.Blue = e[0] >> 3; c.Green = e[1] >> 3; c.Red = e[2] >> 3;
+        } else {
+            c.Blue = 0; c.Green = 0; c.Red = 0;
+        }
+        colors[i] = c;
+    }
+
+    uint8_t *pix = new uint8_t[npix];
+    if (pix == nullptr) { delete colors; return false; }
+
+    // Whatever pixel data already came in with the header sector, then the rest
+    // straight from sector 1 -- we consumed exactly through the end of sector 0.
+    uint32_t got = 0;
+    if ((uint32_t) pixoff < (uint32_t) ss) {
+        uint32_t n = (uint32_t) ss - (uint32_t) pixoff;
+        if (n > npix) n = npix;
+        for (uint32_t i = 0; i < n; i++) pix[i] = hdr[pixoff + i];
+        got = n;
+    }
+    if (got < npix && f.LoadBytes(1, (int32_t) (npix - got), pix + got) <= 0) {
+        delete pix; delete colors; return false;
+    }
+
+    // TGA's default origin is bottom-left; VDP2 wants the top row first.
+    if (!topdown) {
+        static uint8_t rowbuf[1024];
+        for (int y = 0; y < h / 2; y++) {
+            uint8_t *a = pix + (uint32_t) y * (uint32_t) w;
+            uint8_t *b = pix + (uint32_t) (h - 1 - y) * (uint32_t) w;
+            for (int i = 0; i < w; i++) rowbuf[i] = a[i];
+            for (int i = 0; i < w; i++) a[i]      = b[i];
+            for (int i = 0; i < w; i++) b[i]      = rowbuf[i];
+        }
+    }
+
+    RawBitmap bmp;
+    bmp.Pixels = pix;
+    bmp.W      = (uint16_t) w;
+    bmp.H      = (uint16_t) h;
+    bmp.Pal    = new SRL::Bitmap::Palette(colors, 256);
+    if (bmp.Pal == nullptr) { delete pix; delete colors; return false; }
+
+    SRL::VDP2::NBG0::LoadBitmap(&bmp);
+    return true;   // ~RawBitmap frees the pixels and the palette
+}
+
 // ---- title-screen background image (VDP2 NBG0) ------------------------------
 // Shown behind the title text only; menus and gameplay stay on solid black.
 // The debug text console lives on NBG3 at priority Layer7 (top), and NBG0 is
@@ -2395,72 +2524,21 @@ static bool title_bg_show(const char *file) {
         // indefinitely, and the interaction with repeated pause/resume is not
         // understood. Do not re-enable it without working that out first.
         cd_enter_tga();
-        // Probe before constructing. SRL::Bitmap::TGA's constructor calls
-        // Debug::Assert("File '%s' is missing!") when the open fails
-        // (srl_tga.hpp:820), and in a DEBUG build Assert is not a silent no-op:
-        // it clears the screen, forces the back plane red and sits in an
-        // animation loop (srl_debug.hpp:200-220). A disc without the TGA folder
-        // would take over the display instead of falling back to a color
-        // background, so never hand the constructor a name that is not there.
-        BG_STAGE("1 probe");
-        SRL::Cd::File probe(file);
-        if (!probe.Exists()) {
-            BG_STAGE("1x missing");
-            bitmap_read_end();
-            return false;
-        }
-
-        // Decode in HighWorkRam. This must NOT be moved to LWRAM, however
-        // tempting: SRL's `autonew` is new(reinterpret_cast<uint32_t>(this))
-        // (srl_memory.hpp:1077), so the loader's buffers follow the TGA object
-        // into whatever zone it came from -- and the decoded pixels are then
-        // handed to Bmp2VRAM, which copies them a scanline at a time with
-        // slDMACopy (srl_vdp2.hpp:924). SCU DMA cannot source from Work RAM-L,
-        // so a pixel buffer there hangs the machine on the very first load.
-        // Allocating with plain `new` keeps the DMA source in HWRAM, reachable.
-        //
-        // The cost is that each load churns roughly twice the file size in the
-        // same 1MB the Z-machine story image uses: the whole file is read into a
-        // temp buffer, then the pixels are allocated beside it before that
-        // buffer is freed (srl_tga.hpp:689). Refuse the load rather than let SRL
-        // decode into a failed allocation -- it never checks autonew's result,
-        // so an exhausted heap turns into a write through a null pointer.
-        const size_t need = (size_t) probe.Size.Bytes * 2 + 8192;   // stream + pixels + palette
-        if (SRL::Memory::HighWorkRam::GetFreeSpace() < need) {
-            BG_STAGE("2x no ram");
-            bitmap_read_end();
-            return false;
-        }
+        // tga_load_nbg0 validates the header itself and refuses anything that is
+        // not uncompressed 8bpp colour-mapped, so a missing or odd file falls
+        // back to a colour background rather than reaching a decoder. It also
+        // never hands a name to SRL::Bitmap::TGA, whose constructor raises
+        // Debug::Assert on a failed open (srl_tga.hpp:820) -- and in a DEBUG
+        // build Assert clears the screen, forces the back plane red and sits in
+        // an animation loop (srl_debug.hpp:200-220).
         BG_STAGE("3 decode");
-        SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
-        if (!bmp) {               // operator new returns null on OOM (srl_memory.hpp)
-            BG_STAGE("3x null");
-            bitmap_read_end();
-            return false;
-        }
-        if (bmp->GetData() == nullptr) {   // opened but decoded to nothing
-            BG_STAGE("3x nodata");
-            delete bmp;
-            bitmap_read_end();
-            return false;
-        }
-        if (bmp->GetInfo().Palette == nullptr) {
-            // Truecolor (or any other non-paletted) image: not the 8bpp shape
-            // this loader/VRAM layout requires. Reject before it ever reaches
-            // VRAM instead of risking the bank-spanning static above.
-            BG_STAGE("3x truecolor");
-            delete bmp;
-            bitmap_read_end();
-            return false;
-        }
+        bool ok = tga_load_nbg0(file);   // not `loaded`: that is the cached name above
         bitmap_read_end();
-        // If the freeze lands here, the failure is in VDP2 -- the VRAM/CRAM
-        // allocation inside LoadBitmap, or the per-scanline slDMACopy -- not in
-        // the CD read or the decode, both of which have completed by now.
-        BG_STAGE("4 vram");
-        SRL::VDP2::NBG0::LoadBitmap(bmp);
-        BG_STAGE("5 free");
-        delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
+        if (!ok) {
+            BG_STAGE("3x reject");
+            return false;
+        }
+        BG_STAGE("5 done");
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
         // LoadBitmap leaves stray debug prints on rows 20-21 ("4bpp" / "Pal: N")
         // from SRL itself (srl_vdp2.hpp:869,888). Patching the library would not
