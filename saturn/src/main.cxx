@@ -2196,12 +2196,15 @@ static bool tga_name_is_usable(const char *name) {
 // scan_z3_folder() below: a private GfsDirTbl (not SRL's shared Cd table),
 // and a return to the root directory both before and after so the scan is
 // idempotent across soft resets and leaves the CD where the boot sequence
-// expects it. Unlike scan_z3_folder, this never calls GFS_SetDir. Bitmaps are opened by
-// bare file name, which resolves against whatever directory is current -- so
-// title_bg_show brackets its own load with cd_enter_root()/cd_restore_z3()
-// rather than relying on ambient state. An earlier comment here claimed bare
-// names resolve regardless of current directory; that was wrong, and it is why
-// backgrounds silently failed once the Z3 catalog scan had run.
+// expects it. The loaded table is kept (g_tga_tbl) so title_bg_show() can make
+// /TGA current for each load, which is the only directory where a bare
+// "*.TGA" name resolves.
+//
+// Two earlier comments here were wrong and between them cost this feature a
+// release: first that bare names resolve regardless of current directory, then
+// that the fix was to open them at the root. Both are false. The bitmaps are in
+// /TGA and GFS only ever searches the current directory, so the loader has to
+// go there.
 // ---- CD current-directory discipline ---------------------------------------
 // scan_z3_folder() calls GFS_SetDir() to make Z3 the current CD directory, and
 // that persists for the rest of the session. Anything opened by bare file name
@@ -2244,6 +2247,20 @@ static void cd_enter_root(void) {
     if (g_root_dir_valid) GFS_SetDir(&g_root_tbl);
 }
 
+// The bitmaps live in /TGA, not at the root -- cd/data is the ISO root
+// (shared.mk ASSETS_DIR), so cd/data/TGA lands as /TGA. GFS resolves a bare
+// name against the current directory only, so opening "HOUSE.TGA" anywhere but
+// inside /TGA finds nothing: at the root that name is not present, only the
+// directory holding it. display_scan_images() captures this table when it lists
+// the folder, and title_bg_show() enters it around each load.
+static GfsDirName g_tga_dirnames[SRL_MAX_CD_FILES];
+static GfsDirTbl  g_tga_tbl;
+static bool       g_tga_dir_valid = false;
+
+static void cd_enter_tga(void) {
+    if (g_tga_dir_valid) GFS_SetDir(&g_tga_tbl);
+}
+
 // Re-point the CD at Z3 so story-file opens keep working. No-op before the
 // catalog scan has populated g_z3_tbl.
 static void cd_restore_z3(void) {
@@ -2251,9 +2268,11 @@ static void cd_restore_z3(void) {
 }
 
 static void display_scan_images(void) {
-    static GfsDirName dirnames[SRL_MAX_CD_FILES];
-    static GfsDirTbl  tbl;
+    GfsDirName *dirnames = g_tga_dirnames;   // kept at file scope: cd_enter_tga()
+    GfsDirTbl  *tblp     = &g_tga_tbl;       // re-applies this table on every load
     int found = 0;
+
+    g_tga_dir_valid = false;
 
     // Same idempotence dance as scan_z3_folder: get back to the root before
     // resolving "TGA", or after a soft reset it would resolve relative to
@@ -2262,10 +2281,13 @@ static void display_scan_images(void) {
 
     int32_t fid = GFS_NameToId((int8_t *) "TGA");
     if (fid >= 0) {
-        GFS_DIRTBL_TYPE(&tbl)    = GFS_DIR_NAME;
-        GFS_DIRTBL_DIRNAME(&tbl) = dirnames;
-        GFS_DIRTBL_NDIR(&tbl)    = SRL_MAX_CD_FILES;
-        int32_t count = GFS_LoadDir(fid, &tbl);
+        GFS_DIRTBL_TYPE(tblp)    = GFS_DIR_NAME;
+        GFS_DIRTBL_DIRNAME(tblp) = dirnames;
+        GFS_DIRTBL_NDIR(tblp)    = SRL_MAX_CD_FILES;
+        int32_t count = GFS_LoadDir(fid, tblp);
+        // Records loaded: cd_enter_tga() can now make this the current
+        // directory, which is the only place a bare "*.TGA" open resolves.
+        g_tga_dir_valid = count >= 0;
         // Entry names live in dirnames[i].fname (int8_t[GFS_FNAME_LEN], not a
         // bare string) -- same layout scan_z3_folder reads below. Extract into
         // a NUL-terminated buffer, stripping any ";n" version suffix, before
@@ -2311,10 +2333,11 @@ static bool title_bg_show(const char *file) {
         if (loaded[i] == '\0') break;   // matched up to and including the NUL
     }
     if (!same) {
-        // CD read + VRAM upload. We open by bare file name, but scan_z3_folder
-        // leaves Z3 as the current CD directory -- cd_enter_root() below ensures
-        // the open resolves to the bitmap at root. Must run before menu CD-DA
-        // starts: the single CD head can't read data while playing audio.
+        // CD read + VRAM upload. We open by bare file name, and GFS resolves
+        // that against the current directory only -- so we must be *inside*
+        // /TGA, where the bitmaps live. Neither the root nor Z3 (left current by
+        // scan_z3_folder) contains them. Must run before menu CD-DA starts: the
+        // single CD head can't read data while playing audio.
         // Every image must be 256-color paletted, not truecolor: SRL's VDP2
         // bitmap allocator doubles the container size for RGB555, pushing a
         // 512x256 bitmap to 256KB and across the A0/A1 VRAM bank boundary.
@@ -2322,10 +2345,8 @@ static bool title_bg_show(const char *file) {
         // the second bank in VDP2_RAMCTL -- see the note at the top of
         // srl_vdp2.hpp). At 8bpp the container is exactly 128KB and fits one
         // bank.
-        // Open at the root: scan_z3_folder() leaves Z3 as the current CD
-        // directory, and a bare-name open would resolve there and fail. Every
-        // exit path below must cd_restore_z3() or story-file opens break.
-        cd_enter_root();
+        // Every exit path below must cd_restore_z3() or story-file opens break.
+        cd_enter_tga();
         // Probe before constructing. SRL::Bitmap::TGA's constructor calls
         // Debug::Assert("File '%s' is missing!") when the open fails
         // (srl_tga.hpp:820), and in a DEBUG build Assert is not a silent no-op:
@@ -2832,12 +2853,17 @@ int main(void) {
     // state. The story image itself is owned by the Z-machine (initStory frees the
     // previous GState->story on the next boot), so we must NOT free it here -- doing
     // so double-frees it and corrupts the heap.
-    setjmp(g_title_jmp);
+    int cd_reentry = setjmp(g_title_jmp);
     g_title_jmp_armed = true;
     g_reboot_menu = false;
     GFS_Reset();
     cd_capture_root();   // GFS_Reset returns us to root; re-snapshot it there
     g_z3_dir_valid = false;   // the pre-reset Z3 table is stale until re-scanned
+    // Re-list /TGA for the same reason. Z3 is re-scanned lazily by
+    // preload_game_catalog(), but nothing else refreshes the bitmap table, and
+    // title_bg_show() needs it a few lines below. Only on re-entry: the first
+    // pass already scanned above, and this is a CD read.
+    if (cd_reentry) display_scan_images();
     console_init();
 
     // Clear engine statics before the menu track. A soft reset longjmps here with

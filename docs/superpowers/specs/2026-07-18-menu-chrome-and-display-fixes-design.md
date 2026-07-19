@@ -49,6 +49,31 @@ The comment at `main.cxx:2126-2127` asserts the opposite — that bare-name open
 are "proven to resolve regardless of the current CD directory". That claim is
 false and is why the bug survived review.
 
+> **Correction 3 (post-implementation).** The root-cause section above is wrong
+> in a way both earlier corrections missed, and it is the actual reason
+> backgrounds never appeared — including on the title screen, which this
+> document twice asserted was working.
+>
+> The bitmaps are at **`/TGA`**, not at the ISO root. `shared.mk` makes
+> `cd/data` the root, so `cd/data/TGA/` lands as `/TGA/HOUSE.TGA`. GFS resolves
+> a bare file name against the **current directory only**. `title_bg_show`
+> opened `"HOUSE.TGA"` while at the root, where that name does not exist — only
+> the directory containing it does. No current-directory value makes that open
+> succeed except `/TGA` itself.
+>
+> So the fix prescribed in Phase 1a — return to the root before loading — could
+> not have worked, and neither could the original code. `display_scan_images`
+> listed `/TGA` to populate the selector but deliberately never `GFS_SetDir`'d
+> into it, so the names on screen always referred to files the loader was not
+> looking for.
+>
+> `display_scan_images` now keeps the loaded table (`g_tga_tbl`) and
+> `title_bg_show` brackets each load with `cd_enter_tga()` / `cd_restore_z3()`.
+>
+> Worth recording why this survived two review passes: every check confirmed the
+> code matched the design, and the design's premise — that the bitmaps were at
+> the root — was never itself tested against the asset layout.
+
 > **Correction 2 (post-implementation).** The directory diagnosis above is
 > right about *why* bare-name opens fail inside `Z3`, but the remedy it
 > prescribes — `SRL::Cd::ChangeDir((char *) nullptr)` — does not work, and

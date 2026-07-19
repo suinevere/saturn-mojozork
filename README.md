@@ -102,6 +102,16 @@ This produces `saturn/BuildDrop/mojozork.iso` (bootable, ISO9660) and
 `mojozork.bin` (MODE1/2352 raw, for ODEs/burners), plus `mojozork.elf`/`.map`.
 `./clean.bat` removes build output.
 
+> **If Mednafen rejects the image** with an error like
+> `M:S:F time "102:16:72" contains components out of range`, the build wrote a
+> corrupt `mojozork.cue`/`.bin` pair because `BuildDrop/` was not cleared — the
+> previous output was still held open by another process (an emulator with the
+> image loaded, or a burner/ODE tool). The build appends rather than replacing,
+> so track offsets run past the ~80-minute Red Book limit and the MSF minutes
+> field overflows. Close anything holding the image, run `./clean.bat` (or
+> delete `BuildDrop/`), and rebuild. The MSF values are a symptom of the stale
+> output, not a problem with the audio tracks.
+
 > **How the build finds the SDK:** unlike a stock SaturnRingLib project (which sits
 > at `SaturnRingLib/Projects/<name>` and locates the SDK via `../..`), this project
 > lives in `saturn/` and points at the sibling submodule via `../SaturnRingLib`.
