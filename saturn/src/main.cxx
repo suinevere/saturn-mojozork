@@ -2267,6 +2267,15 @@ static void cd_restore_z3(void) {
     if (g_z3_dir_valid) GFS_SetDir(&g_z3_tbl);
 }
 
+// Undo everything a bitmap load disturbed: the current CD directory (story-file
+// opens resolve inside Z3) and CD-DA playback. One helper rather than two calls
+// because title_bg_show has six exit paths, and a fix in this file has already
+// been lost once to an exit path that forgot its cleanup.
+static void bitmap_read_end(void) {
+    cd_restore_z3();
+    music_cdda_resume_after_read();
+}
+
 static void display_scan_images(void) {
     GfsDirName *dirnames = g_tga_dirnames;   // kept at file scope: cd_enter_tga()
     GfsDirTbl  *tblp     = &g_tga_tbl;       // re-applies this table on every load
@@ -2345,7 +2354,15 @@ static bool title_bg_show(const char *file) {
         // the second bank in VDP2_RAMCTL -- see the note at the top of
         // srl_vdp2.hpp). At 8bpp the container is exactly 128KB and fits one
         // bank.
-        // Every exit path below must cd_restore_z3() or story-file opens break.
+        // Every exit path below must call bitmap_read_end(), which restores both
+        // the CD directory and playback.
+        //
+        // Live background preview in Display Options is the one place a menu
+        // reads the CD after CD-DA has started (main() otherwise front-loads
+        // every read before the music does). One drive head means the read stops
+        // playback regardless; pausing first records the frame so we resume
+        // there rather than restarting the track on every Left/Right press.
+        music_cdda_pause_for_read();
         cd_enter_tga();
         // Probe before constructing. SRL::Bitmap::TGA's constructor calls
         // Debug::Assert("File '%s' is missing!") when the open fails
@@ -2354,18 +2371,38 @@ static bool title_bg_show(const char *file) {
         // animation loop (srl_debug.hpp:200-220). A disc without the TGA folder
         // would take over the display instead of falling back to a color
         // background, so never hand the constructor a name that is not there.
-        if (!SRL::Cd::File(file).Exists()) {
-            cd_restore_z3();
+        SRL::Cd::File probe(file);
+        if (!probe.Exists()) {
+            bitmap_read_end();
             return false;
         }
-        SRL::Bitmap::TGA* bmp = new SRL::Bitmap::TGA(file);
+
+        // Decode in LWRAM, not the game's heap. SRL's `autonew` is
+        // new(reinterpret_cast<uint32_t>(this)) (srl_memory.hpp:1077), so every
+        // buffer the loader allocates comes from whichever zone the TGA object
+        // itself lives in. Plain `new` would put it in HighWorkRam -- the same
+        // 1MB the Z-machine story image, typeahead and console buffers use --
+        // and each load churns roughly twice the file size there (the whole file
+        // is read into a temp buffer, then the decoded pixels are allocated
+        // beside it before that buffer is freed, srl_tga.hpp:689). Cycling
+        // backgrounds fragmented that heap until an allocation failed, and SRL
+        // does not check autonew's result before decoding into it, so the fourth
+        // or so image wrote through a null pointer and locked the machine.
+        // LWRAM is a separate 1MB (srl_memory.hpp:594) that nothing else here
+        // touches, so the churn cannot reach the game's allocations.
+        const size_t need = (size_t) probe.Size.Bytes * 2 + 8192;   // stream + pixels + palette
+        if (SRL::Memory::LowWorkRam::GetFreeSpace() < need) {
+            bitmap_read_end();
+            return false;
+        }
+        SRL::Bitmap::TGA* bmp = new (SRL::Memory::Zone::LWRam) SRL::Bitmap::TGA(file);
         if (!bmp) {               // operator new returns null on OOM (srl_memory.hpp)
-            cd_restore_z3();
+            bitmap_read_end();
             return false;
         }
         if (bmp->GetData() == nullptr) {   // opened but decoded to nothing
             delete bmp;
-            cd_restore_z3();
+            bitmap_read_end();
             return false;
         }
         if (bmp->GetInfo().Palette == nullptr) {
@@ -2373,10 +2410,10 @@ static bool title_bg_show(const char *file) {
             // this loader/VRAM layout requires. Reject before it ever reaches
             // VRAM instead of risking the bank-spanning static above.
             delete bmp;
-            cd_restore_z3();
+            bitmap_read_end();
             return false;
         }
-        cd_restore_z3();
+        bitmap_read_end();
         SRL::VDP2::NBG0::LoadBitmap(bmp);
         delete bmp;   // pixels now live in VDP2 VRAM; free the work-RAM copy
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
