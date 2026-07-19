@@ -2881,8 +2881,15 @@ static void preload_game_catalog(void) {
     if (g_catalog_count > 0) {
         for (int i = 0; i < g_catalog_count; i++) {
             const char* title = read_game_info(names[i], &cats[i]);
+            // Cap at the width a menu row can actually draw, not at the buffer
+            // size. A row is "> N) " (5 cols) plus the title, and a full-width
+            // box leaves 37 columns from the content origin to the border, so
+            // anything past 32 chars would overwrite the border. 31 keeps a
+            // column of margin. Every real title fits; this only guards the
+            // filename fallback and any future long entry. Once the deferred
+            // marquee lands, long titles can scroll instead of being clipped.
             int j = 0; const char* src = title ? title : names[i];
-            for (; src[j] && j < 39; j++) labels[i][j] = src[j];
+            for (; src[j] && j < MENU_ROW_TEXT_MAX; j++) labels[i][j] = src[j];
             labels[i][j] = '\0';
         }
     }

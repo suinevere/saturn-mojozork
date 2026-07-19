@@ -13,6 +13,15 @@
    the player switches between the pad and a real keyboard mid-menu. */
 #define MENU_DIGIT_COLS  3
 
+/* Longest text a single menu row can draw without touching the box border.
+   A row is a cursor mark, a space, the "N) " prefix, then the text -- 5
+   columns of chrome. A full-width box (40) puts its content origin at column 2
+   and its right border at 39, leaving 37 drawable columns, so the text ceiling
+   is 32. This is 31, one column of margin. Callers that build row text from
+   external data (disc filenames, story-file titles) clamp to it, since a
+   clamped box truncates silently rather than reporting an error. */
+#define MENU_ROW_TEXT_MAX 31
+
 /* Fit a centered box around `content_w` columns and `rows` rows of content.
    Width is the wider of the content and the title, plus two border columns and
    one pad column each side; height is the content plus a top border, a title
