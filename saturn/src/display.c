@@ -107,7 +107,7 @@ const char *display_image_file(int slot) {
 
 const char *display_image_label(int slot) {
     /* Two buffers so a single screen draw can hold two labels at once -- the
-       System Palette row prints one while display_palette_name resolves
+       Palette row prints one while display_palette_name resolves
        another. */
     static char ring[2][DISP_IMAGE_NAME_MAX];
     static int turn = 0;

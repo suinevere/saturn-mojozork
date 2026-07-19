@@ -329,7 +329,7 @@ enum DisplayCycleRow { DCR_PALETTE, DCR_BG, DCR_TEXT };
 // Cycle one row and push it to the hardware, stepping over any image that will
 // not load.
 //
-// Only the System Palette row can hit that: it is the one carrying pictures now.
+// Only the Palette row can hit that: it is the one carrying pictures now.
 // The step matters there because display_apply() installs a colour-preset
 // fallback when a load fails, and that rewrites the very index being cycled --
 // without restoring it, the next press would resume from the fallback and land
@@ -1626,9 +1626,13 @@ static void configure_controls_page(void) {
         // Only the 9 assignable rows are numbered: there are 12 rows here and
         // just 9 digits, so Reset/OK/Cancel keep their unnumbered padding and
         // stay reachable by Up/Down only.
-        if (menu_digit_row(ke, NASSIGN, sel, left, right)) act = true;
         if (up)   sel = (sel - 1 + R_CANCEL + 1) % (R_CANCEL + 1);
         if (down) sel = (sel + 1) % (R_CANCEL + 1);
+        // After Up/Down, so a digit wins a same-frame tie against the pad --
+        // the order the other five option pages use. Resolving it first would
+        // let a simultaneous Up/Down move sel while left/right/act stayed set
+        // from the digit, cycling whichever row the pad landed on instead.
+        if (menu_digit_row(ke, NASSIGN, sel, left, right)) act = true;
         if (sel == R_DONE)  { if (act) { options_save(); break; } }         // OK
         else if (sel == R_CANCEL) { if (act) {                             // Cancel
             for (int a = 0; a < FA_N; a++) g_face_btn[a]   = s_face[a];
