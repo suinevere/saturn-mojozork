@@ -179,17 +179,10 @@ static bool g_kbd_visible = true;
 // true:  plain Left/Right move the caret, Ctrl+Left/Right cycle. Toggled by Insert.
 static bool g_caret_arrows = false;
 
-// While the reboot confirm modal is up, the console shrinks to leave the bottom
-// rows for the prompt, so the console (including the freshly-echoed "reboot") stays
-// visible above it instead of being overwritten by the prompt band.
-static bool g_reboot_menu = false;
-static const int REBOOT_MENU_ROWS = 8;   // bottom rows reserved for the prompt band
-
 // Console text rows currently available; the input line sits on the next row down.
 // Shown: reserve input + KB_ROWS keyboard rows + a hint row. Hidden: just input.
 static int console_height(void) {
     int avail = SCREEN_ROWS - TOP_MARGIN;
-    if (g_reboot_menu) return avail - REBOOT_MENU_ROWS;   // 19 rows; prompt sits below
     return g_kbd_visible ? (avail - (1 + KB_ROWS + 1)) : (avail - 1);
 }
 
@@ -431,6 +424,9 @@ static void options_menu(void);   // defined below, near the other menus
 static void keyboard_controls_page(void);   // ditto -- reached from the in-game F11 key
 static void menu_clear_full(void);
 static bool menu_confirm(const char *line1, const char *line2);  // defined below
+// Defined below too: it draws a menu box, so it has to follow MenuBacking and
+// menu_frame, while its callers (the reboot/quit commands) sit above them.
+static bool confirm_return_to_title(const char *question);
 static void sound_options_page(void);
 static void display_options_page(void);
 
@@ -850,37 +846,6 @@ static void check_soft_reset(void) {
     if (hold >= SOFT_RESET_HOLD) soft_reset_to_title();
 }
 
-// Modal Y/N confirm, asking `question`. On Yes, soft-resets to the title screen
-// in-process (the same return-to-title as the A+B+C+Start chord); configured
-// options in backup RAM are retained. On No, returns false so the caller resumes.
-// Shared by the reboot and quit commands -- both discard an unsaved game, so both
-// ask first.
-static bool confirm_return_to_title(const char *question) {
-    g_reboot_menu = true;       // shrink the console so it renders above the prompt band
-    SRL::Core::Synchronize();   // drop the submit edge that triggered this
-    for (;;) {
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        note_input_device(ke);   // so the prompt below matches the device in hand
-        bool yes = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'y' || ke.ch == 'Y'))
-                 || ke.kind == SATURN_KEY_ENTER
-                 || g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)
-                 || g_pad->WasPressed(Button::C);
-        bool no  = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'n' || ke.ch == 'N'))
-                 || ke.kind == SATURN_KEY_ESCAPE || g_pad->WasPressed(Button::B);
-        if (yes) { soft_reset_to_title(); }         // in-process return to title; never returns
-        if (no) { g_reboot_menu = false; return false; }
-
-        // Console (shrunk to rows above REBOOT_MENU_ROWS) still shows the game text
-        // and the just-echoed command; the prompt band below is fully cleared each
-        // frame so nothing bleeds through in either keyboard or controller mode.
-        render_console();
-        for (int r = SCREEN_ROWS - REBOOT_MENU_ROWS; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-        SRL::Debug::Print(2, 22, "%s", question);
-        SRL::Debug::Print(1, 24, "%s", hint("(A) (C) (Start) = yes", "Y / Enter = yes"));
-        SRL::Debug::Print(1, 26, "%s", hint("(B) = no", "N / Esc = no"));
-        SRL::Core::Synchronize();
-    }
-}
 
 // Put `cmd` on the input line and submit it, as if the player had typed it and
 // pressed Enter -- so it echoes, enters history, and reaches the interpreter by
@@ -1334,6 +1299,54 @@ static void menu_frame(int x0, int y0, int w, int h, const char *title) {
     int tx = x0 + (w - len) / 2;
     if (tx < x0 + 1) tx = x0 + 1;
     SRL::Debug::Print(tx, y0 + 1, "%s", title);
+}
+
+// Modal Y/N confirm, asking `question`. On Yes, soft-resets to the title screen
+// in-process (the same return-to-title as the A+B+C+Start chord); configured
+// options in backup RAM are retained. On No, returns false so the caller resumes.
+// Shared by the reboot and quit commands -- both discard an unsaved game, so both
+// ask first.
+static bool confirm_return_to_title(const char *question) {
+    MenuBacking backing;        // the box owns its area; no console shrink needed
+    int qlen = 0;
+    while (question[qlen]) qlen++;
+
+    // Everything drawn inside the box counts toward its width, hints included.
+    // The longest row that is not the question is the pad variant of the first
+    // hint, "(A) (C) (Start) = yes" (21); the digit row is 15 and the second
+    // hint is at most 12. Budgeted unconditionally so the box does not resize
+    // when the player switches between the pad and a keyboard mid-prompt.
+    int content_w = qlen;
+    if (content_w < 21) content_w = 21;
+    int x0, y0, w, h;
+    menu_box_fit("RETURN TO TITLE", content_w, 5, &x0, &y0, &w, &h);
+
+    SRL::Core::Synchronize();   // drop the submit edge that triggered this
+    for (;;) {
+        SaturnKeyEvent ke = saturn_keyboard_poll();
+        note_input_device(ke);   // so the prompt below matches the device in hand
+        bool yes = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'y' || ke.ch == 'Y' || ke.ch == '1'))
+                 || ke.kind == SATURN_KEY_ENTER
+                 || g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)
+                 || g_pad->WasPressed(Button::C);
+        bool no  = (ke.kind == SATURN_KEY_CHAR && (ke.ch == 'n' || ke.ch == 'N' || ke.ch == '2'))
+                 || ke.kind == SATURN_KEY_ESCAPE || g_pad->WasPressed(Button::B);
+        if (yes) { soft_reset_to_title(); }         // in-process return to title; never returns
+        if (no) { return false; }
+
+        // The console still renders behind at full height; the box sits over it
+        // and the VDP2 window keeps any image background out from under it. No
+        // menu_clear() on purpose -- the game text staying visible behind the
+        // box is the point of this prompt.
+        render_console();
+        menu_frame(x0, y0, w, h, "RETURN TO TITLE");
+        int cx = x0 + 2, cy = y0 + 3;
+        SRL::Debug::Print(cx, cy, "%s", question);
+        if (!g_kbd_visible) SRL::Debug::Print(cx, cy + 2, "1) Yes    2) No");
+        SRL::Debug::Print(cx, cy + 3, "%s", hint("(A) (C) (Start) = yes", "Y / Enter = yes"));
+        SRL::Debug::Print(cx, cy + 4, "%s", hint("(B) = no", "N / Esc = no"));
+        SRL::Core::Synchronize();
+    }
 }
 
 // Wait for any button/key (used for "press any key" prompts).
@@ -2262,6 +2275,21 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
 // Yes/no confirmation. Returns true if confirmed (C / A / Start / Enter / Y),
 // false if declined (B / N).
 static bool menu_confirm(const char *line1, const char *line2) {
+    MenuBacking backing;        // opaque behind the box while the prompt is up
+    int l1 = 0, l2 = 0;
+    while (line1 && line1[l1]) l1++;
+    while (line2 && line2[l2]) l2++;
+
+    // Everything drawn inside the box counts toward its width, hints included.
+    // The widest non-message row is the keyboard hint, "Enter = Yes     Esc = No"
+    // (24); the digit row is 15. Budgeted unconditionally -- pad wording is
+    // shorter, but sizing to it would make the box grow the moment the player
+    // switched to a keyboard.
+    int content_w = (l1 > l2 ? l1 : l2);
+    if (content_w < 24) content_w = 24;
+    int x0, y0, w, h;
+    menu_box_fit("CONFIRM", content_w, (l2 > 0 ? 5 : 4), &x0, &y0, &w, &h);
+
     SRL::Core::Synchronize();   // consume the edge that got us here
     for (;;) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
@@ -2269,17 +2297,22 @@ static bool menu_confirm(const char *line1, const char *line2) {
         if (ke.kind == SATURN_KEY_ENTER) return true;
         if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) return false;
         if (ke.kind == SATURN_KEY_CHAR) {
-            if (ke.ch == 'y' || ke.ch == 'Y') return true;
-            if (ke.ch == 'n' || ke.ch == 'N') return false;
+            if (ke.ch == 'y' || ke.ch == 'Y' || ke.ch == '1') return true;
+            if (ke.ch == 'n' || ke.ch == 'N' || ke.ch == '2') return false;
         } else {
             if (g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START))
                 return true;
             if (g_pad->WasPressed(Button::B)) return false;
         }
+
         menu_clear();
-        SRL::Debug::Print(2, 3, "%s", line1);
-        if (line2 && line2[0]) SRL::Debug::Print(2, 4, "%s", line2);
-        SRL::Debug::Print(2, 6, "%s",
+        menu_frame(x0, y0, w, h, "CONFIRM");
+        int cx = x0 + 2, cy = y0 + 3;
+        if (l1) SRL::Debug::Print(cx, cy, "%s", line1);
+        if (l2) SRL::Debug::Print(cx, cy + 1, "%s", line2);
+        int hy = cy + (l2 > 0 ? 3 : 2);
+        if (!g_kbd_visible) SRL::Debug::Print(cx, hy, "1) Yes    2) No");
+        SRL::Debug::Print(cx, hy + 1, "%s",
             hint("A / C = Yes     B = No", "Enter = Yes     Esc = No"));
         menu_sync();
     }
@@ -3236,7 +3269,6 @@ int main(void) {
     // so double-frees it and corrupts the heap.
     int cd_reentry = setjmp(g_title_jmp);
     g_title_jmp_armed = true;
-    g_reboot_menu = false;
     GFS_Reset();
     cd_capture_root();   // GFS_Reset returns us to root; re-snapshot it there
     g_z3_dir_valid = false;   // the pre-reset Z3 table is stale until re-scanned

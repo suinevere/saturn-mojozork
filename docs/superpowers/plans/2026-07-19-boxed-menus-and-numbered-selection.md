@@ -697,7 +697,7 @@ git commit -m "Box the message screens and the online dialing sequence"
 - Consumes: `menu_box_fit` from Task 1, `menu_frame`, `MenuBacking`.
 - Produces: no signature changes. Both functions keep their current signatures and return values, so no caller changes.
 
-- [ ] **Step 1: Box and number `menu_confirm`**
+- [x] **Step 1: Box and number `menu_confirm`**
 
 Replace the drawing tail of `menu_confirm` (`main.cxx:2199-2204`) with a boxed
 version, and add digit handling. The full function becomes:
@@ -743,7 +743,7 @@ static bool menu_confirm(const char *line1, const char *line2) {
 }
 ```
 
-- [ ] **Step 2: Box `confirm_return_to_title` and drop the console shrink**
+- [x] **Step 2: Box `confirm_return_to_title` and drop the console shrink**
 
 Replace the whole of `confirm_return_to_title` (`main.cxx:857-882`) with:
 
@@ -788,7 +788,7 @@ static bool confirm_return_to_title(const char *question) {
 Note there is deliberately no `menu_clear()` — the game console stays visible
 behind the box, which is the point of this prompt.
 
-- [ ] **Step 3: Remove `g_reboot_menu` and `REBOOT_MENU_ROWS`**
+- [x] **Step 3: Remove `g_reboot_menu` and `REBOOT_MENU_ROWS`**
 
 `confirm_return_to_title` was the only writer. Remove:
 
@@ -805,7 +805,7 @@ grep -n "g_reboot_menu\|REBOOT_MENU_ROWS" saturn/src/main.cxx
 Expected: no output. If anything remains, it is a live reference — stop and
 resolve it rather than deleting it.
 
-- [ ] **Step 4: Confirm the unit suite still passes**
+- [x] **Step 4: Confirm the unit suite still passes**
 
 ```bash
 gcc -o /tmp/tml saturn/tests/test_menu_layout.c saturn/src/menu_layout.c -I saturn/src && /tmp/tml
@@ -814,7 +814,7 @@ gcc -o /tmp/td  saturn/tests/test_display.c     saturn/src/display.c     -I satu
 
 Expected: `test_menu_layout: OK` then `test_display: OK`
 
-- [ ] **Step 5: Hand off for a Saturn build, then commit**
+- [x] **Step 5: Hand off for a Saturn build, then commit**
 
 ```bash
 git add saturn/src/main.cxx
