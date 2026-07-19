@@ -5,6 +5,7 @@ extern "C" {
 #include "console.h"
 #include "keyboard.h"
 #include "display.h"
+#include "menu_layout.h"
 #include "saturn_keyboard.h"
 #include "saturn_backup.h"
 #include "saturn_glue.h"
@@ -1350,9 +1351,31 @@ static void menu_wait(void) {
 // gamepad (D-pad + A/C/Start, B cancels) or keyboard (number keys pick directly,
 // Enter picks the highlighted item, Backspace cancels).
 static int menu_select(const char *title, const char *const *items, int count) {
-    const int VIS = 20;         // max list rows shown at once; longer lists scroll
+    const int VIS = 16;         // max list rows shown at once; longer lists scroll
+    MenuBacking backing;        // opaque while the list is up; restored on exit
     int sel = 0;
     int top = 0;                // index of the first visible row
+    int i;
+
+    // Width: the longest item, plus the "> " cursor and the reserved digit
+    // columns. Reserved unconditionally so the box does not resize when the
+    // player switches between the pad and a keyboard mid-menu.
+    int content_w = 0;
+    for (i = 0; i < count; i++) {
+        int len = 0;
+        while (items[i][len]) len++;
+        if (len > content_w) content_w = len;
+    }
+    content_w += 2 + MENU_DIGIT_COLS;
+
+    // Rows: the visible slice, plus the two scroll markers and a blank line and
+    // the hint. The markers keep their rows whether or not they are drawn, so
+    // the box does not jump as the list scrolls.
+    int rows = (count < VIS ? count : VIS) + 4;
+
+    int x0, y0, w, h;
+    menu_box_fit(title, content_w, rows, &x0, &y0, &w, &h);
+
     SRL::Core::Synchronize();   // consume any stale button/key edge
     for (;;) {
         check_soft_reset();   // A+B+C+Start -> back to the title screen
@@ -1364,9 +1387,11 @@ static int menu_select(const char *title, const char *const *items, int count) {
         note_input_device(ke);
         if (ke.kind == SATURN_KEY_ENTER) pick = true;
         else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
-        else if (ke.kind == SATURN_KEY_CHAR && ke.ch >= '1' && ke.ch <= '9') {
-            int idx = (int) (ke.ch - '1');
-            if (idx < count) { sel = idx; pick = true; }
+        else if (ke.kind == SATURN_KEY_CHAR) {
+            // Digits name the visible rows, not absolute indices, so every entry
+            // of a long game list stays reachable as the player scrolls.
+            int idx = menu_visible_digit(ke.ch, top, VIS, count);
+            if (idx >= 0) { sel = idx; pick = true; }
         }
         else if (ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + count) % count;
         else if (ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % count;
@@ -1378,15 +1403,24 @@ static int menu_select(const char *title, const char *const *items, int count) {
         else if (sel >= top + VIS) top = sel - VIS + 1;
         int last = top + VIS; if (last > count) last = count;
 
+        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
+
         menu_clear();
-        SRL::Debug::Print(2, 2, "%s", title);
-        if (top > 0)       SRL::Debug::Print(1, 3, "^ more");
-        for (int i = top; i < last; i++)
-            SRL::Debug::Print(1, 4 + (i - top), "%c %d) %s", (i == sel) ? '>' : ' ', i + 1, items[i]);
-        if (last < count)  SRL::Debug::Print(1, 4 + VIS, "v more");
-        SRL::Debug::Print(1, 6 + VIS, "%s",
-            hint("pad picks   C=ok   B=back", "dir picks   Enter=ok   Esc=back"));
-        SRL::Core::Synchronize();
+        menu_frame(x0, y0, w, h, title);
+        int cx = x0 + 2, cy = y0 + 3;
+        SRL::Debug::Print(cx, cy, "%s", top > 0 ? "^ more" : "      ");
+        for (i = top; i < last; i++) {
+            char mark = (i == sel) ? '>' : ' ';
+            int  vis  = i - top;      // 0-based row within the window
+            if (nums && vis < 9)
+                SRL::Debug::Print(cx, cy + 1 + vis, "%c %d) %s", mark, vis + 1, items[i]);
+            else
+                SRL::Debug::Print(cx, cy + 1 + vis, "%c    %s", mark, items[i]);
+        }
+        SRL::Debug::Print(cx, cy + 1 + (last - top), "%s", last < count ? "v more" : "      ");
+        SRL::Debug::Print(cx, cy + 3 + (last - top), "%s",
+            hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
+        menu_sync();
     }
 }
 
