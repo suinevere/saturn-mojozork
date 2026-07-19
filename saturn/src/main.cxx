@@ -1347,6 +1347,13 @@ static void menu_wait(void) {
     }
 }
 
+// The hint line drawn at the bottom of the box (see hint() calls below), named
+// once so its width feeds both the sizing math and the draw call -- if the
+// wording changes, the box width follows automatically instead of drifting
+// out of sync with a hardcoded column count.
+static const char MENU_SELECT_HINT_PAD[] = "pad picks   C=ok   B=back";
+static const char MENU_SELECT_HINT_KBD[] = "num picks   Enter=ok   Esc=back";
+
 // Modal list menu. Returns the chosen index, or -1 if cancelled. Navigable by
 // gamepad (D-pad + A/C/Start, B cancels) or keyboard (number keys pick directly,
 // Enter picks the highlighted item, Backspace cancels).
@@ -1367,6 +1374,17 @@ static int menu_select(const char *title, const char *const *items, int count) {
         if (len > content_w) content_w = len;
     }
     content_w += 2 + MENU_DIGIT_COLS;
+
+    // The hint line shares the box with the list (same cx origin), so its
+    // width must be budgeted too -- otherwise it overwrites the right border
+    // on menus whose items are shorter than the hint. Budget the LONGER of
+    // the two variants unconditionally, same reasoning as MENU_DIGIT_COLS
+    // above: the box must not resize when the player flips input devices
+    // mid-menu, so both must fit regardless of which one is drawn this frame.
+    int hint_w = (int) sizeof(MENU_SELECT_HINT_PAD) - 1;
+    int hint_kbd_w = (int) sizeof(MENU_SELECT_HINT_KBD) - 1;
+    if (hint_kbd_w > hint_w) hint_w = hint_kbd_w;
+    if (hint_w > content_w) content_w = hint_w;
 
     // Rows: the visible slice, plus the two scroll markers and a blank line and
     // the hint. The markers keep their rows whether or not they are drawn, so
@@ -1419,7 +1437,7 @@ static int menu_select(const char *title, const char *const *items, int count) {
         }
         SRL::Debug::Print(cx, cy + 1 + (last - top), "%s", last < count ? "v more" : "      ");
         SRL::Debug::Print(cx, cy + 3 + (last - top), "%s",
-            hint("pad picks   C=ok   B=back", "num picks   Enter=ok   Esc=back"));
+            hint(MENU_SELECT_HINT_PAD, MENU_SELECT_HINT_KBD));
         menu_sync();
     }
 }
