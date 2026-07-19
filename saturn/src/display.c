@@ -187,11 +187,48 @@ void display_cycle_palette(DisplayState *d, int dir) {
     d->text    = display_preset_text(next);
 }
 
+/* Registered name for an image slot, or "" when the slot is not present. */
+static const char *image_slot_name(int slot) {
+    if (!g_image_names || slot < 0 || slot >= g_image_count) return "";
+    return g_image_names[slot] ? g_image_names[slot] : "";
+}
+
+/* Slot currently holding `name`, or -1 if this disc does not carry it. */
+static int image_slot_of(const char *name) {
+    int i;
+    if (!g_image_names || !name[0]) return -1;
+    for (i = 0; i < g_image_count; i++) {
+        const char *have = g_image_names[i];
+        int j = 0;
+        if (!have) continue;
+        while (have[j] && have[j] == name[j]) j++;
+        if (have[j] == '\0' && name[j] == '\0') return i;
+    }
+    return -1;
+}
+
+#define DISP_BLOB_IMAGE 0xFF   /* palette/bg marker: "the image named below" */
+
 int display_encode(const DisplayState *d, unsigned char *out) {
-    out[0] = 1;                                /* block sentinel */
-    out[1] = (unsigned char) d->palette;       /* always a real preset index */
-    out[2] = (unsigned char) d->bg;
+    const char *name = "";
+    int i;
+
+    out[0] = 2;                                /* block sentinel: name-bearing form */
+    out[1] = (d->palette >= DISP_PRESET_N)   ? DISP_BLOB_IMAGE : (unsigned char) d->palette;
+    out[2] = (d->bg      >= DISP_BG_COLOR_N) ? DISP_BLOB_IMAGE : (unsigned char) d->bg;
     out[3] = (unsigned char) d->text;
+
+    /* One name covers both fields. bg is what is actually on screen, so it wins
+       when the two somehow name different images -- a state the selector only
+       reaches by picking an image preset and then changing the background,
+       which already reads as "Custom". */
+    if (d->bg >= DISP_BG_COLOR_N)          name = image_slot_name(d->bg - DISP_BG_COLOR_N);
+    else if (d->palette >= DISP_PRESET_N)  name = image_slot_name(d->palette - DISP_PRESET_N);
+
+    for (i = 0; i < DISP_IMAGE_NAME_MAX - 1 && name[i]; i++)
+        out[4 + i] = (unsigned char) name[i];
+    for (; i < DISP_IMAGE_NAME_MAX; i++)
+        out[4 + i] = 0;
     return DISP_BLOB_BYTES;
 }
 
@@ -199,14 +236,40 @@ int display_decode(const unsigned char *buf, int len, DisplayState *d) {
     int ok = 1;
     display_defaults(d);
 
-    if (!buf || len < DISP_BLOB_BYTES || buf[0] != 1) return 0;
+    if (!buf || len < 4) return 0;
 
-    /* Image presets exist only while their image is on the disc, so validate
-       against the live count, not the compile-time preset total. */
-    if (buf[1] < display_palette_count()) d->palette = (int) buf[1];  else ok = 0;
-    /* An image index is valid only if that image is on the disc right now. */
-    if (buf[2] < display_bg_count()) d->bg   = (int) buf[2];  else ok = 0;
-    if (buf[3] < DISP_TEXT_N)    d->text    = (int) buf[3];  else ok = 0;
+    if (buf[0] == 1) {
+        /* Older form: slot numbers, no name. Colors still mean what they said,
+           but an image slot cannot be trusted to be the same picture, so it is
+           refused rather than guessed at. */
+        if (buf[1] < DISP_PRESET_N)   d->palette = (int) buf[1];  else ok = 0;
+        if (buf[2] < DISP_BG_COLOR_N) d->bg      = (int) buf[2];  else ok = 0;
+        if (buf[3] < DISP_TEXT_N)     d->text    = (int) buf[3];  else ok = 0;
+    } else if (buf[0] == 2) {
+        const char *name = (const char *) (buf + 4);
+        int slot, n = 0;
+
+        if (len < DISP_BLOB_BYTES) return 0;
+        while (n < DISP_IMAGE_NAME_MAX && name[n]) n++;
+        if (n >= DISP_IMAGE_NAME_MAX) return 0;   /* name never terminates */
+        slot = image_slot_of(name);
+
+        if (buf[1] == DISP_BLOB_IMAGE) {
+            if (slot >= 0) d->palette = DISP_PRESET_N + slot;  else ok = 0;
+        } else if (buf[1] < DISP_PRESET_N) {
+            d->palette = (int) buf[1];
+        } else ok = 0;
+
+        if (buf[2] == DISP_BLOB_IMAGE) {
+            if (slot >= 0) d->bg = DISP_BG_COLOR_N + slot;  else ok = 0;
+        } else if (buf[2] < DISP_BG_COLOR_N) {
+            d->bg = (int) buf[2];
+        } else ok = 0;
+
+        if (buf[3] < DISP_TEXT_N) d->text = (int) buf[3];  else ok = 0;
+    } else {
+        return 0;
+    }
 
     /* Each field above was validated independently, but an image background
        that fell back to a color can still land on the same color as text that

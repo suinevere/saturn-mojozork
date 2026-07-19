@@ -75,17 +75,30 @@ void display_cycle_bg(DisplayState *d, int dir);
 void display_cycle_text(DisplayState *d, int dir);
 void display_cycle_palette(DisplayState *d, int dir);
 
-#define DISP_BLOB_BYTES 4    /* [sentinel=1][palette][bg][text] */
+/* Longest image file name we store, plus its NUL. Disc names are ISO9660 8.3,
+   which GFS_FNAME_LEN caps at 12. */
+#define DISP_IMAGE_NAME_MAX 13
+
+/* [sentinel=2][palette][bg][text][image name, NUL-padded]
+
+   palette and bg hold 0xFF when they refer to an image; the name that follows
+   says which one. Slot numbers alone were not enough: they index the disc's
+   TGA scan order, so adding, removing or reordering a file silently pointed a
+   saved setting at a different picture.
+
+   A sentinel of 1 is the older four-byte form, still read. It carries no name,
+   so its color fields are honored and any image reference is refused. */
+#define DISP_BLOB_BYTES (4 + DISP_IMAGE_NAME_MAX)
 
 /* Write the display block. out must have room for DISP_BLOB_BYTES.
    Returns the number of bytes written. */
 int display_encode(const DisplayState *d, unsigned char *out);
 
 /* Read the display block. Any field that is absent, truncated, mis-sentinelled,
-   out of range, or naming an image slot the current disc does not have falls
-   back to its default. Returns 1 when the whole block was accepted, 0 when any
-   part of it was defaulted. Call display_set_images() first, so image-slot
-   validation has the real count. */
+   out of range, or naming an image this disc does not carry falls back to its
+   default. Returns 1 when the whole block was accepted, 0 when any part of it
+   was defaulted. Call display_set_images() first, so an image reference can be
+   resolved against the names actually present. */
 int display_decode(const unsigned char *buf, int len, DisplayState *d);
 
 #ifdef __cplusplus

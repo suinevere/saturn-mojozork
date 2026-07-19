@@ -209,7 +209,7 @@ static void test_cycle_palette(void) {
 
 static void test_encode_decode_roundtrip(void) {
     DisplayState a, b;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
     int n;
 
     display_set_images(NULL, 0);
@@ -217,8 +217,8 @@ static void test_encode_decode_roundtrip(void) {
     a.palette = 7; a.bg = display_preset_bg(7); a.text = display_preset_text(7);
 
     n = display_encode(&a, buf);
-    assert(n == 4);
-    assert(buf[0] == 1);            /* sentinel */
+    assert(n == DISP_BLOB_BYTES);
+    assert(buf[0] == 2);            /* sentinel: name-bearing form */
 
     assert(display_decode(buf, n, &b) == 1);
     assert(b.palette == a.palette && b.bg == a.bg && b.text == a.text);
@@ -228,7 +228,7 @@ static void test_collisions_roundtrip(void) {
     /* The regression the stored palette index exists to prevent: identical
        colors must still reload as the machine the player picked. */
     DisplayState a, b;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
     int pairs[2][2] = { { 3, 11 }, { 12, 13 } };
     int p, s;
 
@@ -240,7 +240,7 @@ static void test_collisions_roundtrip(void) {
             a.bg = display_preset_bg(idx);
             a.text = display_preset_text(idx);
             display_encode(&a, buf);
-            assert(display_decode(buf, 4, &b) == 1);
+            assert(display_decode(buf, DISP_BLOB_BYTES, &b) == 1);
             assert(b.palette == idx);
             assert(strcmp(display_palette_name(&b), display_preset_name(idx)) == 0);
         }
@@ -249,7 +249,7 @@ static void test_collisions_roundtrip(void) {
 
 static void test_custom_state_roundtrips(void) {
     DisplayState a, b;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
 
     display_set_images(NULL, 0);
     display_defaults(&a);
@@ -258,14 +258,14 @@ static void test_custom_state_roundtrips(void) {
 
     display_encode(&a, buf);
     assert(buf[1] == 12);                        /* the machine index survives */
-    assert(display_decode(buf, 4, &b) == 1);
+    assert(display_decode(buf, DISP_BLOB_BYTES, &b) == 1);
     assert(b.text == DISP_TEXT_CYAN);
     assert(strcmp(display_palette_name(&b), "Custom") == 0);
 }
 
 static void test_decode_rejects_bad_input(void) {
     DisplayState d, def;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
 
     display_set_images(NULL, 0);
     display_defaults(&def);
@@ -300,7 +300,7 @@ static void test_decode_rejects_bad_input(void) {
 
 static void test_decode_missing_image_falls_back(void) {
     DisplayState a, b;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
 
     /* Saved while two images were on the disc... */
     display_set_images(IMAGES, 2);
@@ -315,7 +315,7 @@ static void test_decode_missing_image_falls_back(void) {
        fields from the saved palette's own pair (ZX Spectrum: Light Gray/Black)
        instead of leaving Black-on-Black. */
     display_set_images(NULL, 0);
-    assert(display_decode(buf, 4, &b) == 0);
+    assert(display_decode(buf, DISP_BLOB_BYTES, &b) == 0);
     assert(!display_is_image(&b));
     assert(display_bg_rgb(b.bg) != display_text_rgb(b.text));
     assert(b.palette == 4);                    /* palette byte survived */
@@ -332,7 +332,7 @@ static void test_decode_missing_image_never_clashes(void) {
        the two colors present in both the background and text tables. */
     static const int clashing_texts[2] = { DISP_TEXT_BLACK, DISP_TEXT_GREEN };
     DisplayState a, b;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
     int p, t;
 
     for (p = 0; p < DISP_PRESET_N; p++) {
@@ -344,7 +344,7 @@ static void test_decode_missing_image_never_clashes(void) {
             display_encode(&a, buf);
 
             display_set_images(NULL, 0);
-            display_decode(buf, 4, &b);
+            display_decode(buf, DISP_BLOB_BYTES, &b);
             assert(display_bg_rgb(b.bg) != display_text_rgb(b.text));
         }
     }
@@ -353,7 +353,7 @@ static void test_decode_missing_image_never_clashes(void) {
 
 static void test_decode_multi_field_corruption(void) {
     DisplayState d, def;
-    unsigned char buf[8];
+    unsigned char buf[DISP_BLOB_BYTES];
 
     display_set_images(NULL, 0);
     display_defaults(&def);
@@ -488,6 +488,141 @@ static void test_decode_rejects_stale_image_preset(void) {
     display_set_images(NULL, 0);
 }
 
+/* --- image identity across discs ------------------------------------------
+   The saved blob used to store only a slot index, so a disc whose TGA set had
+   changed silently resolved that index to a different picture. These pin the
+   behaviour to the file name instead. */
+
+static void test_decode_resolves_image_after_reorder(void) {
+    static const char *const before[] = { "AMIGA.TGA", "FOREST.TGA", "CASTLE.TGA" };
+    static const char *const after[]  = { "CASTLE.TGA", "AMIGA.TGA", "FOREST.TGA" };
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    /* Save CASTLE, which is slot 2 on the disc we saved from. */
+    display_set_images(before, 3);
+    saved.palette = DISP_PRESET_N + 2;
+    saved.bg      = DISP_BG_COLOR_N + 2;
+    saved.text    = DISP_TEXT_WHITE;
+    display_encode(&saved, blob);
+
+    /* Same three images, different scan order: CASTLE is slot 0 now. Resolving
+       positionally would hand back FOREST. */
+    display_set_images(after, 3);
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
+    assert(d.bg == DISP_BG_COLOR_N + 0);
+    assert(strcmp(display_bg_name(&d), "CASTLE.TGA") == 0);
+    assert(d.palette == DISP_PRESET_N + 0);
+    display_set_images(NULL, 0);
+}
+
+static void test_decode_follows_image_when_earlier_one_removed(void) {
+    static const char *const before[] = { "AMIGA.TGA", "FOREST.TGA", "CASTLE.TGA" };
+    static const char *const after[]  = { "AMIGA.TGA", "CASTLE.TGA" };
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    display_set_images(before, 3);
+    saved.palette = DISP_PRESET_N + 2;      /* CASTLE */
+    saved.bg      = DISP_BG_COLOR_N + 2;
+    saved.text    = DISP_TEXT_WHITE;
+    display_encode(&saved, blob);
+
+    /* Dropping FOREST shifts CASTLE from slot 2 to slot 1. The old index 2 is
+       still in range on this disc, so a range check alone would accept it and
+       show nothing at all. */
+    display_set_images(after, 2);
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
+    assert(strcmp(display_bg_name(&d), "CASTLE.TGA") == 0);
+    display_set_images(NULL, 0);
+}
+
+static void test_decode_image_gone_falls_back(void) {
+    static const char *const before[] = { "AMIGA.TGA", "FOREST.TGA" };
+    static const char *const after[]  = { "AMIGA.TGA" };
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    display_set_images(before, 2);
+    saved.palette = DISP_PRESET_N + 1;      /* FOREST */
+    saved.bg      = DISP_BG_COLOR_N + 1;
+    saved.text    = DISP_TEXT_WHITE;
+    display_encode(&saved, blob);
+
+    display_set_images(after, 1);
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 0);   /* reports the fallback */
+    assert(!display_is_image(&d));
+    assert(d.bg < DISP_BG_COLOR_N);
+    assert(d.palette < display_palette_count());
+    display_set_images(NULL, 0);
+}
+
+static void test_color_state_needs_no_image(void) {
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    display_set_images(NULL, 0);
+    saved.palette = 3;
+    saved.bg      = display_preset_bg(3);
+    saved.text    = display_preset_text(3);
+    display_encode(&saved, blob);
+
+    assert(display_decode(blob, DISP_BLOB_BYTES, &d) == 1);
+    assert(d.palette == 3 && d.bg == saved.bg && d.text == saved.text);
+}
+
+static void test_legacy_blob_still_decodes(void) {
+    /* A blob written before names were stored: sentinel 1, four bytes,
+       positional. Must keep working rather than resetting someone's colors. */
+    unsigned char legacy[4];
+    DisplayState d;
+
+    display_set_images(NULL, 0);
+    legacy[0] = 1;
+    legacy[1] = 5;
+    legacy[2] = (unsigned char) display_preset_bg(5);
+    legacy[3] = (unsigned char) display_preset_text(5);
+    assert(display_decode(legacy, 4, &d) == 1);
+    assert(d.palette == 5);
+    assert(d.bg == display_preset_bg(5));
+    assert(d.text == display_preset_text(5));
+}
+
+static void test_legacy_blob_image_index_rejected(void) {
+    /* A legacy blob naming an image slot carries no name to verify it with, so
+       it cannot be trusted to mean the same picture. Fall back rather than
+       guess. */
+    unsigned char legacy[4];
+    static const char *const one[] = { "AMIGA.TGA" };
+    DisplayState d;
+
+    display_set_images(one, 1);
+    legacy[0] = 1;
+    legacy[1] = DISP_PRESET_N;              /* image preset */
+    legacy[2] = DISP_BG_COLOR_N;            /* image slot */
+    legacy[3] = DISP_TEXT_WHITE;
+    assert(display_decode(legacy, 4, &d) == 0);
+    assert(!display_is_image(&d));
+    display_set_images(NULL, 0);
+}
+
+static void test_decode_truncated_name_block(void) {
+    static const char *const one[] = { "AMIGA.TGA" };
+    DisplayState d, saved;
+    unsigned char blob[DISP_BLOB_BYTES];
+
+    display_set_images(one, 1);
+    saved.palette = DISP_PRESET_N;
+    saved.bg      = DISP_BG_COLOR_N;
+    saved.text    = DISP_TEXT_WHITE;
+    display_encode(&saved, blob);
+
+    /* Sentinel says a name follows, but the block is cut short. */
+    assert(display_decode(blob, DISP_BLOB_BYTES - 1, &d) == 0);
+    assert(!display_is_image(&d));
+    display_set_images(NULL, 0);
+}
+
 int main(void) {
     test_tables_well_formed();
     test_known_colors();
@@ -505,6 +640,13 @@ int main(void) {
     test_cycle_palette_from_custom_with_images();
     test_image_preset_name_shown_not_custom();
     test_decode_rejects_stale_image_preset();
+    test_decode_resolves_image_after_reorder();
+    test_decode_follows_image_when_earlier_one_removed();
+    test_decode_image_gone_falls_back();
+    test_color_state_needs_no_image();
+    test_legacy_blob_still_decodes();
+    test_legacy_blob_image_index_rejected();
+    test_decode_truncated_name_block();
     test_encode_decode_roundtrip();
     test_collisions_roundtrip();
     test_custom_state_roundtrips();

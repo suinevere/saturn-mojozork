@@ -390,11 +390,17 @@ static void options_load(void) {
         if (buf[s + 1] <= MIX_RANDOM) g_mix_mode = buf[s + 1];
         if (buf[s + 2] >= MUSIC_TRACK_MIN && buf[s + 2] <= MUSIC_TRACK_MAX) g_sel_track = buf[s + 2];
     }
-    // Display block follows the sound block: sentinel 1, then [palette][bg][text].
-    // display_decode() range-checks every field and falls back to defaults.
+    // Display block follows the sound block. display_decode() checks its own
+    // sentinel, range-checks every field, and resolves an image background by
+    // name against the disc's current TGA list -- so it must run after
+    // display_scan_images(). Hand it everything left in the buffer rather than
+    // a fixed width: the older four-byte form is still readable even when a
+    // long stored dial number pushes the block too close to the end for the
+    // full name-bearing one. buf is zeroed above, so any bytes past what was
+    // actually written read as an absent block.
     int dsp = s + 3;
-    if (dsp + DISP_BLOB_BYTES <= (int) sizeof(buf)) {
-        display_decode(buf + dsp, DISP_BLOB_BYTES, &g_display);
+    if (dsp + 4 <= (int) sizeof(buf)) {
+        display_decode(buf + dsp, (int) sizeof(buf) - dsp, &g_display);
     }
 }
 static void options_save(void) {
