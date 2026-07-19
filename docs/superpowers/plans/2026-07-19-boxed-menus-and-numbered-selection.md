@@ -22,6 +22,9 @@ for drawing and VDP2 windowing, host gcc for the unit tests.
   - **The six option pages** hardcode their box dimensions and are **not resized**. The 3 columns come out of interior padding they already have, and their value columns shift right by `MENU_DIGIT_COLS`. Task 7 shows the measurements proving this fits.
 - Screen is 40 columns x 28 rows. Every box must fit inside it.
 - Content origin inside a box stays `(x0 + 2, y0 + 3)` — the convention `menu_frame` (`main.cxx:1319`) already documents.
+- **Every line drawn inside a box counts toward its width — including the hint line.** A box sized only from its list items will be too narrow for its own hint. Budget the LONGER of the two `hint()` strings (the keyboard variant is always the longer one), unconditionally, for the same reason the digit columns are reserved unconditionally: the box must not resize when the player switches input device. Concretely, content available from `cx = x0 + 2` up to the right border is `w - 3`, and every drawn row must fit in it.
+
+  This was found in Task 3 review, where it was a live defect on the two narrowest menus in **default pad mode**: device select overflowed by 1 column, save/restore slot select by 8 (and by 7 and 14 respectively in keyboard mode). The title menu and game list happened to be wide enough to absorb it, which is exactly why a spot-check of those two missed it. Tasks 4, 5, and 6 all draw hint lines inside boxes and must apply this from the start.
 - `menu_frame` itself is **not** modified.
 - `toc_dump_page` (`main.cxx:1682`) is **not** boxed.
 - Digit selection is suppressed wherever a text field is being edited.
