@@ -108,6 +108,7 @@ static void test_digit_past_the_row_count_is_rejected(void) {
     int dir = 0;
     assert(menu_row_digit('7', 5, &dir) == -1);
     assert(menu_row_digit('&', 5, &dir) == -1);  /* Shift+7 */
+    assert(menu_row_digit('6', 5, &dir) == -1);   /* row 5 == nrows: the exact boundary */
 }
 
 static void test_non_selecting_characters_are_rejected(void) {
@@ -134,6 +135,13 @@ static void test_visible_digit_ignores_shift(void) {
     assert(menu_visible_digit('#', 0, 16, 30) == -1);
 }
 
+static void test_visible_digit_rejects_rows_past_the_window(void) {
+    /* 5 rows on screen out of 30 total: row 8 exists in the list but is not
+       currently visible, so only the window guard can reject it -- the count
+       check cannot, since 8 < 30. */
+    assert(menu_visible_digit('9', 0, 5, 30) == -1);
+}
+
 int main(void) {
     test_fit_centers_a_normal_box();
     test_fit_widens_for_a_long_title();
@@ -149,6 +157,7 @@ int main(void) {
     test_visible_digit_maps_through_the_scroll_window();
     test_visible_digit_rejects_rows_past_the_end();
     test_visible_digit_ignores_shift();
+    test_visible_digit_rejects_rows_past_the_window();
     printf("test_menu_layout: OK\n");
     return 0;
 }
