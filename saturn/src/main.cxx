@@ -3452,6 +3452,7 @@ int main(void) {
     // previous GState->story on the next boot), so we must NOT free it here -- doing
     // so double-frees it and corrupts the heap.
     int cd_reentry = setjmp(g_title_jmp);
+    (void) cd_reentry;   // no step below branches on first-boot vs. reset anymore
     g_title_jmp_armed = true;
     GFS_Reset();
     cd_capture_root();   // GFS_Reset returns us to root; re-snapshot it there
@@ -3461,11 +3462,15 @@ int main(void) {
     // stays opaque and the title image is hidden for the rest of the session.
     g_menu_backing_depth = 0;
     slScrWindowModeNbg0(0);
-    // Re-list /TGA for the same reason. Z3 is re-scanned lazily by
-    // preload_game_catalog(), but nothing else refreshes the bitmap table, and
-    // title_bg_show() needs it a few lines below. Only on re-entry: the first
-    // pass already scanned above, and this is a CD read.
-    if (cd_reentry) display_scan_images();
+    // Do NOT re-scan /TGA here. The first-boot scan (above) already registered
+    // the image list and captured g_tga_tbl, and both are plain static RAM that
+    // the longjmp leaves intact -- exactly like the cached game catalog, which
+    // is likewise scanned once and reused across resets. A destructive re-scan
+    // in the post-GFS_Reset state came up empty and WIPED the working list,
+    // which is why every image vanished from the options menu after a return to
+    // title. g_tga_tbl is proven durable across GFS_Reset: it is built before
+    // the boot's own GFS_Reset (3456) and drives every load for the rest of that
+    // session, so the same table stays valid across the reset that lands here.
     console_init();
 
     // Clear engine statics before the menu track. A soft reset longjmps here with
