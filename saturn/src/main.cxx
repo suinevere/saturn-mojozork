@@ -39,7 +39,12 @@ static int g_sel_track = 10;            // selected/override track, also the men
 static DisplayState g_display;
 
 // Online dial number (editable in Options -> Network; persisted).
-static char g_dialnum[24] = "199403";
+// Server dial number. 11 digits is the longest we accept (NANP country code
+// plus number), and the entry field is capped to match: the on-screen keyboard
+// buffer holds 63 characters, which does not fit the 40-column screen and used
+// to run over the Network page's right border.
+#define DIALNUM_MAX 11
+static char g_dialnum[DIALNUM_MAX + 1] = "199403";
 
 // "Load Save Game": a save slot pre-selected from the menu, applied by the first
 // in-game "restore" (queued via g_autocmd) instead of the choose_dest prompt.
@@ -247,27 +252,6 @@ static bool title_bg_show(const char *file);
 static void title_bg_show(void);
 static void title_bg_hide(void);
 
-#ifdef DEBUG
-// Breadcrumb for the background-cycling freeze. Work RAM was ruled out by the
-// HighWorkRam report holding steady across loads (free 392356 / used 8 /
-// freeblk 1 -- a single free block, so neither leaking nor fragmenting), so the
-// question is no longer "what runs out" but "which step stops returning".
-//
-// BG_STAGE writes straight to the NBG3 text layer, which VDP2 scans out
-// continuously -- it does not wait on Synchronize, so whatever is on screen when
-// the machine locks up names the last step actually entered. Row 27 sits below
-// every menu frame, so it never overdraws one.
-//
-// Declared up here, not next to title_bg_show, because display_options_page
-// prints g_bg_loads and is defined earlier in the file.
-static const char *g_bg_stage = "-";
-static int         g_bg_loads = 0;
-#define BG_STAGE(s) do { g_bg_stage = (s); \
-                         SRL::Debug::PrintClearLine(27); \
-                         SRL::Debug::Print(0, 27, "bg: %s", (s)); } while (0)
-#else
-#define BG_STAGE(s) do { } while (0)
-#endif
 
 // Set the color the SGL font glyphs and the block cursor render in.
 //
@@ -307,7 +291,10 @@ static void text_set_color(unsigned short rgb555) {
 // keyboard, and the cursor in one call.
 // (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
 // Debug::Print reads ASCII::colorBank.)
-static void display_apply(void) {
+// Returns false when the requested background could not be shown, so a caller
+// cycling through presets can step over the bad one instead of settling on the
+// fallback this installs.
+static bool display_apply(void) {
     text_set_color(display_text_rgb(g_display.text));
     if (display_is_image(&g_display)) {
         if (!title_bg_show(display_bg_name(&g_display))) {
@@ -325,11 +312,44 @@ static void display_apply(void) {
             text_set_color(display_text_rgb(g_display.text));
             title_bg_hide();
             SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
+            return false;
         }
     } else {
         title_bg_hide();
         SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
     }
+    return true;
+}
+
+// Which Display Options row a cycle applies to. Named separately from the
+// page's own row enum because the stepping logic lives out here, next to
+// display_apply.
+enum DisplayCycleRow { DCR_PALETTE, DCR_BG, DCR_TEXT };
+
+// Cycle one row and push it to the hardware, stepping over any image that will
+// not load.
+//
+// The step matters: display_apply() installs a colour-preset fallback when a
+// load fails, and that rewrites the very index being cycled. Without restoring
+// it, the next press would resume from the fallback and land on the same bad
+// image again -- so one unloadable file made every image past it unreachable.
+static void display_cycle_row(DisplayCycleRow which, int dir) {
+    if (which == DCR_TEXT) {
+        display_cycle_text(&g_display, dir);
+        display_apply();
+        return;
+    }
+    int tries = (which == DCR_PALETTE) ? display_palette_count() : display_bg_count();
+    while (tries-- > 0) {
+        if (which == DCR_PALETTE) display_cycle_palette(&g_display, dir);
+        else                      display_cycle_bg(&g_display, dir);
+        DisplayState want = g_display;
+        if (display_apply()) return;   // showing what was asked for
+        g_display = want;              // keep our place and step past the bad entry
+    }
+    // Every candidate failed (a disc whose images are all unreadable): let the
+    // fallback stand rather than looping here.
+    display_apply();
 }
 
 static void options_load(void) {
@@ -342,6 +362,11 @@ static void options_load(void) {
         int j;
         for (j = 0; buf[1 + j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = (char) buf[1 + j];
         g_dialnum[j] = '\0';
+        // Advance to the stored string's own NUL rather than to what we copied.
+        // A blob written before the 11-digit cap can hold a longer number, and
+        // every field below is located relative to that terminator -- stopping
+        // at the copy length would misread all of them.
+        while (buf[1 + j] && 1 + j < (int) sizeof(buf) - 1) j++;
         i = 1 + j;
     }
     // Two audio levels follow the dial NUL: [music][pcm], each 0..7. A legacy blob
@@ -1290,8 +1315,9 @@ static int menu_select(const char *title, const char *const *items, int count) {
 // Basic validation for the dial number: non-empty, digits only.
 static bool valid_dialnum(const char *s) {
     if (!s[0]) return false;
-    for (int i = 0; s[i]; i++) if (s[i] < '0' || s[i] > '9') return false;
-    return true;
+    int i = 0;
+    for (; s[i]; i++) if (s[i] < '0' || s[i] > '9') return false;
+    return i <= DIALNUM_MAX;   // g_dialnum has no room past this
 }
 
 // Network: edit the server dial number with the on-screen / real keyboard.
@@ -1299,7 +1325,7 @@ static bool valid_dialnum(const char *s) {
 // Options menu.
 static void config_page(void) {
     KeyboardState k; keyboard_reset(&k);
-    for (int i = 0; g_dialnum[i] && k.input_len < KB_INPUT_MAX - 1; i++) keyboard_type_char(&k, g_dialnum[i]);
+    for (int i = 0; g_dialnum[i] && k.input_len < DIALNUM_MAX; i++) keyboard_type_char(&k, g_dialnum[i]);
     const char *err = "";
     SRL::Core::Synchronize();
     for (;;) {
@@ -1307,7 +1333,7 @@ static void config_page(void) {
         SaturnKeyEvent ke = saturn_keyboard_poll();
         note_input_device(ke);
         bool accept = false, cancel = false;
-        if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
+        if      (ke.kind == SATURN_KEY_CHAR)      { if (k.input_len < DIALNUM_MAX) keyboard_type_char(&k, ke.ch); }
         else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
         else if (ke.kind == SATURN_KEY_ENTER)     accept = true;
         else if (ke.kind == SATURN_KEY_ESCAPE)    cancel = true;
@@ -1317,7 +1343,7 @@ static void config_page(void) {
             if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
             if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
             if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
-            if (g_pad->WasPressed(Button::C))     keyboard_type(&k);
+            if (g_pad->WasPressed(Button::C) && k.input_len < DIALNUM_MAX) keyboard_type(&k);
             if (g_pad->WasPressed(Button::B))     keyboard_backspace(&k);
             if (g_pad->WasPressed(Button::A))     accept = true;
             if (g_pad->WasPressed(Button::START)) cancel = true;
@@ -1797,10 +1823,9 @@ static void display_options_page(void) {
         }
         int dir = right ? 1 : (left ? -1 : 0);
         if (dir != 0) {
-            if      (row == DR_PALETTE) display_cycle_palette(&g_display, dir);
-            else if (row == DR_BG)      display_cycle_bg(&g_display, dir);
-            else if (row == DR_TEXT)    display_cycle_text(&g_display, dir);
-            if (row == DR_PALETTE || row == DR_BG || row == DR_TEXT) display_apply();
+            if      (row == DR_PALETTE) display_cycle_row(DCR_PALETTE, dir);
+            else if (row == DR_BG)      display_cycle_row(DCR_BG,      dir);
+            else if (row == DR_TEXT)    display_cycle_row(DCR_TEXT,    dir);
         }
         if (ok && row == DR_OK) { options_save(); break; }
 
@@ -1841,15 +1866,6 @@ static void display_options_page(void) {
             }
         }
         y++;
-#ifdef DEBUG
-        // Work RAM is ruled out: across image loads the HighWorkRam report held
-        // steady at free 392356 / used 8 / freeblk 1 -- a single free block, so
-        // neither leaking nor fragmenting. The breadcrumb in title_bg_show
-        // (g_bg_stage) is what matters now; it names the step the load reached.
-        // Plain %d only -- SRL::Debug::Print's formatter has no width specifiers
-        // (srl_string.hpp:129).
-        SRL::Debug::Print(x, y++, "loads %d  last stage %s", g_bg_loads, g_bg_stage);
-#endif
         SRL::Debug::Print(x, y++, "%s", hint("<> change  A/Start=OK  B=Cancel",
                                              "<> change  Enter=OK  Esc=Cancel"));
         menu_sync();
@@ -2532,13 +2548,14 @@ static bool title_bg_show(const char *file) {
         // Every exit path below must call bitmap_read_end(), which restores both
         // the CD directory and playback.
         //
-        // NOTE: pausing/resuming CD-DA around this read (music_cdda_pause_for_read
-        // / _resume_after_read) was tried and backed out -- it left the CD block
-        // repeating a ~3 second range forever. SRL's Cdda::Resume() sets an
-        // absolute start (CDC_PLY_SFAD = LastLocation) but a *span* end
-        // (CDC_PLY_EFAS = whole track length) and repeats that range
-        // indefinitely, and the interaction with repeated pause/resume is not
-        // understood. Do not re-enable it without working that out first.
+        // This read stops CD-DA -- one drive head -- so the menu track goes
+        // silent for its duration. Pausing and resuming around it was tried and
+        // removed: SRL's Cdda::Resume() sets an absolute start
+        // (CDC_PLY_SFAD = LastLocation) against a *span* end
+        // (CDC_PLY_EFAS = whole track length) and repeats that range forever,
+        // which left the CD block looping a ~3 second fragment. Resuming
+        // mid-track needs that worked out first; the standing alternative is to
+        // load on OK rather than live, so a menu visit costs one read.
         cd_enter_tga();
         // tga_load_nbg0 validates the header itself and refuses anything that is
         // not uncompressed 8bpp colour-mapped, so a missing or odd file falls
@@ -2547,14 +2564,11 @@ static bool title_bg_show(const char *file) {
         // Debug::Assert on a failed open (srl_tga.hpp:820) -- and in a DEBUG
         // build Assert clears the screen, forces the back plane red and sits in
         // an animation loop (srl_debug.hpp:200-220).
-        BG_STAGE("3 decode");
         bool ok = tga_load_nbg0(file);   // not `loaded`: that is the cached name above
         bitmap_read_end();
         if (!ok) {
-            BG_STAGE("3x reject");
             return false;
         }
-        BG_STAGE("5 done");
         SRL::VDP2::NBG0::SetPriority(SRL::VDP2::Priority::Layer1);  // below text (Layer7)
         // LoadBitmap leaves stray debug prints on rows 20-21 ("4bpp" / "Pal: N")
         // from SRL itself (srl_vdp2.hpp:869,888). Patching the library would not
@@ -2564,10 +2578,6 @@ static bool title_bg_show(const char *file) {
         int k = 0;
         for (; file[k] && k < (int) sizeof(loaded) - 1; k++) loaded[k] = file[k];
         loaded[k] = '\0';
-#ifdef DEBUG
-        g_bg_loads++;
-#endif
-        BG_STAGE("6 ok");
     }
     SRL::VDP2::NBG0::ScrollEnable();
     return true;

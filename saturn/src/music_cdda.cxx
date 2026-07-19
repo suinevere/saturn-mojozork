@@ -23,32 +23,6 @@ extern "C" void music_cdda_play_mode(int track, int loop) {
 
 extern "C" void music_cdda_play(int track) { music_cdda_play_mode(track, 1); }
 
-// Bracket a CD data read so the track picks up where it left off instead of
-// restarting. The Saturn has one drive head, so any data read stops CD-DA; what
-// we can control is where playback resumes. SRL::Sound::Cdda::StopPause()
-// records the current frame address (stat.report.fad) and Resume() replays from
-// it with the same loop mode (srl_sound.hpp), so the gap is the seek time
-// rather than the whole track.
-//
-// Paired: resume only re-asserts playback if we were the ones who paused it.
-// Without that, resuming after a read that happened while the user had music
-// muted (level 0 stops output) would start audio they turned off.
-static int g_paused_for_read = 0;
-
-extern "C" void music_cdda_pause_for_read(void) {
-    if (g_paused_for_read || g_track <= 0 || g_level == 0) return;
-    if (!music_cdda_is_playing()) return;
-    SRL::Sound::Cdda::StopPause();
-    g_paused_for_read = 1;
-}
-
-extern "C" void music_cdda_resume_after_read(void) {
-    if (!g_paused_for_read) return;
-    g_paused_for_read = 0;
-    SRL::Sound::Cdda::SetVolume((uint8_t) g_level);
-    SRL::Sound::Cdda::Resume();
-}
-
 extern "C" void music_set_volume(int level) {
     if (level < 0) level = 0;
     if (level > 7) level = 7;
