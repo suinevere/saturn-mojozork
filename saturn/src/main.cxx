@@ -291,6 +291,14 @@ static void text_set_color(unsigned short rgb555) {
 // keyboard, and the cursor in one call.
 // (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
 // Debug::Print reads ASCII::colorBank.)
+// CRAM entry 0 is the NBG3 pixel value a blank cell uses. It reads as
+// transparent while the layer's transparency is on, and as this colour once
+// MenuBacking turns it off -- so it tracks the chosen background colour and is
+// harmless to write either way.
+static void cram_bg_entry_set(void) {
+    ((volatile unsigned short *) VDP2_COLRAM)[0] = display_bg_rgb(g_display.bg);
+}
+
 // Returns false when the requested background could not be shown, so a caller
 // cycling through presets can step over the bad one instead of settling on the
 // fallback this installs.
@@ -302,6 +310,7 @@ static bool display_apply(void) {
     // right before the picture arrives, not after. An image preset pairs with
     // black, which is why stepping onto one resets the background and text.
     SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
+    cram_bg_entry_set();   // keeps an open menu's backing on the new colour
     if (display_is_image(&g_display)) {
         if (!title_bg_show(display_image_file(g_display.image))) {
             // Load failed (or the bitmap isn't the 8bpp shape we require): fall
@@ -1248,6 +1257,33 @@ static void menu_clear(void) {
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
 }
 
+// ---- opaque backing for menus over an image --------------------------------
+// NBG3 (the text layer) treats palette entry 0 as transparent, so a menu frame
+// drawn over an image background shows the picture through its interior and the
+// text sits directly on the artwork. TransparentDisable turns entry 0 into a
+// real colour instead (srl_vdp2.hpp:724), making the whole layer opaque -- the
+// image is hidden for as long as a menu is open and returns when it closes.
+//
+// Refcounted, because pages nest: Options opens Display, and the inner page
+// closing must not clear the backing while the outer one is still up.
+//
+// Scoped rather than paired calls. Every one of the seven pages has several
+// exit paths, and "remember to undo this on all of them" is the exact shape of
+// bug that has already cost this file a release -- a destructor cannot forget.
+static int g_menu_backing_depth = 0;
+
+struct MenuBacking {
+    MenuBacking() {
+        if (g_menu_backing_depth++ == 0) {
+            cram_bg_entry_set();
+            SRL::VDP2::NBG3::TransparentDisable();
+        }
+    }
+    ~MenuBacking() {
+        if (--g_menu_backing_depth == 0) SRL::VDP2::NBG3::TransparentEnable();
+    }
+};
+
 // Draw a w x h box of +--+ chrome at (x0, y0) and center `title` on its second
 // row. Every menu page uses this so the chrome and title placement stay
 // identical; pages differ only in the box they ask for.
@@ -1337,6 +1373,7 @@ static bool valid_dialnum(const char *s) {
 // A/Enter accept (after validation); Start/Esc cancel. Both return to the
 // Options menu.
 static void config_page(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     KeyboardState k; keyboard_reset(&k);
     for (int i = 0; g_dialnum[i] && k.input_len < DIALNUM_MAX; i++) keyboard_type_char(&k, g_dialnum[i]);
     const char *err = "";
@@ -1419,6 +1456,7 @@ static void mapping_reset_defaults(void) {
 // pick a row, Left/Right cycle its button/slot (applying the tie rules). OK saves;
 // Cancel (and B/Esc) restores the snapshot taken on entry.
 static void configure_controls_page(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     SRL::Core::Synchronize();   // consume the edge that opened this
     int s_face[FA_N], s_chord[CA_N];   // snapshot for Cancel
     for (int a = 0; a < FA_N; a++) s_face[a]  = g_face_btn[a];
@@ -1495,6 +1533,7 @@ static void configure_controls_page(void) {
 // Controller page: shows the live mapping and offers Configure (remap editor),
 // the on-screen keyboard's CapsLock toggle, and Done.
 static void controls_page(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     SRL::Core::Synchronize();   // consume the edge that opened this
     int sel = 0;                // 0 = Configure, 1 = Caps, 2 = Done
     for (;;) {
@@ -1544,6 +1583,7 @@ static void controls_page(void) {
 // device in hand). Toggles: which arrows move the caret vs cycle suggestions (the
 // same flag the Insert key flips), insert-vs-overwrite typing, and CapsLock.
 static void keyboard_controls_page(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     SRL::Core::Synchronize();   // consume the edge that opened this
     int s_arrows = g_caret_arrows, s_ins = keyboard_get_insert(),   // snapshot for Cancel
         s_caps = keyboard_get_caps(), s_num = keyboard_get_num();
@@ -1687,6 +1727,7 @@ static void toc_dump_page(void) {
 // (sound_has_audio). OK/Cancel always show. Start/A = OK (commit+save+apply), Esc/B =
 // Cancel (restore snapshot incl. live audio). Previews play live while open.
 static void sound_options_page(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     static const char *const MIX[] = { "Dynamic", "Repeat", "Sequential", "Random" };
     enum { SR_MIX, SR_TRACK, SR_MUSIC, SR_PCM, SR_TOC, SR_OK, SR_CANCEL };
     const unsigned char* atracks; int an = music_cdda_audio_tracks(&atracks);
@@ -1807,6 +1848,7 @@ static void sound_options_page(void) {
 // always present -- there is no hardware dependency. Left/Right applies live so
 // the result is visible behind the menu; Cancel restores the snapshot.
 static void display_options_page(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     enum { DR_PALETTE, DR_BG, DR_TEXT, DR_OK, DR_CANCEL };
     static const int rows[] = { DR_PALETTE, DR_BG, DR_TEXT, DR_OK, DR_CANCEL };
     const int nrows = (int)(sizeof(rows) / sizeof(rows[0]));
@@ -1893,6 +1935,7 @@ static void display_options_page(void) {
 // or the game's .BLB; with neither, the row is hidden. Audio settings live on that
 // page. Difficulty is written to backup only if the player actually changed it.
 static void options_menu(void) {
+    MenuBacking backing;   // opaque while this page is up; restored on every exit
     static const char *const NAMES[] = { "Easy", "Medium", "Hard" };
     static const char *const DESC[]  = { "Walkthrough steps only",
                                          "Valid-command typeahead",
@@ -3062,6 +3105,11 @@ int main(void) {
     GFS_Reset();
     cd_capture_root();   // GFS_Reset returns us to root; re-snapshot it there
     g_z3_dir_valid = false;   // the pre-reset Z3 table is stale until re-scanned
+    // The soft reset longjmps here, which skips destructors -- so a MenuBacking
+    // held by a page we jumped out of never ran. Clear it by hand, or NBG3
+    // stays opaque and the title image is hidden for the rest of the session.
+    g_menu_backing_depth = 0;
+    SRL::VDP2::NBG3::TransparentEnable();
     // Re-list /TGA for the same reason. Z3 is re-scanned lazily by
     // preload_game_catalog(), but nothing else refreshes the bitmap table, and
     // title_bg_show() needs it a few lines below. Only on re-entry: the first
