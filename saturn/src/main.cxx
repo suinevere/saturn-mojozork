@@ -18,48 +18,14 @@ extern "C" {
 #include "music.h"
 #include "game_titles.h"
 }
+#include "app_state.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
 
-// Difficulty (Options menu). Easy = full typeahead + winning-path hints; Medium =
-// typeahead, grammar weights only; Hard = typeahead off. Defined here because
-// ensure_typeahead() below reads it. Persistence/UI live further down.
-enum { DIFF_EASY = 0, DIFF_MEDIUM = 1, DIFF_HARD = 2 };
-static int g_difficulty = DIFF_EASY;
-
-// Sound (Options menu). On by default; persisted in MOJOOPTS alongside
-// difficulty and the dial number. See options_load/options_save below.
-static int g_music_level = 7;   // CD-DA music level 0..7 (default full)
-static int g_pcm_level   = 4;   // PCM sound-effect level 0..7 (default mid)
-static int g_mix_mode  = MIX_DYNAMIC;   // Audio Mix: Dynamic/Override/Sequential/Random
-static int g_sel_track = 10;            // selected/override track, also the menu track
-
-// Display colors (Options > Display). Applied to VDP2 by display_apply();
-// persisted in MOJOOPTS alongside the other options.
-static DisplayState g_display;
-
-// Online dial number (editable in Options -> Network; persisted).
-// Server dial number. 11 digits is the longest we accept (NANP country code
-// plus number), and the entry field is capped to match: the on-screen keyboard
-// buffer holds 63 characters, which does not fit the 40-column screen and used
-// to run over the Network page's right border.
-#define DIALNUM_MAX 11
-static char g_dialnum[DIALNUM_MAX + 1] = "199403";
-
-// "Load Save Game": a save slot pre-selected from the menu, applied by the first
-// in-game "restore" (queued via g_autocmd) instead of the choose_dest prompt.
-static int g_restore_device = -1;
-static int g_restore_slot   = -1;
-static const char *g_autocmd = nullptr;   // command auto-submitted on the next readline
-// The slot a save/restore last actually committed to, remembered for the session so
-// the quick keys (F5/F6/F9) can skip the pickers. -1 until one commits.
-static int g_last_device = -1;
-static int g_last_slot   = -1;
-// Pre-picked save destination, the mirror of g_restore_* on the save side: set by
-// quick-save so saturn_save_blob writes straight to the slot. One-shot.
-static int g_save_device = -1;
-static int g_save_slot   = -1;
+// The persisted game options and save-session state that used to live here
+// (g_difficulty, g_music_level, g_pcm_level, g_mix_mode, g_sel_track, g_display,
+// g_dialnum, g_restore_*, g_save_*, g_last_*, g_autocmd) now live in app_state.
 
 extern "C" void* typeahead_malloc(unsigned int size) {
     return SRL::Memory::HighWorkRam::Malloc(size);
@@ -147,16 +113,10 @@ static MultiPad *g_pad = nullptr;
 
 // Soft reset (the Sega-mandated A+B+C+Start chord, and the typed "reboot" command)
 // returns the player to the title screen *in-process* -- NOT a hardware/SMPC reset,
-// which reboots the console all the way back to CD load. main() arms this jump
-// target just before the title screen; the input loops poll the chord and longjmp
-// back to it. Configured options live in backup RAM, so they survive the jump.
-static jmp_buf  g_title_jmp;
-static bool     g_title_jmp_armed = false;
-
-// The story file currently loaded from CD (set in main after game selection).
-// saturn_read_story_file re-reads this for save/restart, so it must track the
-// chosen game rather than a hard-coded name.
-static const char *g_story_filename = "ZORK1.Z3";
+// which reboots the console all the way back to CD load. main() arms g_title_jmp
+// (in app_state) just before the title screen; the input loops poll the chord and
+// longjmp back to it. Configured options live in backup RAM, so they survive the
+// jump. g_title_jmp/g_title_jmp_armed and g_story_filename now live in app_state.
 
 // ---- rendering -------------------------------------------------------------
 
@@ -432,11 +392,8 @@ static void display_options_page(void);
 
 // ---- scrollback ------------------------------------------------------------
 
-// How many lines the view is scrolled up from the live bottom (0 = latest text).
-// render_console clamps this to the available range every frame, so callers can
-// bump it freely. Driven by the physical keyboard's nav keys (the on-screen
-// keyboard cursor is moved by the gamepad D-pad instead).
-static int g_scroll = 0;
+// g_scroll (how many lines the view is scrolled up from the live bottom) now
+// lives in app_state; SCROLL_PAGE/SCROLL_ALL below stay with the input module.
 static const int SCROLL_PAGE = 16;        // Page Up/Down jump size, in lines
 static const int SCROLL_ALL  = 1 << 30;   // Home: clamped down to the oldest line
 
