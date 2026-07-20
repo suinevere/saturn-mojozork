@@ -177,9 +177,11 @@ New modules carved from `main.cxx` (each `.h` + matching `.c`/`.cxx`):
 | `online` | Network play mode. |
 | `main.cxx` (trimmed) | `main()`, game loop, `submit_command`, soft-reset, typeahead glue. |
 
-`app_state.cxx` cross-cutting globals (moved out of `main.cxx`, defined once here, declared `extern` in `app_state.h`):
+`app_state.cxx` cross-cutting globals (moved out of `main.cxx`, defined once here, declared `extern` in `app_state.h`). **`app_state.h` must stay C-includable** (POD/`extern "C"` only), so no C++-typed globals live here:
 
-`g_difficulty`, `g_mix_mode`, `g_sel_track`, `g_display`, `g_dialnum`, `g_sound`, `g_restore_device`, `g_restore_slot`, `g_save_device`, `g_save_slot`, `g_last_device`, `g_last_slot`, `g_autocmd`, `g_story_filename`, `g_pad`, `g_title_jmp`, `g_title_jmp_armed`. Plus the `DIFF_*`, `MIX_*`, `DIALNUM_MAX` definitions.
+`g_difficulty`, `g_music_level`, `g_pcm_level`, `g_mix_mode`, `g_sel_track`, `g_display` (POD `DisplayState`), `g_dialnum`, `g_restore_device`, `g_restore_slot`, `g_save_device`, `g_save_slot`, `g_last_device`, `g_last_slot`, `g_autocmd`, `g_story_filename`, `g_title_jmp` (`jmp_buf`), `g_title_jmp_armed`. Plus the `DIFF_*`, `MIX_*`, `DIALNUM_MAX` definitions.
+
+**NOT in app_state:** `g_pad` and its `MultiPad` struct (a C++ type with `SRL::Input` members and methods) belong in the `input` module (Task 4), which is C++-only. There is no `g_sound` global — audio on/off is expressed through `g_music_level`/`g_pcm_level` (0 = off).
 
 **Cross-edge already identified:** `display_apply` (options) calls `title_bg_show`/`title_bg_hide` (title). Because `title` is extracted later (Phase 3) than `options` (Phase 1), `options.cxx` must see a declaration of those two before `title.h` exists. Resolution: add a two-line forward declaration in `options.cxx` in Phase 1, and replace it with `#include "title.h"` in Phase 3 (Task 8's final step). The plan calls this out at both ends.
 
@@ -203,7 +205,32 @@ New modules carved from `main.cxx` (each `.h` + matching `.c`/`.cxx`):
 - Modify: `saturn/src/main.cxx` (remove the cross-cutting global definitions, add include)
 
 **Interfaces:**
-- Produces: `extern` declarations for the 17 cross-cutting globals listed in File Structure, plus `enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD }`, `enum { MIX_DYNAMIC, MIX_OVERRIDE, MIX_SEQUENTIAL, MIX_RANDOM }`, and `#define DIALNUM_MAX 11` (copy exact values from `main.cxx`).
+- Produces: `extern` declarations for the 17 cross-cutting globals listed in File Structure (the C-safe set — `g_pad` is excluded, it goes to Task 4), plus `enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD }`, `enum { MIX_DYNAMIC, MIX_OVERRIDE, MIX_SEQUENTIAL, MIX_RANDOM }`, and `#define DIALNUM_MAX 11` (copy exact values from `main.cxx`).
+
+**Exact definitions to move** (from `main.cxx`, preserve verbatim including initializers):
+```
+static int g_difficulty = DIFF_EASY;
+static int g_music_level = 7;
+static int g_pcm_level   = 4;
+static int g_mix_mode  = MIX_DYNAMIC;
+static int g_sel_track = 10;
+static DisplayState g_display;
+static char g_dialnum[DIALNUM_MAX + 1] = "199403";
+static int g_restore_device = -1;
+static int g_restore_slot   = -1;
+static const char *g_autocmd = nullptr;
+static int g_last_device = -1;
+static int g_last_slot   = -1;
+static int g_save_device = -1;
+static int g_save_slot   = -1;
+static jmp_buf  g_title_jmp;
+static bool     g_title_jmp_armed = false;
+static const char *g_story_filename = "ZORK1.Z3";
+static int g_scroll = 0;
+```
+`g_scroll` (currently `main.cxx:439`) is included here deliberately: it is the console scroll position, **written by the input module** (`scroll_handle_key`, `pad_scroll_update`) and **read by console_view** (`render_console`). Housing it in the neutral C-safe seam breaks what would otherwise be a mutual `input`↔`console_view` header cycle. Its companion consts `SCROLL_PAGE`/`SCROLL_ALL` are input-only and stay with the input module (Task 3).
+
+Drop the `static` when defining them in `app_state.cxx` (they gain external linkage). `#define DIALNUM_MAX 11` currently sits at `main.cxx:47`; the `DIFF_*` and `MIX_*` enums are near the top comments — grep for their definitions (`grep -n "DIFF_EASY\|MIX_DYNAMIC" main.cxx`) and move the enum definitions too. In `app_state.cxx`, `nullptr` is valid (it is a `.cxx`); keep it.
 
 - [ ] **Step 1: Create `app_state.h`** — file-box; `#ifndef APP_STATE_H`; `#include <setjmp.h>` and `#include "display.h"` (for `DisplayState`); `extern "C"` guard; the enums/`DIALNUM_MAX`; one `extern` line per global with a short `.h` *what*-box each (e.g. `g_display` → "Current display colors/background, applied to VDP2 by display_apply and persisted in MOJOOPTS.").
 - [ ] **Step 2: Create `app_state.cxx`** — file-box; `#include "app_state.h"`; the single **definition** of each global, moved verbatim from `main.cxx` (preserve initializers exactly: `g_dialnum = "199403"`, `g_story_filename = "ZORK1.Z3"`, `g_difficulty = DIFF_EASY`, etc.).
@@ -233,48 +260,54 @@ git add saturn/src/options.h saturn/src/options.cxx saturn/src/main.cxx
 git commit -m "Extract options persistence/apply into options module"
 ```
 
-### Task 3: `console_view` module
+### Task 3: `input` module
 
-**Files:**
-- Create: `saturn/src/console_view.h`, `saturn/src/console_view.cxx`
-- Modify: `saturn/src/main.cxx`
-
-**Functions to move:** `console_height`, `hint`, `note_input_device`, `text_set_color` (if not already owned by options — reconcile with Task 2), `render_console`, `console_scroll_to_output`, `install_block_glyph`, `render_keyboard`.
-**Cluster-local statics to move:** `g_kbd_visible`, `g_caret_arrows`, `g_more_below`, `g_scroll` (+ `SCROLL_PAGE`, `SCROLL_ALL`), `SCREEN_ROWS`, `TOP_MARGIN`, `KB_ROWS` and related layout consts declared beside these functions.
-
-**Interfaces:**
-- Consumes: `app_state.h`, `console.h`, `keyboard.h`, `saturn_keyboard.h`, `typeahead.h`, SRL.
-- Produces: declarations for the functions `main.cxx`'s loop calls (`render_console`, `render_keyboard`, `console_height`, `console_scroll_to_output`, `install_block_glyph`, `note_input_device`, `hint`) with `.h` *what*-boxes. `g_kbd_visible`/`g_caret_arrows`/`g_more_below`/`g_scroll` are read by the input loop and menus — if referenced outside `console_view`, promote them to `app_state` instead of `console_view` statics (grep to decide; the plan's default: keep in `console_view.cxx` as `static` and expose accessors only if a grep shows external use — otherwise leave `static`).
-
-- [ ] **Step 1: Grep the four rendering statics** — `for g in g_kbd_visible g_caret_arrows g_more_below g_scroll; do echo "$g:"; grep -rn "\\b$g\\b" saturn/src | grep -v console_view; done`. Any with external references move to `app_state` (Task 1 pattern); the rest become `console_view.cxx` statics. Record the decision in the commit message.
-- [ ] **Step 2: Apply SMEP** for the listed functions and resolved statics.
-- [ ] **Step 3: Dead-code check** (same pattern as Task 2 Step 3 over the moved names).
-- [ ] **Step 4: Commit**
-```bash
-git add saturn/src/console_view.h saturn/src/console_view.cxx saturn/src/main.cxx saturn/src/app_state.h saturn/src/app_state.cxx
-git commit -m "Extract text/keyboard rendering into console_view module"
-```
-
-### Task 4: `input` module
+*(Ordered before `console_view` on purpose: `console_view` calls `g_pad` and so includes `input.h`; `input` now depends only on `app_state` — the one-directional edge. Do Task 3 before Task 4.)*
 
 **Files:**
 - Create: `saturn/src/input.h`, `saturn/src/input.cxx`
 - Modify: `saturn/src/main.cxx`
 
 **Functions to move:** `scroll_handle_key`, `face_button`, `face_btn_name`, `slot_name`, `slot_raw`, `caps_combo_fired`, `chord_tick`, `chord_fired`, `pad_scroll_update`, `pad_repeat_update`, `pad_fired`, `history_push`, `history_load`, `history_recall`, `face_assign`, `chord_assign`, `mapping_reset_defaults`.
-**Cluster-local statics to move:** `g_chord_slot`, `g_chordrep`, `g_padrep`, `g_history`, `g_hist_head`, `g_hist_browse`, `FACE_DEFAULT`, `CHORD_DEFAULT`, `PAD_SCROLL_DELAY`, `PAD_SCROLL_RATE`, the `SL_*`/`FA_*`/`CA_*` enums and slot tables, plus the `ChordRep`/`PadRepeat` structs.
+**Cluster-local statics to move:** `g_chord_slot`, `g_chordrep`, `g_padrep`, `g_history`, `g_hist_head`, `g_hist_browse`, `FACE_DEFAULT`, `CHORD_DEFAULT`, `PAD_SCROLL_DELAY`, `PAD_SCROLL_RATE`, `SCROLL_PAGE`, `SCROLL_ALL`, the `SL_*`/`FA_*`/`CA_*` enums and slot tables, plus the `ChordRep`/`PadRepeat` structs. (`g_scroll` itself now lives in `app_state` — Task 1; the input functions write it via `app_state.h`.)
+**Also move here (from `main.cxx`, deferred from Task 1):** the `MultiPad` struct definition (`main.cxx` lines ~116-144, a C++ type with `SRL::Input::Digital/Analog` members and `WasPressed`/`IsHeld`/`AnyPressed` methods) and `static MultiPad *g_pad = nullptr;`. Put the `MultiPad` struct in `input.h` and declare `extern MultiPad *g_pad;` there; define `g_pad` in `input.cxx`. `main.cxx` allocates the backing `static MultiPad pads;` in `main()` and sets `g_pad = &pads;` — leave that line in `main()`, it now writes the `input.h`-declared global.
 
 **Interfaces:**
-- Consumes: `app_state.h` (`g_pad`), `saturn_keyboard.h`, `keyboard.h`, `console_view.h` (if scroll touches `g_scroll`), SRL `Button`/`MultiPad`.
+- Consumes: `app_state.h` (`g_scroll`, and the option globals if any), `saturn_keyboard.h`, `keyboard.h`, SRL `Button`/`SRL::Input`. **No `console_view` dependency.**
+- Produces (input.h, C++-only): the `MultiPad` struct and `extern MultiPad *g_pad;`, consumed by `console_view`, `menu`, `menu_pages`, `save_ui`, `online`, and `main.cxx`.
 - Produces: declarations for what the loop and menu pages call: `face_button`, `face_btn_name`, `slot_name`, `slot_raw`, `caps_combo_fired`, `chord_tick`, `chord_fired`, `pad_scroll_update`, `pad_repeat_update`, `pad_fired`, `scroll_handle_key`, `history_push`, `history_load`, `history_recall`, `face_assign`, `chord_assign`, `mapping_reset_defaults`, and the `FA_*`/`CA_*`/`SL_*` enums (move enums into `input.h` since `menu_pages` reads them).
 
 - [ ] **Step 1: Move the mapping enums/labels** — `FA_*`, `CA_*`, `SL_*` and their `*_DEFAULT` tables into `input.h`/`input.cxx`. `FACE_LABEL`/`CHORD_LABEL` are used only by menu pages → leave them for Task 6, but if `face_btn_name`/`slot_name` reference them, they move here; grep to decide.
-- [ ] **Step 2: Apply SMEP** for the listed functions and statics.
+- [ ] **Step 2: Apply SMEP** for the listed functions and statics, including `MultiPad`/`g_pad`.
 - [ ] **Step 3: Dead-code check** over the moved names.
 - [ ] **Step 4: Commit**
 ```bash
 git add saturn/src/input.h saturn/src/input.cxx saturn/src/main.cxx
 git commit -m "Extract controller mapping / pad / history into input module"
+```
+
+### Task 4: `console_view` module
+
+*(Runs after Task 3. `console_view.cxx` includes `input.h` for `g_pad` (used by `note_input_device`) and `app_state.h` for `g_scroll`.)*
+
+**Files:**
+- Create: `saturn/src/console_view.h`, `saturn/src/console_view.cxx`
+- Modify: `saturn/src/main.cxx`
+
+**Functions to move:** `console_height`, `hint`, `note_input_device`, `text_set_color` (if not already owned by options — reconcile with Task 2), `render_console`, `console_scroll_to_output`, `install_block_glyph`, `render_keyboard`.
+**Cluster-local statics to move:** `g_kbd_visible`, `g_caret_arrows`, `g_more_below`, `SCREEN_ROWS`, `TOP_MARGIN`, `KB_ROWS` and related layout consts declared beside these functions. (`g_scroll` is NOT here — it moved to `app_state` in Task 1.)
+
+**Interfaces:**
+- Consumes: `app_state.h` (`g_scroll`), `input.h` (`g_pad`), `console.h`, `keyboard.h`, `saturn_keyboard.h`, `typeahead.h`, SRL.
+- Produces: declarations for the functions `main.cxx`'s loop calls (`render_console`, `render_keyboard`, `console_height`, `console_scroll_to_output`, `install_block_glyph`, `note_input_device`, `hint`) with `.h` *what*-boxes. `g_kbd_visible`/`g_caret_arrows`/`g_more_below` are also written by `main.cxx` (e.g. `main.cxx:1082`, `main.cxx:3389`), so declare them `extern` in `console_view.h` rather than leaving them file-`static` (grep to confirm which; any read/written outside `console_view` gets the `extern` treatment).
+
+- [ ] **Step 1: Grep the rendering statics** — `for g in g_kbd_visible g_caret_arrows g_more_below; do echo "$g:"; grep -rn "\\b$g\\b" saturn/src | grep -v console_view; done`. Any with external references get `extern` in `console_view.h`; purely local ones stay `static` in `console_view.cxx`. Record the decision in the commit message.
+- [ ] **Step 2: Apply SMEP** for the listed functions and resolved statics. `console_view.cxx` includes `input.h` (for `g_pad`) and `app_state.h` (for `g_scroll`).
+- [ ] **Step 3: Dead-code check** (same pattern as Task 2 Step 3 over the moved names).
+- [ ] **Step 4: Commit**
+```bash
+git add saturn/src/console_view.h saturn/src/console_view.cxx saturn/src/main.cxx saturn/src/app_state.h saturn/src/app_state.cxx
+git commit -m "Extract text/keyboard rendering into console_view module"
 ```
 
 - [ ] **Phase 1 compile checkpoint** — hand off: user runs `saturn/compile.bat` and the host tests. Proceed only on a clean link + green tests. Fix any unresolved symbol by adding the missing declaration to the owning module's header (or a temporary forward declaration per SMEP step 4).
