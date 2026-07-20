@@ -1,62 +1,56 @@
-# Audio bin/cue split + merge helpers. Source with: . lib/audio.sh
-# (sources cuelib.sh from the same lib dir).
-. "$(dirname "${BASH_SOURCE[0]}")/cuelib.sh"
+# process_bin <bin_dir> <final_out> <base_name>
+# Copies the single game BIN and renames it to Track 01.
+process_bin() {
+  local bin_dir="$1" out="$2" base="$3"
+  shopt -s nullglob
+  local bins=("$bin_dir"/*.bin)
+  [ ${#bins[@]} -gt 0 ] || { echo "ERROR: No .bin file found in $bin_dir"; exit 1; }
 
-# split_bincue <source.cue> <source.bin> <out_dir>
-# Writes trackNN.bin for every AUDIO track; slices at 2352 bytes/sector.
-split_bincue() {
-  local cue="$1" bin="$2" out="$3"
-  mkdir -p "$out"
-  local total; total=$(file_size "$bin")
-  local nums=() types=() starts=()
-  local tnum="" ttype=""
-  while IFS= read -r line; do
-    case "$line" in
-      *TRACK\ *) tnum=$(echo "$line" | sed -E 's/.*TRACK 0*([0-9]+).*/\1/');
-                 ttype=$(echo "$line" | grep -oE 'AUDIO|MODE1|MODE2');;
-      *INDEX\ 01\ *) local msf; msf=$(echo "$line" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}');
-                     nums+=("$tnum"); types+=("$ttype"); starts+=("$(msf_to_frames "$msf")");;
-    esac
-  done < "$cue"
-  local i n; n=${#nums[@]}
-  for ((i=0;i<n;i++)); do
-    [ "${types[$i]}" = "AUDIO" ] || continue
-    local startf=${starts[$i]} endf
-    if [ $((i+1)) -lt "$n" ]; then endf=${starts[$((i+1))]}; else endf=$(( total / 2352 )); fi
-    local count=$(( endf - startf )) name
-    printf -v name "track%02d.bin" "${nums[$i]}"
-    dd if="$bin" of="$out/$name" bs=2352 skip="$startf" count="$count" 2>/dev/null
-    echo "  split -> $name ($count sectors)"
+  cp "${bins[0]}" "$out/$base (Track 01).bin"
+  echo "Copied BIN dir track -> $base (Track 01).bin"
+}
+
+# process_audio <cue_music_dir> <final_out> <base_name>
+# Copies and renames all audio BINs, ignoring Track 1.
+process_audio() {
+  local am_dir="$1" out="$2" base="$3"
+  shopt -s nullglob
+  local f name tnum
+  for f in "$am_dir"/*.bin; do
+    name=$(basename "$f")
+
+    if [[ "$name" =~ Track[[:space:]]*0?1([^0-9]|$) ]]; then
+      echo "Skipping Track 1 from music dir: $name"
+      continue
+    fi
+
+    if [[ "$name" =~ Track[[:space:]]*([0-9]+) ]]; then
+      # Force base-10 math to avoid octal errors on 08/09
+      tnum=$(printf "%02d" "$((10#${BASH_REMATCH[1]}))")
+      cp "$f" "$out/$base (Track $tnum).bin"
+      echo "Copied $name -> $base (Track $tnum).bin"
+    fi
   done
 }
 
-# merge_disc <game_dir> <audio_dir> <out_dir>
-# Creates a multi-bin disc image: copies game bin + audio bins to output dir,
-# then generates a multi-FILE CUE sheet. Audio bins are NOT stitched into the game bin;
-# they remain separate, with the CUE sheet referencing both files. This is the standard
-# multi-bin approach for Sega Saturn disc releases.
-merge_disc() {
-  local gdir="$1" adir="$2" out="$3"
-  mkdir -p "$out"
-  local gcue gbin
-  gcue=$(find "$gdir" -maxdepth 1 -iname '*.cue' | head -n1)
-  gbin=$(find "$gdir" -maxdepth 1 -iname '*.bin' | head -n1)
-  [ -n "$gcue" ] && [ -n "$gbin" ] || { echo "ERROR: need one bin+cue in $gdir"; return 1; }
-  local audios=( "$adir"/track*.bin )
-  [ -e "${audios[0]}" ] || { echo "ERROR: no audio bins in $adir"; return 1; }
-  cp "$gbin" "$out/"; cp "$adir"/track*.bin "$out/"
-  local outcue="$out/$(basename "${gcue%.cue}").cue"
-  # Track 1: copy verbatim up to (but not including) the 2nd FILE line.
-  awk 'BEGIN{keep=1} /^FILE/{n++} n>=2{keep=0} keep{print}' "$gcue" > "$outcue"
-  # Audio tracks: regenerate, numbered from 02.
-  local tn=2 first=1 f base
-  for f in $(printf '%s\n' "${audios[@]}" | sort); do
-    base=$(basename "$f")
-    printf 'FILE "%s" BINARY\n' "$base" >> "$outcue"
-    printf '  TRACK %02d AUDIO\n' "$tn" >> "$outcue"
-    if [ "$first" = 1 ]; then printf '    PREGAP 00:02:00\n' >> "$outcue"; first=0; fi
-    printf '    INDEX 01 00:00:00\n' >> "$outcue"
-    tn=$((tn+1))
-  done
-  echo "Merged disc -> $outcue ($(( tn - 2 )) audio tracks)"
+# process_cue <cue_music_dir> <final_out> <base_name>
+# Overwrites FILE lines to match the requested hyphenated string.
+process_cue() {
+  local am_dir="$1" out="$2" base="$3"
+  shopt -s nullglob
+  local cues=("$am_dir"/*.cue)
+  [ ${#cues[@]} -gt 0 ] || { echo "Warning: No .cue file found in $am_dir"; return 0; }
+
+  # Strip Windows line endings, rewrite FILE lines, pass rest through
+  tr -d '\r' < "${cues[0]}" | awk '
+    BEGIN { t = 1 }
+    /^[[:space:]]*FILE/ {
+      printf "FILE \"Zaturn - Complete (USA) (Track %02d).bin\" BINARY\n", t
+      t++
+      next
+    }
+    { print $0 }
+  ' > "$out/$base.cue"
+
+  echo "Processed and copied CUE file -> $base.cue"
 }

@@ -1,21 +1,33 @@
 :; # === Linux & macOS Execution Block ===
 :; set -euo pipefail
 :; cd "$(dirname "$0")"
-:; . lib/audio.sh
+:;
+:; # 1. Parse Config
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
-:; AUDIO_URL=$(cfg AUDIO_URL); AUDIO_DIR=$(cfg AUDIO_DIR); AUDIO_DIR=${AUDIO_DIR:-./audio}
-:; tmp=$(mktemp -d)
-:; echo "Downloading audio image: $AUDIO_URL"
-:; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
-:; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
-:; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
-:; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
-:; [ -n "$srccue" ] && [ -n "$srcbin" ] || { echo "ERROR: no bin/cue in audio download"; exit 1; }
-:; split_bincue "$srccue" "$srcbin" "$AUDIO_DIR"
-:; echo "Audio split complete -> $AUDIO_DIR"
+:; AUDIO_URL=$(cfg AUDIO_URL)
 :; GAME_DIR=$(cfg GAME_DIR); GAME_DIR=${GAME_DIR:-./game}
 :; OUTPUT_DIR=$(cfg OUTPUT_DIR); OUTPUT_DIR=${OUTPUT_DIR:-./output}
-:; merge_disc "$GAME_DIR" "$AUDIO_DIR" "$OUTPUT_DIR"
+:;
+:; # 2. Download and Extract Audio
+:; tmp=$(mktemp -d)
+:; echo "Downloading audio files: $AUDIO_URL"
+:; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
+:; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
+:;
+:; # 3. Setup Final Output Directory
+:; BASE_NAME="Zaturn - Complete (USA)"
+:; FINAL_OUT="$OUTPUT_DIR/$BASE_NAME"
+:; mkdir -p "$FINAL_OUT"
+:; echo "Processing files into -> $FINAL_OUT"
+:;
+:; # 4. Execute new logic
+:; process_bin "$GAME_DIR" "$FINAL_OUT" "$BASE_NAME"
+:; process_audio "$tmp/img" "$FINAL_OUT" "$BASE_NAME"
+:; process_cue "$tmp/img" "$FINAL_OUT" "$BASE_NAME"
+:;
+:; # 5. Cleanup temp
+:; rm -rf "$tmp"
+:; echo "Process complete!"
 :; exit
 
 @ECHO OFF
