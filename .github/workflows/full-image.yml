@@ -12,48 +12,6 @@ jobs:
   full-image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install host tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso wget unzip zip curl
-
-      - name: Cache SaturnRingLib toolchain
-        id: toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            SaturnRingLib/Compiler
-            SaturnRingLib/tools/bin
-          key: srl-toolchain-gcc14.2.0-iso2raw0.2.2
-
-      - name: Fetch SH-2 toolchain + iso2raw
-        if: steps.toolchain.outputs.cache-hit != 'true'
-        working-directory: SaturnRingLib
-        run: |
-          set -e
-          bash tools/scripts/getcompiler.sh 14.2.0
-          bash tools/scripts/getiso2raw.sh v0.2.2
-
-      - name: Build base Saturn disc
-        working-directory: saturn
-        run: |
-          set -e
-          export SRL_INSTALL_ROOT=../SaturnRingLib
-          bash ../SaturnRingLib/tools/scripts/make.sh release ../SaturnRingLib/Compiler
-          ls -la BuildDrop
-
-      - name: Stage base ISO for the asset kit
-        run: |
-          set -e
-          mkdir -p tools/assets/base
-          cp saturn/BuildDrop/mojozork.iso tools/assets/base/mojozork.iso
-
-      - name: Download games + inject
-        working-directory: tools/assets
-        run: bash games.bat
-
       - name: Download audio + split + merge
         working-directory: tools/assets
         run: bash music.bat

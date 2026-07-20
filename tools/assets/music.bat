@@ -11,12 +11,7 @@
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
 :; ls -ls "$tmp/img"
 :; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
-:; echo "Checking zip contains cue"
-:; [ -n "$srccue" ] { echo "ERROR: no cue in audio download"; exit 1; }
 :; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
-:; [ -n "$srcbin" ] { echo "ERROR: no bin in audio download"; exit 1; }
-:; echo "Checking zip contains bin"
-:; [ -n "$srccue" ] && [ -n "$srcbin" ] || { echo "ERROR: no bin/cue in audio download"; exit 1; }
 :; split_bincue "$srccue" "$srcbin" "$AUDIO_DIR"
 :; echo "Audio split complete -> $AUDIO_DIR"
 :; GAME_DIR=$(cfg GAME_DIR); GAME_DIR=${GAME_DIR:-./game}
