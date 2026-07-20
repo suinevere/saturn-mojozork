@@ -41,8 +41,23 @@
 :;
 :; . lib/inject.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
-:; BASE_ISO=$(cfg BASE_ISO); GAME_DIR=$(cfg GAME_DIR); DISC_NAME=$(cfg DISC_NAME)
-:; inject_games "${BASE_ISO:-./base/mojozork.iso}" "Z3" "${GAME_DIR:-./game}" "${DISC_NAME:-mojozork}"
+:; BASE_ISO=$(cfg BASE_ISO); BASE_ISO=${BASE_ISO:-./base/mojozork.iso}
+:; GAME_DIR=$(cfg GAME_DIR); GAME_DIR=${GAME_DIR:-./game}
+:; DISC_NAME=$(cfg DISC_NAME); DISC_NAME=${DISC_NAME:-mojozork}
+:;
+:; # Stage the base ISO from the SDK build output if it hasn't been placed yet.
+:; # (CI stages it in full-image.yml; a local run must do the same.)
+:; if [ ! -f "$BASE_ISO" ] && [ -f "../../saturn/BuildDrop/$DISC_NAME.iso" ]; then
+:;   echo "Staging base ISO from saturn/BuildDrop -> $BASE_ISO"
+:;   mkdir -p "$(dirname "$BASE_ISO")"
+:;   cp "../../saturn/BuildDrop/$DISC_NAME.iso" "$BASE_ISO"
+:; fi
+:; if [ ! -f "$BASE_ISO" ]; then
+:;   echo "ERROR: base ISO not found: $BASE_ISO"
+:;   echo "Build the Saturn disc first (cd saturn && ./compile.bat), then re-run."
+:;   exit 1
+:; fi
+:; inject_games "$BASE_ISO" "Z3" "$GAME_DIR" "$DISC_NAME"
 :; exit
 
 @ECHO OFF
@@ -87,6 +102,25 @@ FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
 IF NOT DEFINED BASE_ISO SET "BASE_ISO=.\base\mojozork.iso"
 IF NOT DEFINED GAME_DIR SET "GAME_DIR=.\game"
 IF NOT DEFINED DISC_NAME SET "DISC_NAME=mojozork"
+
+REM Normalize any forward slashes so CMD's IF EXIST / COPY behave.
+SET "BASE_ISO=%BASE_ISO:/=\%"
+
+REM Stage the base ISO from the SDK build output if it hasn't been placed yet.
+REM (CI stages it in full-image.yml; a local run must do the same.)
+IF NOT EXIST "%BASE_ISO%" (
+    IF EXIST "..\..\saturn\BuildDrop\%DISC_NAME%.iso" (
+        ECHO Staging base ISO from saturn\BuildDrop -^> %BASE_ISO%
+        FOR %%I IN ("%BASE_ISO%") DO IF NOT EXIST "%%~dpI" MKDIR "%%~dpI"
+        COPY /Y "..\..\saturn\BuildDrop\%DISC_NAME%.iso" "%BASE_ISO%" >NUL
+    )
+)
+IF NOT EXIST "%BASE_ISO%" (
+    ECHO ERROR: base ISO not found: %BASE_ISO%
+    ECHO Build the Saturn disc first ^(cd saturn ^&^& compile.bat^), then re-run.
+    EXIT /B 1
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\inject.ps1" -BaseIso "%BASE_ISO%" -GamesDir "Z3" -OutDir "%GAME_DIR%" -Name "%DISC_NAME%" -Dd ".\bin\win\dd.exe" -Xorriso ".\bin\win\xorriso.exe" -Iso2raw ".\bin\win\iso2raw.exe"
 IF ERRORLEVEL 1 ( ECHO ERROR: game injection failed & EXIT /B 1 )
 

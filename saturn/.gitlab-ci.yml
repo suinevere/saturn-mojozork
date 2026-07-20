@@ -8,7 +8,7 @@
 .core-defs:
   variables:
     GIT_SUBMODULE_STRATEGY: normal
-    CORENAME: mojozork
+    CORENAME: zaturn
     CORE_ARGS: -DLIBRETRO=ON
 ﻿
 # Inclusion templates, required for the build to work
