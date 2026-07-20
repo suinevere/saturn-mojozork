@@ -7,13 +7,15 @@
 :; tmp=$(mktemp -d)
 :; echo "Downloading audio image: $AUDIO_URL"
 :; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
-:; echo "ls - ls $tmp"
-:; ls -ls "$tmp"
+:; echo "Unzipping then listing files inside."
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
-:; echo "ls - ls $tmp/img"
 :; ls -ls "$tmp/img"
 :; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
+:; echo "Checking zip contains cue"
+:; [ -n "$srccue" ] { echo "ERROR: no cue in audio download"; exit 1; }
 :; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
+:; [ -n "$srcbin" ] { echo "ERROR: no bin in audio download"; exit 1; }
+:; echo "Checking zip contains bin"
 :; [ -n "$srccue" ] && [ -n "$srcbin" ] || { echo "ERROR: no bin/cue in audio download"; exit 1; }
 :; split_bincue "$srccue" "$srcbin" "$AUDIO_DIR"
 :; echo "Audio split complete -> $AUDIO_DIR"
