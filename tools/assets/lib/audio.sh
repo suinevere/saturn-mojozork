@@ -5,22 +5,38 @@
 # split_bincue <source.cue> <source.bin> <out_dir>
 # Writes trackNN.bin for every AUDIO track; slices at 2352 bytes/sector.
 split_bincue() {
-  echo "enter split_bincue"
   local cue="$1" bin="$2" out="$3"
   mkdir -p "$out"
-  echo "step1"
   local total; total=$(file_size "$bin")
   local nums=() types=() starts=()
   local tnum="" ttype=""
-  echo "step2"
+
   while IFS= read -r line; do
     case "$line" in
-      *TRACK\ *) tnum=$(echo "$line" | sed -E 's/.*TRACK 0*([0-9]+).*/\1/');
-                 ttype=$(echo "$line" | grep -oE 'AUDIO|MODE1|MODE2');;
-      *INDEX\ 01\ *) local msf; msf=$(echo "$line" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}');
-                     nums+=("$tnum"); types+=("$ttype"); starts+=("$(msf_to_frames "$msf")");;
+      *TRACK\ *)
+        tnum=$(echo "$line" | sed -E 's/.*TRACK 0*([0-9]+).*/\1/')
+
+        # [DEBUG TEST] Prevent grep from causing an exit 1 if track type isn't recognized
+        if ! ttype=$(echo "$line" | grep -oE 'AUDIO|MODE1|MODE2'); then
+          echo "[DEBUG] Warning: ttype grep failed (unrecognized format) on line: $line" >&2
+          ttype="UNKNOWN"
+        fi
+        ;;
+
+      *INDEX\ 01\ *)
+        local msf
+        # [DEBUG TEST] Prevent grep from causing an exit 1 if timestamp formatting is weird
+        if ! msf=$(echo "$line" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}'); then
+          echo "[DEBUG] Warning: msf timestamp grep failed on line: $line" >&2
+        else
+          nums+=("$tnum")
+          types+=("$ttype")
+          starts+=("$(msf_to_frames "$msf")")
+        fi
+        ;;
     esac
   done < "$cue"
+
   local i n; n=${#nums[@]}
   for ((i=0;i<n;i++)); do
     [ "${types[$i]}" = "AUDIO" ] || continue
@@ -28,7 +44,21 @@ split_bincue() {
     if [ $((i+1)) -lt "$n" ]; then endf=${starts[$((i+1))]}; else endf=$(( total / 2352 )); fi
     local count=$(( endf - startf )) name
     printf -v name "track%02d.bin" "${nums[$i]}"
-    dd if="$bin" of="$out/$name" bs=2352 skip="$startf" count="$count" 2>/dev/null
+
+    # [DEBUG TEST] Print variables and ensure count is valid before running dd
+    echo "[DEBUG] $name -> startf: $startf | endf: $endf | count: $count" >&2
+
+    if [ -z "$count" ] || [ "$count" -le 0 ]; then
+      echo "[DEBUG ERROR] Invalid sector count ($count) for $name! Skipping." >&2
+      continue
+    fi
+
+    # [DEBUG TEST] Capture dd's stderr to a temp file instead of /dev/null so we can see why it fails
+    if ! dd if="$bin" of="$out/$name" bs=2352 skip="$startf" count="$count" 2>"/tmp/dd_debug_${name}.log"; then
+      echo "[DEBUG ERROR] dd failed for $name! Output was:" >&2
+      cat "/tmp/dd_debug_${name}.log" >&2
+    fi
+
     echo "  split -> $name ($count sectors)"
   done
 }
