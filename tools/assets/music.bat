@@ -46,6 +46,15 @@ IF NOT DEFINED GAME_DIR SET "GAME_DIR=.\game"
 IF NOT DEFINED OUTPUT_DIR SET "OUTPUT_DIR=.\output"
 
 SET "TMP_IMG=%TEMP%\mzaudio"
+IF EXIST "%TMP_IMG%" RMDIR /S /Q "%TMP_IMG%"
+MKDIR "%TMP_IMG%"
+
+ECHO Downloading audio files: %AUDIO_URL%
+curl -L -o "%TEMP%\mzaudio.zip" "%AUDIO_URL%"
+IF ERRORLEVEL 1 ( ECHO ERROR: audio download failed & EXIT /B 1 )
+
+powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -DestinationPath '%TMP_IMG%' -Force"
+IF ERRORLEVEL 1 ( ECHO ERROR: failed to extract audio zip & EXIT /B 1 )
 
 ECHO Processing files and merging directories...
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\split.ps1" -BinDir "%GAME_DIR%" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%"
