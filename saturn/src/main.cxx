@@ -21,6 +21,7 @@ extern "C" {
 #include "app_state.h"
 #include "input.h"
 #include "console_view.h"
+#include "options.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -91,192 +92,16 @@ static void menu_sync(void) {
     SRL::Core::Synchronize();
 }
 
-// ---- options / difficulty --------------------------------------------------
-// (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
-// typeahead + winning-path hints. Medium: typeahead, grammar weights only. Hard:
-// off. Defaults to Easy; only written to backup once the player changes it.
-// Persisted blob: difficulty(1) + dial number(NUL-terminated) + sound flag(1).
-// Older saves (difficulty only, or difficulty+dial with a zeroed tail) load
-// fine: the sound byte reads as 0 (absent), which the flag encoding below
-// treats as "on" so pre-existing saves aren't silently muted.
-static bool title_bg_show(const char *file);
+// ---- options / display ------------------------------------------------------
+// options_load, options_save, display_apply, display_cycle_row, valid_dialnum,
+// text_set_color, and the DisplayCycleRow enum now live in options.h/options.cxx.
+
+// external until the title module (title.h) is extracted
+bool title_bg_show(const char *file);
 static void title_bg_show(void);
-static void title_bg_hide(void);
+// external until the title module (title.h) is extracted
+void title_bg_hide(void);
 
-
-// Set the color the SGL font glyphs and the block cursor render in.
-//
-// The font lives in ASCII palette 0, not palette 1. colorBank's declarator
-// initializes it to 1 << 12 (srl_ascii.hpp:23), but Core::Initialize ->
-// VDP2::Initialize calls ASCII::SetPalette(0) (srl_vdp2.hpp:1517) before any
-// of our code runs, and nothing here calls SetPalette again. NBG3 is
-// COL_TYPE_16 (4bpp), so palette 0 is CRAM entries 0-15, bytes 0-31.
-//
-// Two entries matter, and they are not adjacent:
-//
-//   entry 1  -- the glyph foreground. VDP2::Initialize seeds it via
-//               SetPrintPaletteColor(0, White), which writes 1 + (index << 8)
-//               (srl_vdp2.hpp:1489). Its other six calls (index 1..6) land on
-//               entries 257, 513, ... which a 4bpp cell cannot reach, so index
-//               0 is the only one that colors anything.
-//   entry 15 -- the cursor. install_block_glyph() fills its tile with 0xFF,
-//               and 4bpp pixel value 15 selects entry 15.
-//
-// SRL::ASCII::SetColor is not usable for the glyphs: it indexes from
-// (colorBank >> 6), which is 0 here, so SetColor(c, i) writes entry i. That
-// reaches the cursor at i=15 but never the glyphs, which is why changing Text
-// previously appeared to do nothing.
-//
-// VDP2_COLRAM (sl_def.h:981) is a bare integer address, not a pointer, so the
-// cast is required. It reaches this file via <srl.hpp>. The address is in the
-// SH-2's uncached mirror, so no flush is needed; the only DMA into CRAM
-// (CRAM::Palette::Load) targets bank 1 at entries 256+ and never overlaps.
-static void text_set_color(unsigned short rgb555) {
-    volatile unsigned short *cram = (volatile unsigned short *) VDP2_COLRAM;
-    cram[1]  = rgb555;   // glyph foreground
-    cram[15] = rgb555;   // install_block_glyph()'s cursor tile
-}
-
-// Push g_display to the hardware. text_set_color writes both the glyph and the
-// cursor CRAM entries, so this recolors body text, menus, the on-screen
-// keyboard, and the cursor in one call.
-// (SRL::Debug::PrintColorSet is not usable here: it sets slCurColor while
-// Debug::Print reads ASCII::colorBank.)
-// Returns false when the requested background could not be shown, so a caller
-// cycling through presets can step over the bad one instead of settling on the
-// fallback this installs.
-static bool display_apply(void) {
-    text_set_color(display_text_rgb(g_display.text));
-    // Set the back plane before any image load. It is what shows through the
-    // menu frames, whose interiors are transparent NBG3 cells, and it is on
-    // screen for the second or two the CD read takes -- so the colour has to be
-    // right before the picture arrives, not after. An image preset pairs with
-    // black, which is why stepping onto one resets the background and text.
-    SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
-    if (display_is_image(&g_display)) {
-        if (!title_bg_show(display_image_file(g_display.image))) {
-            // Load failed (or the bitmap isn't the 8bpp shape we require): fall
-            // back to a color background rather than leaving static on screen.
-            //
-            // The palette may itself be the image preset that just failed --
-            // keeping it would re-select the broken picture. Drop to a color
-            // preset in that case.
-            int p = g_display.palette;
-            if (p >= DISP_PRESET_N || p < 0) p = 12;   // IBM PC (MDA), the startup default
-            g_display.palette = p;
-            g_display.bg      = display_preset_bg(p);
-            g_display.text    = display_preset_text(p);
-            g_display.image   = DISP_IMAGE_NONE;
-            text_set_color(display_text_rgb(g_display.text));
-            title_bg_hide();
-            SRL::VDP2::SetBackColor(SRL::Types::HighColor(display_bg_rgb(g_display.bg)));
-            return false;
-        }
-    } else {
-        title_bg_hide();
-    }
-    return true;
-}
-
-// Which Display Options row a cycle applies to. Named separately from the
-// page's own row enum because the stepping logic lives out here, next to
-// display_apply.
-enum DisplayCycleRow { DCR_PALETTE, DCR_BG, DCR_TEXT };
-
-// Cycle one row and push it to the hardware, stepping over any image that will
-// not load.
-//
-// Only the Palette row can hit that: it is the one carrying pictures now.
-// The step matters there because display_apply() installs a colour-preset
-// fallback when a load fails, and that rewrites the very index being cycled --
-// without restoring it, the next press would resume from the fallback and land
-// on the same bad image, making every image past it unreachable.
-static void display_cycle_row(DisplayCycleRow which, int dir) {
-    if (which != DCR_PALETTE) {
-        if (which == DCR_BG) display_cycle_bg(&g_display, dir);
-        else                 display_cycle_text(&g_display, dir);
-        display_apply();     // colours only; nothing here can fail to load
-        return;
-    }
-    int tries = display_palette_count();
-    while (tries-- > 0) {
-        display_cycle_palette(&g_display, dir);
-        DisplayState want = g_display;
-        if (display_apply()) return;   // showing what was asked for
-        g_display = want;              // keep our place and step past the bad entry
-    }
-    // Every candidate failed (a disc whose images are all unreadable): let the
-    // fallback stand rather than looping here.
-    display_apply();
-}
-
-static void options_load(void) {
-    uint8_t buf[64];
-    for (int z = 0; z < (int) sizeof(buf); z++) buf[z] = 0;
-    if (!saturn_bup_read(SATURN_BUP_CONSOLE, "MOJOOPTS", buf)) return;
-    if (buf[0] <= DIFF_HARD) g_difficulty = (int) buf[0];
-    int i = 1;   // tracks the offset of the dial number's terminating NUL
-    if (buf[1]) {
-        int j;
-        for (j = 0; buf[1 + j] && j < (int) sizeof(g_dialnum) - 1; j++) g_dialnum[j] = (char) buf[1 + j];
-        g_dialnum[j] = '\0';
-        // Advance to the stored string's own NUL rather than to what we copied.
-        // A blob written before the 11-digit cap can hold a longer number, and
-        // every field below is located relative to that terminator -- stopping
-        // at the copy length would misread all of them.
-        while (buf[1 + j] && 1 + j < (int) sizeof(buf) - 1) j++;
-        i = 1 + j;
-    }
-    // Two audio levels follow the dial NUL: [music][pcm], each 0..7. A legacy blob
-    // had a single sound flag here (1 = off, else on); map it: off -> pcm 0.
-    if (i + 1 < (int) sizeof(buf)) {
-        uint8_t a = buf[i + 1], b = (i + 2 < (int) sizeof(buf)) ? buf[i + 2] : 0xFF;
-        if (a <= 7 && b <= 7) { g_music_level = a; g_pcm_level = b; }
-        else { g_pcm_level = (a == 1) ? 0 : 4; g_music_level = 7; }   // legacy sound flag
-    }
-    // Controller mapping follows the two level bytes: a format sentinel (2 =
-    // current: 3 face + 6 chord bytes) then the bytes. Older/absent blobs keep
-    // the compiled defaults.
-    int m = i + 3;
-    if (m + 1 + FA_N + CA_N <= (int) sizeof(buf) && buf[m] == 2) {
-        for (int a = 0; a < FA_N; a++) { int v = buf[m + 1 + a];        if (v < 3)    g_face_btn[a]   = v; }
-        for (int a = 0; a < CA_N; a++) { int v = buf[m + 1 + FA_N + a]; if (v < SL_N) g_chord_slot[a] = v; }
-    }
-    // Sound block follows the controller bytes: sentinel 1, then [mix][track].
-    int s = m + 1 + FA_N + CA_N;
-    if (s + 2 < (int) sizeof(buf) && buf[s] == 1) {
-        if (buf[s + 1] <= MIX_RANDOM) g_mix_mode = buf[s + 1];
-        if (buf[s + 2] >= MUSIC_TRACK_MIN && buf[s + 2] <= MUSIC_TRACK_MAX) g_sel_track = buf[s + 2];
-    }
-    // Display block follows the sound block. display_decode() checks its own
-    // sentinel, range-checks every field, and resolves an image background by
-    // name against the disc's current TGA list -- so it must run after
-    // display_scan_images(). Hand it everything left in the buffer rather than
-    // a fixed width: the older four-byte form is still readable even when a
-    // long stored dial number pushes the block too close to the end for the
-    // full name-bearing one. buf is zeroed above, so any bytes past what was
-    // actually written read as an absent block.
-    int dsp = s + 3;
-    if (dsp + 4 <= (int) sizeof(buf)) {
-        display_decode(buf + dsp, (int) sizeof(buf) - dsp, &g_display);
-    }
-}
-static void options_save(void) {
-    uint8_t buf[64]; int n = 0;
-    buf[n++] = (uint8_t) g_difficulty;
-    for (int i = 0; g_dialnum[i] && n < 62; i++) buf[n++] = (uint8_t) g_dialnum[i];
-    buf[n++] = 0;
-    buf[n++] = (uint8_t) g_music_level;           // audio levels: [music][pcm], 0..7
-    buf[n++] = (uint8_t) g_pcm_level;
-    buf[n++] = 2;                                 // controller-mapping format sentinel
-    for (int a = 0; a < FA_N && n < 62; a++) buf[n++] = (uint8_t) g_face_btn[a];
-    for (int a = 0; a < CA_N && n < 62; a++) buf[n++] = (uint8_t) g_chord_slot[a];
-    buf[n++] = 1;                                 // sound-block sentinel
-    buf[n++] = (uint8_t) g_mix_mode;              // 0..3
-    buf[n++] = (uint8_t) g_sel_track;             // 2..32
-    if (n + DISP_BLOB_BYTES <= 62) n += display_encode(&g_display, buf + n);
-    saturn_bup_write(SATURN_BUP_CONSOLE, "MOJOOPTS", "options", buf, (uint32_t) n);
-}
 static void options_menu(void);   // defined below, near the other menus
 static void keyboard_controls_page(void);   // ditto -- reached from the in-game F11 key
 static void menu_clear_full(void);
@@ -1019,13 +844,7 @@ static int menu_select(const char *title, const char *const *items, int count) {
     }
 }
 
-// Basic validation for the dial number: non-empty, digits only.
-static bool valid_dialnum(const char *s) {
-    if (!s[0]) return false;
-    int i = 0;
-    for (; s[i]; i++) if (s[i] < '0' || s[i] > '9') return false;
-    return i <= DIALNUM_MAX;   // g_dialnum has no room past this
-}
+// valid_dialnum now lives in options.h/options.cxx.
 
 // Network: edit the server dial number with the on-screen / real keyboard.
 // A/Enter accept (after validation); Start/Esc cancel. Both return to the
@@ -2408,7 +2227,9 @@ static bool tga_load_nbg0(const char *file) {
 // Returns false when the bitmap could not be loaded (or isn't the shape we
 // require), so the caller can fall back to a color background rather than
 // leaving static on screen.
-static bool title_bg_show(const char *file) {
+// external until the title module (title.h) is extracted -- called by
+// options.cxx's display_apply
+bool title_bg_show(const char *file) {
     static char loaded[16] = "";       // file currently resident in VDP2 VRAM
     bool same = true;
     for (int i = 0; i < (int) sizeof(loaded); i++) {
@@ -2468,7 +2289,9 @@ static bool title_bg_show(const char *file) {
 
 static void title_bg_show(void) { (void) title_bg_show("HOUSE.TGA"); }
 
-static void title_bg_hide(void) {
+// external until the title module (title.h) is extracted -- called by
+// options.cxx's display_apply
+void title_bg_hide(void) {
     SRL::VDP2::NBG0::ScrollDisable();
 }
 
