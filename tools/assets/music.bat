@@ -2,6 +2,9 @@
 :; set -euo pipefail
 :; cd "$(dirname "$0")"
 :;
+:; # 0. Load shared processing functions (process_bin / process_audio / process_cue)
+:; . lib/audio.sh
+:;
 :; # 1. Parse Config
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; AUDIO_URL=$(cfg AUDIO_URL)
