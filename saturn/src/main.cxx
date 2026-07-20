@@ -19,6 +19,7 @@ extern "C" {
 #include "game_titles.h"
 }
 #include "app_state.h"
+#include "input.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -72,44 +73,6 @@ extern "C" int snprintf(char *str, size_t size, const char *fmt, ...);
 #define SAVE_SLOTS 5
 
 using namespace SRL::Types;
-using Button = SRL::Input::Digital::Button;
-
-// Aggregates both hardware controller ports and both pad families (digital and
-// analog / 3D control pad) so a controller in port 1 OR port 2 works in any
-// configuration. Keeps the WasPressed/IsHeld interface so every call site is
-// unchanged. The keyboard is polled separately (saturn_keyboard_poll already
-// scans all ports), so a controller in one port + keyboard in the other works.
-struct MultiPad {
-    SRL::Input::Digital d0, d1;
-    SRL::Input::Analog  a0, a1;
-    MultiPad() : d0(0), d1(1), a0(0), a1(1) {}
-    bool WasPressed(Button b) const {
-        return (d0.IsConnected() && d0.WasPressed(b)) ||
-               (d1.IsConnected() && d1.WasPressed(b)) ||
-               (a0.IsConnected() && a0.WasPressed(b)) ||
-               (a1.IsConnected() && a1.WasPressed(b));
-    }
-    bool IsHeld(Button b) const {
-        return (d0.IsConnected() && d0.IsHeld(b)) ||
-               (d1.IsConnected() && d1.IsHeld(b)) ||
-               (a0.IsConnected() && a0.IsHeld(b)) ||
-               (a1.IsConnected() && a1.IsHeld(b));
-    }
-    // True on the frame any nav/action button edges down (edge state is not
-    // consumed, so this is safe to call alongside the per-button WasPressed calls).
-    bool AnyPressed() const {
-        return WasPressed(Button::Up)   || WasPressed(Button::Down)  ||
-               WasPressed(Button::Left) || WasPressed(Button::Right) ||
-               WasPressed(Button::A)    || WasPressed(Button::B)     ||
-               WasPressed(Button::C)    || WasPressed(Button::X)     ||
-               WasPressed(Button::Y)    || WasPressed(Button::Z)     ||
-               WasPressed(Button::L)    || WasPressed(Button::R)     ||
-               WasPressed(Button::START);
-    }
-};
-
-// One shared multi-port gamepad, used everywhere input is read.
-static MultiPad *g_pad = nullptr;
 
 // Soft reset (the Sega-mandated A+B+C+Start chord, and the typed "reboot" command)
 // returns the player to the title screen *in-process* -- NOT a hardware/SMPC reset,
@@ -169,30 +132,6 @@ static void menu_sync(void) {
     music_tick();      // advance one-shot mixes / commit debounced Dynamic switches
     SRL::Core::Synchronize();
 }
-
-// ---- configurable controller mapping ---------------------------------------
-// Two tied groups the player can remap (Options > Controller > Configure):
-//   Group 1 (face buttons): Accept, Backspace/Cancel, Type-letter -- always a
-//     permutation of {A,B,C}; reassigning one swaps with whoever held that button
-//     ("alternate when changed").
-//   Group 2 (shift chords): Autocomplete, Recall, Home/End, Line, Cursor-move and
-//     Page -- each in one of seven slots {L/R, Z+Up/Dn, Z+L/R, Z+Left/Right,
-//     Y+Up/Dn, Y+Left/Right, Y+L/R}; reassigning to a used slot swaps, to the free
-//     spare just moves ("alternate iff already used").
-//   Fixed: A accept, X space/accept+space, C type, B backspace, L+R caps toggle.
-// Everything reads through face_button()/chord_fired() so both editors honor it.
-enum { FA_ACCEPT, FA_BACK, FA_TYPE, FA_N };
-enum { CA_AUTO, CA_RECALL, CA_HOMEEND, CA_LINE, CA_CURSOR, CA_PAGE, CA_N };
-// Directional chord slots. Y is the shift for line/home-end/page (it took over the
-// old X shift; X is now a normal button); Z carries recall/cursor. Suffix: "t" =
-// shoulder triggers L/R, "d" = D-pad Left/Right.
-enum { SL_LR, SL_ZUD, SL_ZLRt, SL_ZLRd, SL_YUD, SL_YLRd, SL_YLRt, SL_N };
-
-static int g_face_btn[FA_N]   = { 0, 1, 2 };   // 0=A 1=B 2=C (Accept/Back/Type)
-static int g_chord_slot[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt, SL_YLRt };
-static const int FACE_DEFAULT[FA_N]  = { 0, 1, 2 };
-static const int CHORD_DEFAULT[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt, SL_YLRt };
-// The spare directional slot is SL_ZLRd. Caps-toggle rides the fixed L+R combo.
 
 // ---- options / difficulty --------------------------------------------------
 // (DIFF_* and g_difficulty are declared up top for ensure_typeahead.) Easy: full
@@ -392,190 +331,10 @@ static void display_options_page(void);
 
 // ---- scrollback ------------------------------------------------------------
 
-// g_scroll (how many lines the view is scrolled up from the live bottom) now
-// lives in app_state; SCROLL_PAGE/SCROLL_ALL below stay with the input module.
-static const int SCROLL_PAGE = 16;        // Page Up/Down jump size, in lines
-static const int SCROLL_ALL  = 1 << 30;   // Home: clamped down to the oldest line
-
 // Scrollback line index where the latest output block began. Captured just before
 // the interpreter runs a turn (or set to 0 for the initial room) so the pager can
 // land on the TOP of a long response instead of its bottom.
 static long g_output_start = 0;   // console_total_lines() mark taken before a turn's output
-
-// Route a physical-keyboard nav key to the scrollback. Returns true if the event
-// was a nav key (and thus consumed, so it isn't treated as text). Left/Right are
-// consumed too: they no longer move the on-screen keyboard cursor.
-static bool scroll_handle_key(const SaturnKeyEvent &ke) {
-    switch (ke.kind) {
-        case SATURN_KEY_UP:       g_scroll += 1;           return true;
-        case SATURN_KEY_DOWN:     g_scroll -= 1;           return true;
-        case SATURN_KEY_PAGEUP:   g_scroll += SCROLL_PAGE; return true;
-        case SATURN_KEY_PAGEDOWN: g_scroll -= SCROLL_PAGE; return true;
-        case SATURN_KEY_HOME:     g_scroll  = SCROLL_ALL;  return true;
-        case SATURN_KEY_END:      g_scroll  = 0;           return true;
-        case SATURN_KEY_LEFT:
-        case SATURN_KEY_RIGHT:                             return true;
-        default:                                           return false;
-    }
-}
-
-static const int PAD_SCROLL_DELAY = 30;   // frames before auto-repeat kicks in
-static const int PAD_SCROLL_RATE  = 4;    // frames between repeats while held
-
-// The A/B/C button carrying face-action `action` (FA_ACCEPT/BACK/TYPE).
-static Button face_button(int action) {
-    static const Button BTN[3] = { Button::A, Button::B, Button::C };
-    return BTN[g_face_btn[action]];
-}
-// Display names for the current mapping (SRL::Debug::Print has no width flags, so
-// callers align columns by printing the value at a fixed x).
-static const char *face_btn_name(int action) {
-    static const char *N[3] = { "A", "B", "C" };
-    return N[g_face_btn[action]];
-}
-static const char *slot_name(int slot) {
-    static const char *N[SL_N] = { "L/R", "Z+Up/Dn", "Z+L/R", "Z+Left/Right",
-                                   "Y+Up/Dn", "Y+Left/Right", "Y+L/R" };
-    return N[slot];
-}
-
-// Raw held direction of a chord slot this frame: -1 (neg: L / Up / Left),
-// +1 (pos: R / Down / Right), 0 (idle). Trigger slots yield nothing when both L+R
-// are held (that combo is the caps toggle), and plain L/R yields nothing under a
-// shift so it never clashes with the shifted trigger slots.
-static int slot_raw(int slot) {
-    bool z = g_pad->IsHeld(Button::Z), y = g_pad->IsHeld(Button::Y);
-    bool l = g_pad->IsHeld(Button::L), r = g_pad->IsHeld(Button::R);
-    bool up = g_pad->IsHeld(Button::Up),   dn = g_pad->IsHeld(Button::Down);
-    bool lt = g_pad->IsHeld(Button::Left), rt = g_pad->IsHeld(Button::Right);
-    switch (slot) {
-        case SL_LR:   if (z || y || (l && r)) return 0; return l ? -1 : r ? 1 : 0;
-        case SL_ZUD:  if (!z) return 0;                 return up ? -1 : dn ? 1 : 0;
-        case SL_ZLRt: if (!z || (l && r)) return 0;     return l ? -1 : r ? 1 : 0;
-        case SL_ZLRd: if (!z) return 0;                 return lt ? -1 : rt ? 1 : 0;
-        case SL_YUD:  if (!y) return 0;                 return up ? -1 : dn ? 1 : 0;
-        case SL_YLRd: if (!y) return 0;                 return lt ? -1 : rt ? 1 : 0;
-        case SL_YLRt: if (!y || (l && r)) return 0;     return l ? -1 : r ? 1 : 0;
-    }
-    return 0;
-}
-
-// The caps-toggle combo: L+R pressed together with no shift held. Rising edge only.
-static bool caps_combo_fired(void) {
-    static bool was = false;
-    bool now = g_pad->IsHeld(Button::L) && g_pad->IsHeld(Button::R)
-             && !g_pad->IsHeld(Button::Z) && !g_pad->IsHeld(Button::Y);
-    bool fired = now && !was;
-    was = now;
-    return fired;
-}
-
-// Per-slot edge + hold-repeat, ticked once per input frame by chord_tick().
-static struct ChordRep { int dir; int timer; bool fired; } g_chordrep[SL_N];
-static void chord_tick(void) {
-    for (int s = 0; s < SL_N; s++) {
-        int d = slot_raw(s);
-        ChordRep &r = g_chordrep[s];
-        if (d == 0)              { r.dir = 0; r.timer = 0; r.fired = false; }
-        else if (d != r.dir)     { r.dir = d; r.timer = PAD_SCROLL_DELAY; r.fired = true; }
-        else if (--r.timer <= 0) { r.timer = PAD_SCROLL_RATE; r.fired = true; }
-        else                     { r.fired = false; }
-    }
-}
-// Did chord action `action` fire in direction `dir` (-1/+1) this frame?
-static bool chord_fired(int action, int dir) {
-    const ChordRep &r = g_chordrep[g_chord_slot[action]];
-    return r.fired && r.dir == dir;
-}
-
-// Gamepad scrollback via the configurable Line / Home-End / Page chords (defaults
-// Y+Up/Down, Y+Left/Right, Y+L/R), all sharing chord_tick's per-slot hold-repeat.
-// Requires chord_tick() this frame. Call once per input frame; the on-screen
-// keyboard cursor moves on the plain D-pad (no shift) in typeahead_edit.
-static void pad_scroll_update(void) {
-    if (chord_fired(CA_LINE,    -1)) g_scroll += 1;
-    if (chord_fired(CA_LINE,    +1)) g_scroll -= 1;
-    if (chord_fired(CA_HOMEEND, -1)) g_scroll  = SCROLL_ALL;
-    if (chord_fired(CA_HOMEEND, +1)) g_scroll  = 0;
-    if (chord_fired(CA_PAGE,    -1)) g_scroll += SCROLL_PAGE;
-    if (chord_fired(CA_PAGE,    +1)) g_scroll -= SCROLL_PAGE;
-}
-
-// ---- gamepad auto-repeat ----------------------------------------------------
-// The editing buttons (D-pad, C, B, Y, L, R) should repeat while held, like the
-// real keyboard. pad_repeat_update() ticks all their timers once per frame;
-// pad_fired() then reports the initial press plus each repeat tick.
-#define PAD_REPEAT_DELAY 30   // frames before auto-repeat kicks in (~0.5s)
-#define PAD_REPEAT_RATE  4    // frames between repeats while held
-
-static struct PadRepeat { Button btn; int timer; bool fired; } g_padrep[] = {
-    { Button::Up, 0, false }, { Button::Down, 0, false },
-    { Button::Left, 0, false }, { Button::Right, 0, false },
-    { Button::L, 0, false }, { Button::R, 0, false },
-    { Button::A, 0, false }, { Button::C, 0, false },
-    { Button::B, 0, false }, { Button::X, 0, false },
-};
-
-static void pad_repeat_update(void) {
-    for (auto &r : g_padrep) {
-        if (!g_pad->IsHeld(r.btn))      { r.timer = 0; r.fired = false; }
-        else if (r.timer == 0)          { r.fired = true;  r.timer = PAD_REPEAT_DELAY; }
-        else if (--r.timer <= 0)        { r.fired = true;  r.timer = PAD_REPEAT_RATE; }
-        else                            { r.fired = false; }
-    }
-}
-
-// Initial press or a repeat tick this frame (tracked buttons); plain edge otherwise.
-static bool pad_fired(Button b) {
-    for (auto &r : g_padrep) if (r.btn == b) return r.fired;
-    return g_pad->WasPressed(b);
-}
-
-// ---- command history -------------------------------------------------------
-// Up/Down recall previously entered commands into the input line (shell-style).
-#define HISTORY_MAX 16
-static char g_history[HISTORY_MAX][KB_INPUT_MAX];
-static int  g_hist_count  = 0;    // entries stored (<= HISTORY_MAX)
-static int  g_hist_head   = 0;    // ring buffer: index of the next write slot
-static int  g_hist_browse = -1;   // -1 = editing a fresh line; >=0 = steps back from newest
-
-// Remember a submitted command. Skips blanks and consecutive duplicates, and ends
-// any in-progress browsing so the next Up starts from the newest entry again.
-static void history_push(const char *s) {
-    g_hist_browse = -1;
-    if (s == nullptr || s[0] == '\0') return;
-    if (g_hist_count > 0) {
-        int last = (g_hist_head - 1 + HISTORY_MAX) % HISTORY_MAX;
-        int i = 0; while (s[i] && g_history[last][i] && s[i] == g_history[last][i]) i++;
-        if (s[i] == '\0' && g_history[last][i] == '\0') return;   // same as most recent
-    }
-    int n = 0; while (s[n] && n < KB_INPUT_MAX - 1) { g_history[g_hist_head][n] = s[n]; n++; }
-    g_history[g_hist_head][n] = '\0';
-    g_hist_head = (g_hist_head + 1) % HISTORY_MAX;
-    if (g_hist_count < HISTORY_MAX) g_hist_count++;
-}
-
-// Copy the entry at the current browse offset into the input line.
-static void history_load(KeyboardState *k) {
-    int idx = (g_hist_head - 1 - g_hist_browse + HISTORY_MAX * 2) % HISTORY_MAX;
-    const char *s = g_history[idx];
-    int n = 0; while (s[n] && n < KB_INPUT_MAX - 1) { k->input[n] = s[n]; n++; }
-    k->input[n] = '\0';
-    k->input_len = n;
-    k->cursor = n;             // caret to the end of the recalled line
-}
-
-// older != 0 -> previous (older) command; older == 0 -> newer, clearing past the
-// newest back to an empty line. No-op when there's no history.
-static void history_recall(KeyboardState *k, int older) {
-    if (g_hist_count == 0) return;
-    if (older) {
-        if (g_hist_browse < g_hist_count - 1) { g_hist_browse++; history_load(k); }
-    } else {
-        if (g_hist_browse > 0) { g_hist_browse--; history_load(k); }
-        else { g_hist_browse = -1; k->input_len = 0; k->input[0] = '\0'; k->cursor = 0; }
-    }
-}
 
 // Set by render_console: true when the view has off-screen text below it (the
 // "more v" marker is showing). render_keyboard reads it to repaint the marker in
@@ -1527,27 +1286,9 @@ static void config_page(void) {
     }
 }
 
-// Group 1 tie: give face action `a` button `b`, swapping with whoever held it so
-// the three actions always stay a permutation of {A,B,C}.
-static void face_assign(int a, int b) {
-    for (int o = 0; o < FA_N; o++) if (o != a && g_face_btn[o] == b) g_face_btn[o] = g_face_btn[a];
-    g_face_btn[a] = b;
-}
-// Group 2 tie: give chord action `a` slot `s`; swap if another action holds it,
-// otherwise (the free spare) just move.
-static void chord_assign(int a, int s) {
-    for (int o = 0; o < CA_N; o++) if (o != a && g_chord_slot[o] == s) g_chord_slot[o] = g_chord_slot[a];
-    g_chord_slot[a] = s;
-}
-
 static const char *const FACE_LABEL[FA_N]  = { "Accept", "Backspace/Cancel", "Type Letter" };
 static const char *const CHORD_LABEL[CA_N] = { "Autocomplete", "Recall", "Home/End",
                                                "Line Up/Down", "Cursor Move", "Page Up/Down" };
-
-static void mapping_reset_defaults(void) {
-    for (int a = 0; a < FA_N; a++) g_face_btn[a]   = FACE_DEFAULT[a];
-    for (int a = 0; a < CA_N; a++) g_chord_slot[a] = CHORD_DEFAULT[a];
-}
 
 // Live remap editor: 3 face rows + 6 chord rows, then Reset, OK and Cancel. Up/Down
 // pick a row, Left/Right cycle its button/slot (applying the tie rules). OK saves;
