@@ -11,7 +11,9 @@
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
 :; ls -ls "$tmp/img"
 :; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
+:; echo "srccue $srccue."
 :; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
+:; echo "srcbin $srcbin."
 :; split_bincue "$srccue" "$srcbin" "$AUDIO_DIR"
 :; echo "Audio split complete -> $AUDIO_DIR"
 :; GAME_DIR=$(cfg GAME_DIR); GAME_DIR=${GAME_DIR:-./game}
