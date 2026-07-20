@@ -23,6 +23,7 @@ extern "C" {
 #include "console_view.h"
 #include "options.h"
 #include "soft_reset.h"
+#include "menu.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -84,14 +85,7 @@ using namespace SRL::Types;
 // longjmp back to it. Configured options live in backup RAM, so they survive the
 // jump. g_title_jmp/g_title_jmp_armed and g_story_filename now live in app_state.
 
-// One menu frame: keep looping PCM sounds alive while a modal menu is open (the
-// ping-pong hand-off needs sound_service() every frame, or the loop starves and
-// goes silent). Menu loops call this in place of a bare Synchronize.
-static void menu_sync(void) {
-    sound_service();
-    music_tick();      // advance one-shot mixes / commit debounced Dynamic switches
-    SRL::Core::Synchronize();
-}
+// menu_sync now lives in menu.h/menu.cxx.
 
 // ---- options / display ------------------------------------------------------
 // options_load, options_save, display_apply, display_cycle_row, valid_dialnum,
@@ -106,10 +100,8 @@ void title_bg_hide(void);
 static void options_menu(void);   // defined below, near the other menus
 static void keyboard_controls_page(void);   // ditto -- reached from the in-game F11 key
 static void menu_clear_full(void);
-static bool menu_confirm(const char *line1, const char *line2);  // defined below
-// Defined below too: it draws a menu box, so it has to follow MenuBacking and
-// menu_frame, while its callers (the reboot/quit commands) sit above them.
-static bool confirm_return_to_title(const char *question);
+// menu_confirm now declared in menu.h.
+static bool confirm_return_to_title(const char *question);   // defined below; called above by the reboot/quit commands
 static void sound_options_page(void);
 static void display_options_page(void);
 
@@ -553,96 +545,8 @@ extern "C" void saturn_die(const char *fmt, ...) {
 
 static void menu_clear_full(void) { for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r); }
 
-static void menu_clear(void) {
-    for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
-}
-
-// ---- opaque backing for menus over an image --------------------------------
-// NBG3 (the text layer) treats palette entry 0 as transparent, so a menu frame
-// drawn over an image background shows the picture through its interior and the
-// text sits directly on the artwork.
-//
-// A VDP2 window fixes just the box: NBG0 (the image) is switched off inside the
-// menu rectangle, the back plane colour shows through there, and NBG3's text
-// draws over it as usual. Outside the box the picture is untouched.
-//
-// SGL exposes no constants for this, so the encoding was read out of the
-// library. slScrWindowMode(scrn, mode) is
-//
-//     mov.l IMM_VDP2_WCTLA, r0    ; 0x060ffd90
-//     mov.b r5, @(r0, r4)
-//
-// -- a byte store of `mode` at 0x060ffd90 + scrn, into SGL's work-RAM shadow of
-// WCTLA..WCTLD which it flushes at vblank. The scn constants confirm the
-// mapping: NBG1=0, NBG0=1, NBG3=2, NBG2=3, SPR=4, RBG0=5 is exactly those four
-// 16-bit registers in big-endian byte order, so `mode` is the raw per-screen
-// WCTL byte. slScrWindow0 takes plain pixel coordinates (it shifts X left
-// itself for the 320-dot mode's half-dot units) and clears the line-window
-// pointer, so a rectangle is all it is.
-#define WIN_W0_ENABLE  0x02   // WCTL bit 1: window 0 applies to this screen
-#define WIN_W0_INSIDE  0x00   // WCTL bit 0: the rect's inside is the window
-#define WIN_W0_OUTSIDE 0x01   // ...its outside is
-
-// The one bit that could not be settled from the library: whether the screen is
-// suppressed inside the window or outside it. If the image turns out to be
-// hidden *everywhere except* the menu box, swap INSIDE for OUTSIDE here and
-// nothing else changes.
-#define WIN_NBG0_MENU  (WIN_W0_ENABLE | WIN_W0_INSIDE)
-
-// Point window 0 at a character-cell box. Cells are 8x8 and the display is
-// 320x224, so the rectangle is just the box scaled up, clamped to the screen.
-static void menu_window_rect(int x0, int y0, int w, int h) {
-    int x1 = x0 * 8,             y1 = y0 * 8;
-    int x2 = (x0 + w) * 8 - 1,   y2 = (y0 + h) * 8 - 1;
-    if (x2 > 319) x2 = 319;
-    if (y2 > 223) y2 = 223;
-    if (x1 < 0)   x1 = 0;
-    if (y1 < 0)   y1 = 0;
-    slScrWindow0((uint16_t) x1, (uint16_t) y1, (uint16_t) x2, (uint16_t) y2);
-}
-
-// Refcounted, because pages nest: Options opens Display, and the inner page
-// closing must not clear the windowing while the outer one is still up.
-//
-// Scoped rather than paired calls. Every one of the seven pages has several
-// exit paths, and "remember to undo this on all of them" is the exact shape of
-// bug that has already cost this file a release -- a destructor cannot forget.
-static int g_menu_backing_depth = 0;
-
-struct MenuBacking {
-    MenuBacking() {
-        if (g_menu_backing_depth++ == 0) slScrWindowModeNbg0(WIN_NBG0_MENU);
-    }
-    ~MenuBacking() {
-        if (--g_menu_backing_depth == 0) slScrWindowModeNbg0(0);   // window off
-    }
-};
-
-// Draw a w x h box of +--+ chrome at (x0, y0) and center `title` on its second
-// row. Every menu page uses this so the chrome and title placement stay
-// identical; pages differ only in the box they ask for.
-//
-// The caller owns the interior: content starts at (x0 + 2, y0 + 3) by
-// convention -- row y0 + 2 stays blank under the title -- and must stay inside
-// x0 + w - 2 so it never overwrites the right border.
-static void menu_frame(int x0, int y0, int w, int h, const char *title) {
-    // Aim the image-suppressing window at this box. Done on every draw rather
-    // than once on open, so a nested page's box takes over while it is up and
-    // the outer one's is restored the moment it redraws.
-    menu_window_rect(x0, y0, w, h);
-    for (int r = 0; r < h; r++) {
-        char line[42]; int p = 0;
-        for (int c = 0; c < w && p < (int) sizeof(line) - 1; c++)
-            line[p++] = (r == 0 || r == h - 1) ? ((c == 0 || c == w - 1) ? '+' : '-')
-                      : ((c == 0 || c == w - 1) ? '|' : ' ');
-        line[p] = '\0';
-        SRL::Debug::Print(x0, y0 + r, "%s", line);
-    }
-    int len = 0; while (title[len]) len++;
-    int tx = x0 + (w - len) / 2;
-    if (tx < x0 + 1) tx = x0 + 1;
-    SRL::Debug::Print(tx, y0 + 1, "%s", title);
-}
+// menu_clear, menu_window_rect, g_menu_backing_depth, MenuBacking, and
+// menu_frame now live in menu.h/menu.cxx.
 
 // A digit jumps to a row and acts on it in one press: value rows cycle forward
 // on a plain digit and backward on the shifted symbol, action rows activate.
@@ -711,139 +615,8 @@ static bool confirm_return_to_title(const char *question) {
     }
 }
 
-// Wait for any button/key (used for "press any key" prompts).
-static void menu_wait(void) {
-    SRL::Core::Synchronize();
-    for (;;) {
-        if (g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::B) ||
-            g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START)) return;
-        if (saturn_keyboard_poll().kind != SATURN_KEY_NONE) return;
-        SRL::Core::Synchronize();
-    }
-}
-
-// Draw a centered box with one or two lines of text. Returns at once without
-// waiting or synchronizing: the save/load result screens follow it with
-// menu_wait(), while the dialing screens redraw it every frame.
-//
-// Both lines are sized into the box, so a hint passed as line2 is budgeted the
-// same as any other row. Where a caller passes hint(), the pad and keyboard
-// variants must be the SAME length ("L+R = cancel" / "Esc = cancel" are both
-// 12) so the box does not resize when the player switches input device; if a
-// pair ever differs, size the box off the longer one.
-//
-// The caller owns any MenuBacking guard. Screens that are a single blocking
-// message declare one; loops that already hold one do not need a second.
-static void menu_message(const char *title, const char *line1, const char *line2) {
-    int l1 = 0, l2 = 0;
-    while (line1 && line1[l1]) l1++;
-    while (line2 && line2[l2]) l2++;
-
-    int content_w = (l1 > l2 ? l1 : l2);
-    int rows      = (l2 > 0) ? 2 : 1;
-    int x0, y0, w, h;
-    menu_box_fit(title, content_w, rows, &x0, &y0, &w, &h);
-
-    menu_clear();
-    menu_frame(x0, y0, w, h, title);
-    if (l1) SRL::Debug::Print(x0 + 2, y0 + 3, "%s", line1);
-    if (l2) SRL::Debug::Print(x0 + 2, y0 + 4, "%s", line2);
-}
-
-// The hint line drawn at the bottom of the box (see hint() calls below), named
-// once so its width feeds both the sizing math and the draw call -- if the
-// wording changes, the box width follows automatically instead of drifting
-// out of sync with a hardcoded column count.
-static const char MENU_SELECT_HINT_PAD[] = "pad picks   C=ok   B=back";
-static const char MENU_SELECT_HINT_KBD[] = "num picks   Enter=ok   Esc=back";
-
-// Modal list menu. Returns the chosen index, or -1 if cancelled. Navigable by
-// gamepad (D-pad + A/C/Start, B cancels) or keyboard (number keys pick directly,
-// Enter picks the highlighted item, Backspace cancels).
-static int menu_select(const char *title, const char *const *items, int count) {
-    const int VIS = 16;         // max list rows shown at once; longer lists scroll
-    MenuBacking backing;        // opaque while the list is up; restored on exit
-    int sel = 0;
-    int top = 0;                // index of the first visible row
-    int i;
-
-    // Width: the longest item, plus the "> " cursor and the reserved digit
-    // columns. Reserved unconditionally so the box does not resize when the
-    // player switches between the pad and a keyboard mid-menu.
-    int content_w = 0;
-    for (i = 0; i < count; i++) {
-        int len = 0;
-        while (items[i][len]) len++;
-        if (len > content_w) content_w = len;
-    }
-    content_w += 2 + MENU_DIGIT_COLS;
-
-    // The hint line shares the box with the list (same cx origin), so its
-    // width must be budgeted too -- otherwise it overwrites the right border
-    // on menus whose items are shorter than the hint. Budget the LONGER of
-    // the two variants unconditionally, same reasoning as MENU_DIGIT_COLS
-    // above: the box must not resize when the player flips input devices
-    // mid-menu, so both must fit regardless of which one is drawn this frame.
-    int hint_w = (int) sizeof(MENU_SELECT_HINT_PAD) - 1;
-    int hint_kbd_w = (int) sizeof(MENU_SELECT_HINT_KBD) - 1;
-    if (hint_kbd_w > hint_w) hint_w = hint_kbd_w;
-    if (hint_w > content_w) content_w = hint_w;
-
-    // Rows: the visible slice, plus the two scroll markers and a blank line and
-    // the hint. The markers keep their rows whether or not they are drawn, so
-    // the box does not jump as the list scrolls.
-    int rows = (count < VIS ? count : VIS) + 4;
-
-    int x0, y0, w, h;
-    menu_box_fit(title, content_w, rows, &x0, &y0, &w, &h);
-
-    SRL::Core::Synchronize();   // consume any stale button/key edge
-    for (;;) {
-        check_soft_reset();   // A+B+C+Start -> back to the title screen
-        if (g_pad->WasPressed(Button::Up))    sel = (sel - 1 + count) % count;
-        if (g_pad->WasPressed(Button::Down))  sel = (sel + 1) % count;
-        bool pick = g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START);
-        bool cancel = g_pad->WasPressed(Button::B);
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        note_input_device(ke);
-        if (ke.kind == SATURN_KEY_ENTER) pick = true;
-        else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
-        else if (ke.kind == SATURN_KEY_CHAR) {
-            // Digits name the visible rows, not absolute indices, so every entry
-            // of a long game list stays reachable as the player scrolls.
-            int idx = menu_visible_digit(ke.ch, top, VIS, count);
-            if (idx >= 0) { sel = idx; pick = true; }
-        }
-        else if (ke.kind == SATURN_KEY_UP)   sel = (sel - 1 + count) % count;
-        else if (ke.kind == SATURN_KEY_DOWN) sel = (sel + 1) % count;
-        if (cancel) return -1;
-        if (pick)   return sel;
-
-        // scroll the window so the selection stays visible
-        if (sel < top)             top = sel;
-        else if (sel >= top + VIS) top = sel - VIS + 1;
-        int last = top + VIS; if (last > count) last = count;
-
-        bool nums = !g_kbd_visible;   // digits only while a keyboard is in hand
-
-        menu_clear();
-        menu_frame(x0, y0, w, h, title);
-        int cx = x0 + 2, cy = y0 + 3;
-        SRL::Debug::Print(cx, cy, "%s", top > 0 ? "^ more" : "      ");
-        for (i = top; i < last; i++) {
-            char mark = (i == sel) ? '>' : ' ';
-            int  vis  = i - top;      // 0-based row within the window
-            if (nums && vis < 9)
-                SRL::Debug::Print(cx, cy + 1 + vis, "%c %d) %s", mark, vis + 1, items[i]);
-            else
-                SRL::Debug::Print(cx, cy + 1 + vis, "%c    %s", mark, items[i]);
-        }
-        SRL::Debug::Print(cx, cy + 1 + (last - top), "%s", last < count ? "v more" : "      ");
-        SRL::Debug::Print(cx, cy + 3 + (last - top), "%s",
-            hint(MENU_SELECT_HINT_PAD, MENU_SELECT_HINT_KBD));
-        menu_sync();
-    }
-}
+// menu_wait, menu_message, and menu_select (with its MENU_SELECT_HINT_PAD/KBD
+// hint strings) now live in menu.h/menu.cxx.
 
 // valid_dialnum now lives in options.h/options.cxx.
 
@@ -1769,58 +1542,7 @@ static int pick_slot_and_name(int device, int *out_slot, char *out_name, int max
     }
 }
 
-// Yes/no confirmation. Returns true if confirmed (C / A / Start / Enter / Y),
-// false if declined (B / N).
-static bool menu_confirm(const char *line1, const char *line2) {
-    MenuBacking backing;        // opaque behind the box while the prompt is up
-    int l1 = 0, l2 = 0;
-    while (line1 && line1[l1]) l1++;
-    while (line2 && line2[l2]) l2++;
-
-    // Everything drawn inside the box counts toward its width, hints included.
-    // The widest non-message row is the keyboard hint, "Enter = Yes     Esc = No"
-    // (24); the digit row is 15. Budgeted unconditionally -- pad wording is
-    // shorter, but sizing to it would make the box grow the moment the player
-    // switched to a keyboard.
-    //
-    // Deliberately does NOT add MENU_DIGIT_COLS the way menu_select does. There
-    // the digits are a per-row prefix that shifts every item's text rightward,
-    // so the columns have to be added to the item width. Here they are a
-    // standalone row that prefixes nothing, and the 24-column floor above
-    // already covers it -- unconditionally, so the box still cannot resize when
-    // the input device changes, which is the invariant that constant protects.
-    int content_w = (l1 > l2 ? l1 : l2);
-    if (content_w < 24) content_w = 24;
-    int x0, y0, w, h;
-    menu_box_fit("CONFIRM", content_w, (l2 > 0 ? 5 : 4), &x0, &y0, &w, &h);
-
-    SRL::Core::Synchronize();   // consume the edge that got us here
-    for (;;) {
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        note_input_device(ke);
-        if (ke.kind == SATURN_KEY_ENTER) return true;
-        if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) return false;
-        if (ke.kind == SATURN_KEY_CHAR) {
-            if (ke.ch == 'y' || ke.ch == 'Y' || ke.ch == '1') return true;
-            if (ke.ch == 'n' || ke.ch == 'N' || ke.ch == '2') return false;
-        } else {
-            if (g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START))
-                return true;
-            if (g_pad->WasPressed(Button::B)) return false;
-        }
-
-        menu_clear();
-        menu_frame(x0, y0, w, h, "CONFIRM");
-        int cx = x0 + 2, cy = y0 + 3;
-        if (l1) SRL::Debug::Print(cx, cy, "%s", line1);
-        if (l2) SRL::Debug::Print(cx, cy + 1, "%s", line2);
-        int hy = cy + (l2 > 0 ? 3 : 2);
-        if (!g_kbd_visible) SRL::Debug::Print(cx, hy, "1) Yes    2) No");
-        SRL::Debug::Print(cx, hy + 1, "%s",
-            hint("A / C = Yes     B = No", "Enter = Yes     Esc = No"));
-        menu_sync();
-    }
-}
+// menu_confirm now lives in menu.h/menu.cxx.
 
 // Pick a backup device (cartridge only if inserted) then a slot (showing each
 // slot's existing save comment). Returns 1 with *out_device/*out_slot set, or 0.
