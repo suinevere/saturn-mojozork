@@ -7,6 +7,8 @@
 :; tmp=$(mktemp -d)
 :; echo "Downloading audio image: $AUDIO_URL"
 :; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
+:; echo "ls - ls"
+:; ls -ls
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
 :; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
 :; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
