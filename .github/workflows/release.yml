@@ -72,8 +72,8 @@ jobs:
           STAGE=$(mktemp -d)
           DISC_DIR="Zork - Infocom Collection (Netlink Edition)"
           mkdir -p "$STAGE/$DISC_DIR"
-          cp saturn/BuildDrop/mojozork.cue "$STAGE/$DISC_DIR/mojozork.cue"
-          cp saturn/BuildDrop/mojozork.bin "$STAGE/$DISC_DIR/mojozork.bin"
+          cp saturn/BuildDrop/zaturn.cue "$STAGE/$DISC_DIR/zaturn.cue"
+          cp saturn/BuildDrop/zaturn.bin "$STAGE/$DISC_DIR/zaturn.bin"
           NAME="zork-infocom-collection-netlink-edition-${VER}"
           (cd "$STAGE" && zip -r "$RUNNER_TEMP/${NAME}.zip" .)
           echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
@@ -88,7 +88,7 @@ jobs:
           KIT="$STAGE/zork-asset-kit"
           mkdir -p "$KIT/base"
           # Base ISO = injection input for games.bat (Zork 1/2/3 baked in).
-          cp saturn/BuildDrop/mojozork.iso "$KIT/base/mojozork.iso"
+          cp saturn/BuildDrop/zaturn.iso "$KIT/base/zaturn.iso"
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
           cp -r tools/assets/. "$KIT/"
           # png/ is background source art for the build's PNG->TGA step, not kit
