@@ -11,3 +11,6 @@ cd/data/ABS.TXT
 cd/data/BIB.TXT
 cd/data/CPY.TXT
 build.log
+
+# Image arftifacts
+cd/data/**/*.TGA
