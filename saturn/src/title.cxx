@@ -13,7 +13,7 @@
 #include "input.h"
 #include "soft_reset.h"
 #include "saturn_keyboard.h"
-#include "SRL.hpp"
+#include <srl.hpp>
 #include <string.h>
 
 #define SOFT_RESET_HOLD 60
