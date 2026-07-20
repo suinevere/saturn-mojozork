@@ -62,7 +62,7 @@ jobs:
         working-directory: tools/assets
         run: |
           set -e
-          cue=$(ls output/*.cue)
+          cue=$(ls output/**/*.cue)
           echo "=== $cue ==="; cat "$cue"
           grep -q 'TRACK 01 MODE1/2352' "$cue"
           audio=$(grep -c 'TRACK .* AUDIO' "$cue")
