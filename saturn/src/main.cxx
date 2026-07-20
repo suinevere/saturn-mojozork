@@ -25,6 +25,7 @@ extern "C" {
 #include "soft_reset.h"
 #include "menu.h"
 #include "menu_pages.h"
+#include "save_ui.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -75,7 +76,6 @@ static void ensure_typeahead() {
 // snprintf links from newlib; the SRL dummy <stdio.h> omits its declaration.
 extern "C" int snprintf(char *str, size_t size, const char *fmt, ...);
 
-#define SAVE_SLOTS 5
 
 using namespace SRL::Types;
 
@@ -605,192 +605,8 @@ static bool confirm_return_to_title(const char *question) {
 
 
 
-// Per-game backup filename for a slot: the story's base name (uppercased, up to
-// 9 chars, extension dropped) + the slot digit. Gives each game its own 5 slots.
-static void make_slot_name(char *out, int slot) {
-    int i = 0;
-    for (const char *p = g_story_filename; *p && *p != '.' && i < 9; p++) {
-        char c = *p;
-        if (c >= 'a' && c <= 'z') c = (char) (c - 'a' + 'A');
-        out[i++] = c;
-    }
-    out[i++] = (char) ('0' + slot);
-    out[i] = 0;
-}
 
-// Pick a backup device (cartridge only when inserted). Returns the device id, or
-// -1 if cancelled.
-static int choose_device(const char *title) {
-    const char *dev_items[2];
-    int dev_ids[2];
-    int ndev = 0;
-    dev_items[ndev] = "Console (internal)"; dev_ids[ndev] = SATURN_BUP_CONSOLE; ndev++;
-    if (saturn_bup_present(SATURN_BUP_CARTRIDGE)) {
-        dev_items[ndev] = "Cartridge"; dev_ids[ndev] = SATURN_BUP_CARTRIDGE; ndev++;
-    }
-    int d = menu_select(title, dev_items, ndev);
-    return (d < 0) ? -1 : dev_ids[d];
-}
 
-// Combined save-slot picker + in-place name editor. Shows all slots for the
-// device; the player picks one (C/Enter/number), then edits THAT slot's name
-// right in the list -- the cursor stays on the line they picked. Backspace/B
-// while editing goes back to slot selection; A/Enter confirms. Returns 1 with
-// *out_slot/out_name set, or 0 if cancelled. out_name is empty if left blank.
-static int pick_slot_and_name(int device, int *out_slot, char *out_name, int maxchars) {
-    MenuBacking backing;        // the box owns its area while the picker is up
-
-    // Both hint variants of both states. Everything drawn inside a box counts
-    // toward its width, hints included, and the LONGER variant is budgeted
-    // unconditionally so the box does not resize when the player switches
-    // between the pad and a keyboard mid-menu.
-    static const char PICK_HINT_PAD[] = "pad picks   C=edit   B=back";
-    static const char PICK_HINT_KBD[] = "num picks   Enter=edit   Esc=back";
-    static const char EDIT_HINT_PAD[] = "C=type X=space  B=back  A=OK";
-    static const char EDIT_HINT_KBD[] = "type name  Esc=back  Enter=OK";
-
-    char slotname[SAVE_SLOTS][12];
-    for (int i = 0; i < SAVE_SLOTS; i++) {
-        char fn[12];
-        make_slot_name(fn, i);
-        if (!saturn_bup_info(device, fn, slotname[i])) slotname[i][0] = '\0';
-    }
-
-    int sel = 0;
-    int editing = 0;
-    KeyboardState k;
-    keyboard_reset(&k);
-    SRL::Core::Synchronize();   // consume the device-pick edge
-
-    for (;;) {
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        note_input_device(ke);
-
-        if (!editing) {
-            bool pick = false, cancel = false;
-            if (ke.kind == SATURN_KEY_ENTER) pick = true;
-            else if (ke.kind == SATURN_KEY_ESCAPE || ke.kind == SATURN_KEY_BACKSPACE) cancel = true;
-            else if (ke.kind == SATURN_KEY_CHAR) {
-                // Slot list never scrolls, so the window is the whole list.
-                int idx = menu_visible_digit(ke.ch, 0, SAVE_SLOTS, SAVE_SLOTS);
-                if (idx >= 0) { sel = idx; pick = true; }
-            } else {
-                if (g_pad->WasPressed(Button::Up))   sel = (sel - 1 + SAVE_SLOTS) % SAVE_SLOTS;
-                if (g_pad->WasPressed(Button::Down)) sel = (sel + 1) % SAVE_SLOTS;
-                if (g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START)) pick = true;
-                if (g_pad->WasPressed(Button::B)) cancel = true;
-            }
-            if (cancel) return 0;
-            if (pick) {
-                keyboard_reset(&k);
-                for (int i = 0; slotname[sel][i] && k.input_len < maxchars; i++)
-                    keyboard_type_char(&k, slotname[sel][i]);
-                if (k.input_len > 0) {   // picker on the last char of the pre-filled name
-                    char last = k.input[k.input_len - 1];
-                    for (int r = 0; r < KB_ROWS; r++)
-                        for (int c = 0; c < KB_COLS; c++)
-                            if (KB_LAYOUT[r][c] == last) { k.cursor_row = r; k.cursor_col = c; }
-                }
-                editing = 1;
-                SRL::Core::Synchronize();
-                continue;
-            }
-        } else {
-            bool submit = false;
-            if (ke.kind == SATURN_KEY_ENTER) submit = true;
-            else if (ke.kind == SATURN_KEY_ESCAPE) { editing = 0; SRL::Core::Synchronize(); continue; }
-            else if (ke.kind == SATURN_KEY_CLEAR) { k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; }  // Ctrl+C
-            else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
-            else if (ke.kind == SATURN_KEY_CHAR) { if (k.input_len < maxchars) keyboard_type_char(&k, ke.ch); }
-            else {
-                if (g_pad->WasPressed(Button::Up))    keyboard_move(&k, 0, -1);
-                if (g_pad->WasPressed(Button::Down))  keyboard_move(&k, 0,  1);
-                if (g_pad->WasPressed(Button::Left))  keyboard_move(&k, -1, 0);
-                if (g_pad->WasPressed(Button::Right)) keyboard_move(&k,  1, 0);
-                if (g_pad->WasPressed(Button::C))     { if (k.input_len < maxchars) keyboard_type(&k); }
-                if (g_pad->WasPressed(Button::X))     { if (k.input_len < maxchars) keyboard_type_char(&k, ' '); }
-                if (g_pad->WasPressed(Button::B))     { editing = 0; SRL::Core::Synchronize(); continue; }
-                if (g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::START)) submit = true;
-            }
-            if (submit) {
-                int n = k.input_len;
-                if (n > maxchars) n = maxchars;
-                for (int i = 0; i < n; i++) out_name[i] = k.input[i];
-                out_name[n] = '\0';
-                *out_slot = sel;
-                return 1;
-            }
-        }
-
-        // Same slot menu either way; the picked line becomes editable in place.
-        // Two shapes: a short slot list, or a taller box with the on-screen
-        // keyboard under it once a name is being typed. Sized per frame rather
-        // than once, because the box changes shape when `editing` flips.
-        const char *btitle = editing ? "NAME THIS SAVE" : "SAVE - PICK A SLOT";
-
-        // A slot row is a cursor mark, a space, the reserved "N) " columns
-        // (reserved whether or not drawn) and the label. saturn_bup_info caps a
-        // save comment at 10 characters, and "(empty)" is 7, so 10 is the
-        // ceiling. The edited row is the same chrome plus `maxchars` and the
-        // caret; callers pass 8, well under the row width above.
-        int row_w = 2 + MENU_DIGIT_COLS + 10;                 // 15
-        int edit_w = 2 + MENU_DIGIT_COLS + maxchars + 1;      // 14 at maxchars = 8
-        if (edit_w > row_w) row_w = edit_w;
-        int content_w;
-        int rows;
-        if (editing) {
-            int kb_w = KB_COLS * 2;                            // 26
-            int hint_w = (int) sizeof(EDIT_HINT_KBD) - 1;      // 29, the longer variant
-            if ((int) sizeof(EDIT_HINT_PAD) - 1 > hint_w) hint_w = (int) sizeof(EDIT_HINT_PAD) - 1;
-            content_w = row_w;
-            if (kb_w > content_w)   content_w = kb_w;
-            if (hint_w > content_w) content_w = hint_w;        // 29
-            // slots, blank, keyboard, blank, hint
-            rows = SAVE_SLOTS + 2 + KB_ROWS + 1;               // 12 -> h 16, fits 28
-        } else {
-            int hint_w = (int) sizeof(PICK_HINT_KBD) - 1;      // 33, the longer variant
-            if ((int) sizeof(PICK_HINT_PAD) - 1 > hint_w) hint_w = (int) sizeof(PICK_HINT_PAD) - 1;
-            content_w = row_w;
-            if (hint_w > content_w) content_w = hint_w;        // 33
-            rows = SAVE_SLOTS + 2;                             // slots, blank, hint
-        }
-        int x0, y0, w, h;
-        menu_box_fit(btitle, content_w, rows, &x0, &y0, &w, &h);
-
-        bool nums = !g_kbd_visible && !editing;   // digits are literal text while editing
-
-        menu_clear();
-        menu_frame(x0, y0, w, h, btitle);
-        int cx = x0 + 2, cy = y0 + 3;
-        for (int i = 0; i < SAVE_SLOTS; i++) {
-            char mark = (i == sel) ? '>' : ' ';
-            if (editing && i == sel) {
-                SRL::Debug::Print(cx, cy + i, "%c    %s_", mark, k.input);
-            } else {
-                const char *label = slotname[i][0] ? slotname[i] : "(empty)";
-                if (nums) SRL::Debug::Print(cx, cy + i, "%c %d) %s", mark, i + 1, label);
-                else      SRL::Debug::Print(cx, cy + i, "%c    %s", mark, label);
-            }
-        }
-        if (!editing) {
-            SRL::Debug::Print(cx, cy + SAVE_SLOTS + 1, "%s", hint(PICK_HINT_PAD, PICK_HINT_KBD));
-        } else {
-            for (int r = 0; r < KB_ROWS; r++) {
-                char rowbuf[KB_COLS * 2 + 1];
-                int p = 0;
-                for (int c = 0; c < KB_COLS; c++) {
-                    rowbuf[p++] = (r == k.cursor_row && c == k.cursor_col) ? '[' : ' ';
-                    rowbuf[p++] = KB_LAYOUT[r][c];
-                }
-                rowbuf[p] = '\0';
-                SRL::Debug::Print(cx, cy + SAVE_SLOTS + 1 + r, "%s", rowbuf);
-            }
-            SRL::Debug::Print(cx, cy + SAVE_SLOTS + 2 + KB_ROWS, "%s",
-                hint(EDIT_HINT_PAD, EDIT_HINT_KBD));
-        }
-        SRL::Core::Synchronize();
-    }
-}
 
 // menu_confirm now lives in menu.h/menu.cxx.
 
