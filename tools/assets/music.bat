@@ -7,9 +7,11 @@
 :; tmp=$(mktemp -d)
 :; echo "Downloading audio image: $AUDIO_URL"
 :; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
-:; echo "ls - ls"
-:; ls -ls
+:; echo "ls - ls $tmp"
+:; ls -ls "$tmp"
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
+:; echo "ls - ls $tmp/img"
+:; ls -ls "$tmp/img"
 :; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
 :; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
 :; [ -n "$srccue" ] && [ -n "$srcbin" ] || { echo "ERROR: no bin/cue in audio download"; exit 1; }
