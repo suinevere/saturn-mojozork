@@ -358,7 +358,7 @@ static void controls_page(void) {
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-static void keyboard_controls_page(void) {
+void keyboard_controls_page(void) {
     MenuBacking backing;
     SRL::Core::Synchronize();
     int s_arrows = g_caret_arrows, s_ins = keyboard_get_insert(),
@@ -696,7 +696,7 @@ void sound_options_page(void) {
  | Author: suinevere
  | Dependencies: display.c (DisplayState/display_palette_name/
  |   display_bg_name/display_text_name), options.c (display_apply/
- |   display_cycle_row/DCR_*/options_save), console_view.c
+ |   display_cycle_row/DCR_* / options_save), console_view.c
  |   (note_input_device/hint/g_kbd_visible), input.c (pad_repeat_update),
  |   menu.c, menu_layout.c (MENU_DIGIT_COLS), soft_reset.h
  |   (check_soft_reset)
