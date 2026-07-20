@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-19
 **Status:** Approved (design), pending spec review
-**Scope:** Saturn client only (`saturn/src/`). No behavior changes.
+**Scope:** Saturn client sources (`saturn/src/`) and the project build/asset
+scripts (`tools/*.py`, excluding the `.venv/`). No behavior changes.
 
 ## Goal
 
@@ -13,10 +14,11 @@ Two interwoven efforts across `saturn/src/`:
    modules that follow the pattern already set by `display.c`, `menu_layout.c`,
    etc. End state: `main.cxx` holds `main()`, the core game loop, and soft-reset
    wiring — nothing else.
-2. **Apply a uniform documentation convention to the entire codebase** — every
-   function in every `saturn/src/` file gets a boxed comment header, all inline
-   comments are removed (their essential rationale folded into the header), and
-   dead code is removed. See **Code Conventions** below.
+2. **Apply a uniform documentation convention to the whole tree** — every source
+   file (`saturn/src/*.{c,cxx,h}` and `tools/*.py`) gets a file-level box header
+   and a box header on every function, all inline comments are removed (their
+   essential rationale folded into the header), and dead code is removed. See
+   **Code Conventions** below.
 
 ## Non-Goals
 
@@ -57,12 +59,32 @@ trie by the online mode). Only a small core is genuinely cross-cutting. That mak
 a low-ceremony relocation viable: cluster-local state moves with its functions as
 `static`; the cross-cutting core becomes a shared `extern` seam.
 
-## Code Conventions (applies to every function in every `saturn/src/` file)
+## Code Conventions (applies to every source file in scope)
 
-**Scope boundary.** The convention applies to hand-authored client code in
-`saturn/src/` (including `net/`). Upstream/vendored interpreter sources outside
-`src/` (`mojozork.c`, `multizorkd.c`, `mojozork-libretro.c`, `mojozork-sdl3.c`)
-are out of scope by the `saturn/src/`-only boundary.
+Scope: `saturn/src/*.{c,cxx,h}` (hand-authored client code, including `net/`) and
+the project scripts `tools/*.py`. Every file gets a file-level header box; every
+function gets a function header box.
+
+**Scope boundary.** Upstream/vendored interpreter sources outside `src/`
+(`mojozork.c`, `multizorkd.c`, `mojozork-libretro.c`, `mojozork-sdl3.c`) and the
+`tools/.venv/` third-party packages are out of scope.
+
+### File-level header box
+
+At the top of every file:
+
+```
+/*----------------------
+ | File Name
+ | Description: what this file/module provides
+ | Author: suinevere
+ | Dependencies: other files/modules this file relies on
+ ----------------------*/
+```
+
+In `.py` scripts the same box is written with `#` delimiters (see Python
+adaptation below). `Author: suinevere`; `Dependencies: N/A` when the file is
+self-contained.
 
 **Generated source files.** Several `saturn/src/*.c` files are emitted by Python
 generators in `tools/`, so hand-editing the `.c` is futile — regeneration would
@@ -128,10 +150,37 @@ Every function gets a header block immediately above it, in this exact format:
 - Section-banner comments that organize a file (e.g. `---- rendering ----`) may
   remain as file/section structure; they are not function-inline comments.
 
+### Python adaptation (`tools/*.py`)
+
+- The boxes are written with `#` line delimiters instead of `/* */`, same fields
+  and same `Author: suinevere`:
+
+  ```
+  #----------------------
+  # File Name
+  # Description: ...
+  # Author: suinevere
+  # Dependencies: ...
+  #----------------------
+  ```
+
+- A Python file has no header/implementation split, so each function gets **one**
+  box (above the `def`) whose Description covers what it does; add a short *how*
+  line when the implementation is non-obvious. Fields: `Dependencies` (imported
+  modules / other scripts it shells out to), `Globals` (module-level state it
+  reads/writes), `Params`, `Returns`. `N/A` where unused.
+- The box goes above the `def`, not inside it (not a docstring), to match the C
+  convention visually. Inline `#` comments are removed under the same rule; the
+  argparse `--help`/usage strings are user-facing output, not comments, and stay.
+- These scripts include the three C generators; updating a generator means
+  updating both the script itself (Python boxes) **and** the C template it emits
+  (C boxes), per **Generated source files** above.
+
 ### Dead code
 
-- During each file's pass, functions and file-scope statics that are **defined but
-  never referenced anywhere in `saturn/src/`** are candidates for removal.
+- During each file's pass, functions and file-scope statics (or module-level
+  Python defs) that are **defined but never referenced anywhere in the in-scope
+  tree** are candidates for removal.
 - Removal is **surfaced as a finding and confirmed before deletion** — never
   removed blind, because a symbol may be reached only via a callback, an
   `extern "C"` seam, asm, or the SRL/libretro entry points. The plan produces the
@@ -216,10 +265,14 @@ one links against already-moved substrate:
    `music_data`, `sound_blorb`, `mojozork_saturn`, and the `net/` sources). No
    relocation — headers and comments only. This batch may subdivide by file group
    for compile checkpoints. → compile.
-6. **Generators:** update `gen_solution.py`, `gen_typeahead.py`, and
-   `gen_titles.py` to emit boxed headers for the functions they generate, re-run
-   each, and commit the regenerated `typeahead_solution.c` / `typeahead_zork.c` /
-   `game_titles.c`. → compile.
+6. **Python tooling:** apply the convention (file box, per-`def` boxes, inline-
+   comment removal, dead-code pass) to every `tools/*.py` script —
+   `gen_solution.py`, `gen_typeahead.py`, `gen_titles.py`, `make_tga.py`,
+   `filter_win.py`, `tests/test_make_tga.py`. For the three generators, also update
+   the C template each emits to carry the C boxes, then re-run and commit the
+   regenerated `typeahead_solution.c` / `typeahead_zork.c` / `game_titles.c`.
+   Verified by running the Python tests (`test_make_tga.py`) and, for generators,
+   confirming the regenerated `.c` still compiles in the Saturn build.
 
 A batch is complete only when `compile.bat` links clean, host tests pass, and the
 game boots to the title screen with menus, save/load, options, and online mode all
