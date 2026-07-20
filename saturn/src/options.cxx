@@ -5,7 +5,7 @@
  |   here.
  | Author: suinevere
  | Dependencies: app_state.h, input.h, display.h, saturn_backup.h, music.h,
- |   title.h (forward-declared until the title module is extracted), SRL
+ |   title.h, SRL
  ----------------------*/
 
 #include <srl.hpp>
@@ -14,17 +14,12 @@
 #include "app_state.h"
 #include "input.h"
 #include "display.h"
+#include "title.h"
 
 extern "C" {
 #include "saturn_backup.h"
 #include "music.h"
 }
-
-// ---- forward declarations: resolved by title.h once the title module is
-// extracted (Phase 3). Both definitions still live in main.cxx; they were
-// un-static'd there so this translation unit can link against them.
-bool title_bg_show(const char *file);
-void title_bg_hide(void);
 
 /*----------------------
  | text_set_color
