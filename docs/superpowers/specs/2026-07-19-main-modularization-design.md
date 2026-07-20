@@ -60,13 +60,26 @@ a low-ceremony relocation viable: cluster-local state moves with its functions a
 ## Code Conventions (applies to every function in every `saturn/src/` file)
 
 **Scope boundary.** The convention applies to hand-authored client code in
-`saturn/src/` (including `net/`). Generated data files (`typeahead_solution.c`,
-whose 4,700-char lines hold trie tables, and any similar data blobs) are excluded
-from comment stripping and box-per-line treatment; their handful of real functions
-still get a box, but the generated data is left alone. Upstream/vendored
-interpreter sources outside `src/` (`mojozork.c`, `multizorkd.c`,
-`mojozork-libretro.c`, `mojozork-sdl3.c`) are already out of scope by the
-`saturn/src/`-only boundary.
+`saturn/src/` (including `net/`). Upstream/vendored interpreter sources outside
+`src/` (`mojozork.c`, `multizorkd.c`, `mojozork-libretro.c`, `mojozork-sdl3.c`)
+are out of scope by the `saturn/src/`-only boundary.
+
+**Generated source files.** Several `saturn/src/*.c` files are emitted by Python
+generators in `tools/`, so hand-editing the `.c` is futile — regeneration would
+overwrite it. For these, **the generator's C template is the source of truth**:
+the generator is updated to emit boxed headers (with `Author: suinevere`) for the
+functions it writes and to follow the comment rules, so its output conforms on the
+next regeneration. Generators and their targets:
+
+| Generator | Emits |
+|---|---|
+| `tools/typeahead/gen_solution.py` | `saturn/src/typeahead_solution.c` |
+| `tools/typeahead/gen_typeahead.py` | `saturn/src/typeahead_zork.c` |
+| `tools/gametitles/gen_titles.py` | `saturn/src/game_titles.c` |
+
+Only the functions the templates emit get boxes; the bulk data tables themselves
+(trie/word arrays) are left as-is. After updating a generator, it is re-run and the
+regenerated file is committed so the tree matches the template.
 
 ### Boxed comment header
 
@@ -88,7 +101,9 @@ Every function gets a header block immediately above it, in this exact format:
   definition in the `.c`/`.cxx`.
 - **Description differs by file:** the `.h` box says **what** the function does
   (the caller's view); the `.c`/`.cxx` box says **how** it does it (the
-  implementer's view). Each description is **fewer than three sentences**.
+  implementer's view). Keep descriptions concise — typically a sentence or two —
+  but there is **no hard sentence cap**; expand when needed to preserve a
+  non-obvious caveat.
 - The metadata fields are the same in both places:
   - **Dependencies** — other source files this function calls into (e.g.
     `display.c`, `menu_layout.c`, SRL). `N/A` if it calls nothing outside its own
@@ -105,13 +120,11 @@ Every function gets a header block immediately above it, in this exact format:
 
 - **Remove all inline comments** (in-body and trailing). Their content is either
   obvious from the code (drop it) or a non-obvious *why* (fold it into the header
-  box's Description within the three-sentence budget).
+  box's Description).
 - **Rationale-preservation rule:** where a comment records a caveat that cannot be
   recovered from the code — TV-overscan row handling, MenuBacking refcount cleanup
   across `longjmp`, save-blob sentinel/back-compat formats, buffer-cap reasons —
-  the *why* is preserved in the box Description. If a critical caveat genuinely
-  cannot fit three sentences, it is flagged in the plan for a human decision
-  rather than silently dropped.
+  the *why* is preserved in the box Description, at whatever length that takes.
 - Section-banner comments that organize a file (e.g. `---- rendering ----`) may
   remain as file/section structure; they are not function-inline comments.
 
@@ -197,12 +210,16 @@ one links against already-moved substrate:
 3. **Boot/content:** `title`, `game_catalog`. → compile.
 4. **Modes + trim:** `online`, then `main.cxx` reduced to loop + wiring. → compile.
 5. **Pre-existing modules doc pass:** apply the convention + dead-code pass to the
-   already-clean files (`display`, `menu_layout`, `music`, `sound`, `typeahead`,
-   `typeahead_extract`, `keyboard`, `saturn_keyboard`, `game_titles`,
+   already-clean hand-authored files (`display`, `menu_layout`, `music`, `sound`,
+   `typeahead`, `typeahead_extract`, `keyboard`, `saturn_keyboard`,
    `saturn_backup`, `saturn_compat`, `console`, `term`, `music_cdda`,
    `music_data`, `sound_blorb`, `mojozork_saturn`, and the `net/` sources). No
    relocation — headers and comments only. This batch may subdivide by file group
    for compile checkpoints. → compile.
+6. **Generators:** update `gen_solution.py`, `gen_typeahead.py`, and
+   `gen_titles.py` to emit boxed headers for the functions they generate, re-run
+   each, and commit the regenerated `typeahead_solution.c` / `typeahead_zork.c` /
+   `game_titles.c`. → compile.
 
 A batch is complete only when `compile.bat` links clean, host tests pass, and the
 game boots to the title screen with menus, save/load, options, and online mode all
