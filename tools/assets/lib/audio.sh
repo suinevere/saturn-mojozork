@@ -31,8 +31,10 @@ split_bincue() {
 }
 
 # merge_disc <game_dir> <audio_dir> <out_dir>
-# Copies game bin/cue + audio bins into out_dir and rebuilds a multi-FILE cue:
-# track 1 verbatim from the game cue, audio tracks regenerated from track*.bin.
+# Creates a multi-bin disc image: copies game bin + audio bins to output dir,
+# then generates a multi-FILE CUE sheet. Audio bins are NOT stitched into the game bin;
+# they remain separate, with the CUE sheet referencing both files. This is the standard
+# multi-bin approach for Sega Saturn disc releases.
 merge_disc() {
   local gdir="$1" adir="$2" out="$3"
   mkdir -p "$out"
