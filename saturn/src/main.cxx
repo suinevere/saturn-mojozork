@@ -22,6 +22,7 @@ extern "C" {
 #include "input.h"
 #include "console_view.h"
 #include "options.h"
+#include "soft_reset.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -116,7 +117,7 @@ static void display_options_page(void);
 
 // True if `line` is exactly "reboot" (case-insensitive). The reboot command is
 // global -- available from both the local game prompt and the online terminal.
-static int is_reboot_command(const char *line) {
+int is_reboot_command(const char *line) {
     static const char cmd[] = "reboot";
     int i;
     for (i = 0; cmd[i]; i++) {
@@ -161,7 +162,7 @@ static int is_quit_command(const char *line) {
 // in-process restart, not an SMPC reset -- the console never re-reads the CD. If
 // the jump target isn't armed yet (can't happen once main is running), fall back
 // to the SMPC reset-button NMI.
-static void soft_reset_to_title(void) {
+void soft_reset_to_title(void) {
     net_connect_close();          // idempotent: drops the modem link if online
     sound_stop_all();             // stop any playing/looping sound before we bail out
     if (g_title_jmp_armed) longjmp(g_title_jmp, 1);
@@ -176,14 +177,14 @@ static void soft_reset_to_title(void) {
 static const int SOFT_RESET_HOLD = 30;
 
 // True when the software-reset chord (A+B+C+Start) is physically held this frame.
-static bool soft_reset_chord_held(void) {
+bool soft_reset_chord_held(void) {
     return g_pad->IsHeld(Button::A) && g_pad->IsHeld(Button::B) &&
            g_pad->IsHeld(Button::C) && g_pad->IsHeld(Button::START);
 }
 
 // Poll the software-reset chord. Call once per frame from the input loops; it never
 // returns once the chord has been held long enough (it soft-resets to the title).
-static void check_soft_reset(void) {
+void check_soft_reset(void) {
     static int hold = 0;
     hold = soft_reset_chord_held() ? (hold + 1) : 0;
     if (hold >= SOFT_RESET_HOLD) soft_reset_to_title();
