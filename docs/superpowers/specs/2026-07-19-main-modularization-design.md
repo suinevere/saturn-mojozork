@@ -1,4 +1,4 @@
-# main.cxx Modularization — Design
+# main.cxx Modularization + Codebase Documentation Convention — Design
 
 **Date:** 2026-07-19
 **Status:** Approved (design), pending spec review
@@ -6,21 +6,28 @@
 
 ## Goal
 
-Turn `saturn/src/main.cxx` from a 3,595-line god file into a thin orchestrator by
-relocating its self-contained clusters into topical `.cxx`/`.h` modules that follow
-the pattern already established by `display.c`, `menu_layout.c`, `music`, `sound`,
-etc. The end state: `main.cxx` holds `main()`, the core game loop, and soft-reset
-wiring — nothing else.
+Two interwoven efforts across `saturn/src/`:
+
+1. **Modularize `main.cxx`** — turn the 3,595-line god file into a thin
+   orchestrator by relocating its self-contained clusters into topical `.cxx`/`.h`
+   modules that follow the pattern already set by `display.c`, `menu_layout.c`,
+   etc. End state: `main.cxx` holds `main()`, the core game loop, and soft-reset
+   wiring — nothing else.
+2. **Apply a uniform documentation convention to the entire codebase** — every
+   function in every `saturn/src/` file gets a boxed comment header, all inline
+   comments are removed (their essential rationale folded into the header), and
+   dead code is removed. See **Code Conventions** below.
 
 ## Non-Goals
 
 - **No test-seam split.** We are physically relocating code, not extracting pure
   host-testable cores behind new interfaces. SRL/Saturn calls stay inline in the
   moved functions. No new unit tests are written for relocated code.
-- **No behavior change.** This is a mechanical refactor. Every screen, menu, key,
-  and save slot must behave identically before and after.
-- **No unrelated cleanup.** Naming, dead code, and micro-refactors are out of
-  scope except where a move mechanically requires it (e.g. a forward declaration).
+- **No behavior change.** This is a mechanical refactor plus documentation. Every
+  screen, menu, key, and save slot must behave identically before and after.
+- **No logic refactor.** Naming, control-flow, and algorithm changes are out of
+  scope. The only substantive edits are relocation, the comment convention, and
+  removal of code proven dead. (Dead-code removal *is* in scope; see below.)
 - **No build-system change.** The makefile already globs `src/*.c` + `src/*.cxx`,
   so new files are compiled automatically. `CMakeLists.txt` (host tests) only
   needs entries if we add tests — we are not.
@@ -49,6 +56,73 @@ by the input functions; CD dir tables by the title/catalog functions; the online
 trie by the online mode). Only a small core is genuinely cross-cutting. That makes
 a low-ceremony relocation viable: cluster-local state moves with its functions as
 `static`; the cross-cutting core becomes a shared `extern` seam.
+
+## Code Conventions (applies to every function in every `saturn/src/` file)
+
+**Scope boundary.** The convention applies to hand-authored client code in
+`saturn/src/` (including `net/`). Generated data files (`typeahead_solution.c`,
+whose 4,700-char lines hold trie tables, and any similar data blobs) are excluded
+from comment stripping and box-per-line treatment; their handful of real functions
+still get a box, but the generated data is left alone. Upstream/vendored
+interpreter sources outside `src/` (`mojozork.c`, `multizorkd.c`,
+`mojozork-libretro.c`, `mojozork-sdl3.c`) are already out of scope by the
+`saturn/src/`-only boundary.
+
+### Boxed comment header
+
+Every function gets a header block immediately above it, in this exact format:
+
+```
+/*----------------------
+ | Function Name
+ | Description:
+ | Author: suinevere
+ | Dependencies: other-file deps this function requires
+ | Globals: globals read or written
+ | Params: inputs
+ | Returns: output
+ ----------------------*/
+```
+
+- The **box lives in both files**: above the declaration in the `.h` and above the
+  definition in the `.c`/`.cxx`.
+- **Description differs by file:** the `.h` box says **what** the function does
+  (the caller's view); the `.c`/`.cxx` box says **how** it does it (the
+  implementer's view). Each description is **fewer than three sentences**.
+- The metadata fields are the same in both places:
+  - **Dependencies** — other source files this function calls into (e.g.
+    `display.c`, `menu_layout.c`, SRL). `N/A` if it calls nothing outside its own
+    translation unit and the standard library.
+  - **Globals** — file-scope/`app_state` globals it reads or writes. `N/A` if none.
+  - **Params** — each parameter, or `N/A` for `void`.
+  - **Returns** — the return value's meaning, or `N/A` for `void`.
+- **`Author: suinevere`** on every box.
+- Any field with nothing to say is `N/A` (never left blank).
+- `static` file-local functions get the box above the definition in the `.c`/`.cxx`;
+  they have no `.h` declaration, so their box carries the **how** description.
+
+### Comment rules
+
+- **Remove all inline comments** (in-body and trailing). Their content is either
+  obvious from the code (drop it) or a non-obvious *why* (fold it into the header
+  box's Description within the three-sentence budget).
+- **Rationale-preservation rule:** where a comment records a caveat that cannot be
+  recovered from the code — TV-overscan row handling, MenuBacking refcount cleanup
+  across `longjmp`, save-blob sentinel/back-compat formats, buffer-cap reasons —
+  the *why* is preserved in the box Description. If a critical caveat genuinely
+  cannot fit three sentences, it is flagged in the plan for a human decision
+  rather than silently dropped.
+- Section-banner comments that organize a file (e.g. `---- rendering ----`) may
+  remain as file/section structure; they are not function-inline comments.
+
+### Dead code
+
+- During each file's pass, functions and file-scope statics that are **defined but
+  never referenced anywhere in `saturn/src/`** are candidates for removal.
+- Removal is **surfaced as a finding and confirmed before deletion** — never
+  removed blind, because a symbol may be reached only via a callback, an
+  `extern "C"` seam, asm, or the SRL/libretro entry points. The plan produces the
+  candidate list; deletion happens only on confirmation.
 
 ## Design
 
@@ -110,18 +184,30 @@ Because relocated code is not host-testable and the assistant does not build
 (the user compiles via `saturn/compile.bat`), correctness is confirmed by
 **compiling after each batch** and requiring a clean link before proceeding.
 Existing host tests (`test_menu_layout`, `test_display`, `test_console`,
-`test_keyboard`, `test_term`) must still pass, since the pure modules they cover
-are untouched.
+`test_keyboard`, `test_term`) must still pass after every batch — the comment
+convention and dead-code pass must not change the behavior they cover.
 
-Batches, ordered leaf-first so each one links against already-moved substrate:
+Each batch does both jobs for the files it touches: relocation (where
+applicable) **and** the documentation convention (box headers, inline-comment
+removal, dead-code candidates surfaced). Batches are ordered leaf-first so each
+one links against already-moved substrate:
 
 1. **Substrate:** `app_state`/`options`, `console_view`, `input`. → compile.
 2. **Menus:** `menu`, `menu_pages`, `save_ui`. → compile.
 3. **Boot/content:** `title`, `game_catalog`. → compile.
 4. **Modes + trim:** `online`, then `main.cxx` reduced to loop + wiring. → compile.
+5. **Pre-existing modules doc pass:** apply the convention + dead-code pass to the
+   already-clean files (`display`, `menu_layout`, `music`, `sound`, `typeahead`,
+   `typeahead_extract`, `keyboard`, `saturn_keyboard`, `game_titles`,
+   `saturn_backup`, `saturn_compat`, `console`, `term`, `music_cdda`,
+   `music_data`, `sound_blorb`, `mojozork_saturn`, and the `net/` sources). No
+   relocation — headers and comments only. This batch may subdivide by file group
+   for compile checkpoints. → compile.
 
-A batch is complete only when `compile.bat` links clean and the game boots to the
-title screen with menus, save/load, options, and online mode all reachable.
+A batch is complete only when `compile.bat` links clean, host tests pass, and the
+game boots to the title screen with menus, save/load, options, and online mode all
+reachable. The dead-code candidate list produced across batches is confirmed with
+the user before any deletion (see Code Conventions › Dead code).
 
 ## Risks & Mitigations
 
