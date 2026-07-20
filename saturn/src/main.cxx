@@ -99,7 +99,6 @@ void title_bg_hide(void);
 
 static void options_menu(void);   // defined below, near the other menus
 static void keyboard_controls_page(void);   // ditto -- reached from the in-game F11 key
-static void menu_clear_full(void);
 // menu_confirm now declared in menu.h.
 static bool confirm_return_to_title(const char *question);   // defined below; called above by the reboot/quit commands
 static void sound_options_page(void);
@@ -434,7 +433,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         // equivalent row there is no pad branch to pick here.
         if (ke.kind == SATURN_KEY_F11) {
             keyboard_controls_page();
-            menu_clear_full();
+            menu_clear();
             SRL::Core::Synchronize();    // consume the edge that closed the page
             continue;
         }
@@ -445,7 +444,7 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
         if (ke.kind == SATURN_KEY_F12) {
             if (music_cdda_has_audio() || sound_has_audio()) {
                 sound_options_page();
-                menu_clear_full();
+                menu_clear();
                 SRL::Core::Synchronize();    // consume the edge that closed the page
             }
             continue;
@@ -542,8 +541,6 @@ extern "C" void saturn_die(const char *fmt, ...) {
 }
 
 // ---- save / restore menu ---------------------------------------------------
-
-static void menu_clear_full(void) { for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r); }
 
 // menu_clear, menu_window_rect, g_menu_backing_depth, MenuBacking, and
 // menu_frame now live in menu.h/menu.cxx.
@@ -1072,7 +1069,7 @@ static void sound_options_page(void) {
                                     if (left || right) music_set_volume(g_music_level); }
         else if (row == SR_PCM)   { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++;
                                     if (left || right) sound_set_level(g_pcm_level); }
-        else if (ok && row == SR_TOC) { toc_dump_page(); menu_clear_full(); }
+        else if (ok && row == SR_TOC) { toc_dump_page(); menu_clear(); }
         else if (ok && row == SR_OK) {   // OK
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
             music_set_mix(g_mix_mode, g_sel_track);
@@ -1293,9 +1290,9 @@ static void options_menu(void) {
         if (back) break;
         if (act) {
             if (item == OI_CONFIG) { config_page(); }
-            else if (item == OI_CONTROLS) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear_full(); }
-            else if (item == OI_DISPLAY) { display_options_page(); menu_clear_full(); }
-            else if (item == OI_SOUND) { sound_options_page(); menu_clear_full(); }
+            else if (item == OI_CONTROLS) { if (g_kbd_visible) controls_page(); else keyboard_controls_page(); menu_clear(); }
+            else if (item == OI_DISPLAY) { display_options_page(); menu_clear(); }
+            else if (item == OI_SOUND) { sound_options_page(); menu_clear(); }
             else if (item == OI_RETURN) {   // Return to Title (soft reset; never returns on Yes)
                 if (menu_confirm("Return to the title screen?", "Are you sure?")) {
                     if (diff != g_difficulty) { g_difficulty = diff; options_save(); }
@@ -2391,7 +2388,7 @@ static void online_mode(void) {
     }
     }   // dialing box down: the terminal owns the screen from here
 
-    menu_clear_full();   // wipe the box chrome before the console draws over it
+    menu_clear();   // wipe the box chrome before the console draws over it
 
     const cui_transport_t *tr = net_connect_transport();
     TermState ts; term_init(&ts);
