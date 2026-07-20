@@ -7,9 +7,8 @@
 :; tmp=$(mktemp -d)
 :; echo "Downloading audio image: $AUDIO_URL"
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img" || { echo "ERROR: Downloaded file is not a valid zip. Check the AUDIO_URL."; exit 1; }
-:; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
-:; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1)
-:; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1)
+:; srccue=$(find "$tmp/img" -iname '*.cue' | head -n1 || true)
+:; srcbin=$(find "$tmp/img" -iname '*.bin' | head -n1 || true)
 :; [ -n "$srccue" ] && [ -n "$srcbin" ] || { echo "ERROR: no bin/cue in audio download"; exit 1; }
 :; split_bincue "$srccue" "$srcbin" "$AUDIO_DIR"
 :; echo "Audio split complete -> $AUDIO_DIR"
