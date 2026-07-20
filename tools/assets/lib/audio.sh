@@ -5,11 +5,14 @@
 # split_bincue <source.cue> <source.bin> <out_dir>
 # Writes trackNN.bin for every AUDIO track; slices at 2352 bytes/sector.
 split_bincue() {
+  echo "enter split_bincue"
   local cue="$1" bin="$2" out="$3"
   mkdir -p "$out"
+  echo "step1"
   local total; total=$(file_size "$bin")
   local nums=() types=() starts=()
   local tnum="" ttype=""
+  echo "step2"
   while IFS= read -r line; do
     case "$line" in
       *TRACK\ *) tnum=$(echo "$line" | sed -E 's/.*TRACK 0*([0-9]+).*/\1/');
