@@ -22,30 +22,23 @@
 REM === Windows Execution Block ===
 SETLOCAL
 CD /D "%~dp0"
+
+REM Parse all configuration variables
 FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
     IF "%%A"=="AUDIO_URL" SET "AUDIO_URL=%%B"
-    IF "%%A"=="AUDIO_DIR" SET "AUDIO_DIR=%%B"
-)
-IF NOT DEFINED AUDIO_DIR SET "AUDIO_DIR=.\audio"
-IF NOT EXIST "%AUDIO_DIR%" MKDIR "%AUDIO_DIR%"
-SET "TMP_IMG=%TEMP%\mzaudio"
-IF EXIST "%TMP_IMG%" RMDIR /S /Q "%TMP_IMG%"
-MKDIR "%TMP_IMG%"
-ECHO Downloading audio image: %AUDIO_URL%
-curl -L -o "%TEMP%\mzaudio.zip" "%AUDIO_URL%"
-IF ERRORLEVEL 1 ( ECHO ERROR: audio download failed & EXIT /B 1 )
-powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -DestinationPath '%TMP_IMG%' -Force"
-IF ERRORLEVEL 1 ( ECHO ERROR: failed to extract audio zip & EXIT /B 1 )
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\split.ps1" -ImgDir "%TMP_IMG%" -OutDir "%AUDIO_DIR%" -Dd ".\bin\win\dd.exe"
-IF ERRORLEVEL 1 ( ECHO ERROR: audio split failed & EXIT /B 1 )
-ECHO Audio split complete -^> %AUDIO_DIR%
-FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
     IF "%%A"=="GAME_DIR" SET "GAME_DIR=%%B"
     IF "%%A"=="OUTPUT_DIR" SET "OUTPUT_DIR=%%B"
 )
+
 IF NOT DEFINED GAME_DIR SET "GAME_DIR=.\game"
 IF NOT DEFINED OUTPUT_DIR SET "OUTPUT_DIR=.\output"
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\merge.ps1" -GameDir "%GAME_DIR%" -AudioDir "%AUDIO_DIR%" -OutDir "%OUTPUT_DIR%"
-IF ERRORLEVEL 1 ( ECHO ERROR: disc merge failed & EXIT /B 1 )
+
+SET "TMP_IMG=%TEMP%\mzaudio"
+
+ECHO Processing files and merging directories...
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\split.ps1" -BinDir "%GAME_DIR%" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%"
+IF ERRORLEVEL 1 ( ECHO ERROR: disc processing failed & EXIT /B 1 )
+
+ECHO Process complete -^> %OUTPUT_DIR%
 ENDLOCAL
 GOTO :eof

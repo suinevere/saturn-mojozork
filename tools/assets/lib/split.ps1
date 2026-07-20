@@ -1,23 +1,73 @@
-param([string]$ImgDir,[string]$OutDir,[string]$Dd)
-$cue = Get-ChildItem -Path $ImgDir -Recurse -Filter *.cue | Select-Object -First 1
-$bin = Get-ChildItem -Path $ImgDir -Recurse -Filter *.bin | Select-Object -First 1
-if (-not $cue -or -not $bin) { Write-Error "no bin/cue in audio download"; exit 1 }
-$total = (Get-Item $bin.FullName).Length
-function MsfToFrames($m){ $p=$m -split ':'; return ((([int]$p[0])*60+[int]$p[1])*75+[int]$p[2]) }
-$tracks=@(); $tnum=$null; $ttype=$null
-foreach ($line in Get-Content $cue.FullName) {
-  if ($line -match 'TRACK\s+0*(\d+)\s+(\w+/?\w*)') { $tnum=[int]$Matches[1]; $ttype=$Matches[2] }
-  elseif ($line -match 'INDEX\s+01\s+(\d{2}:\d{2}:\d{2})') {
-    $tracks += [pscustomobject]@{ Num=$tnum; Type=$ttype; Start=(MsfToFrames $Matches[1]) }
-  }
+param(
+    [Parameter(Mandatory=$true)][string]$BinDir,
+    [Parameter(Mandatory=$true)][string]$CueMusicDir,
+    [Parameter(Mandatory=$true)][string]$OutDir
+)
+
+$baseName = "Zaturn - Complete (USA)"
+$FinalOut = Join-Path $OutDir $baseName
+
+# 1. Create the new subdirectory in Output
+if (-not (Test-Path $FinalOut)) {
+    New-Item -ItemType Directory -Force -Path $FinalOut | Out-Null
 }
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-for ($i=0; $i -lt $tracks.Count; $i++) {
-  if ($tracks[$i].Type -notlike 'AUDIO*') { continue }
-  $start=$tracks[$i].Start
-  $end = if ($i+1 -lt $tracks.Count) { $tracks[$i+1].Start } else { [int]($total/2352) }
-  $count=$end-$start
-  $name = "track{0:D2}.bin" -f $tracks[$i].Num
-  & $Dd "if=$($bin.FullName)" "of=$OutDir\$name" bs=2352 skip=$start count=$count 2>$null
-  Write-Host "  split -> $name ($count sectors)"
+
+# 2. Process BIN dir (Track 01)
+$singleBin = Get-ChildItem -Path $BinDir -Filter *.bin -File | Select-Object -First 1
+if (-not $singleBin) {
+    Write-Error "No .bin file found in $BinDir"
+    exit 1
 }
+$destTrack01 = Join-Path $FinalOut "$baseName (Track 01).bin"
+Copy-Item -Path $singleBin.FullName -Destination $destTrack01 -Force
+Write-Host "Copied BIN dir track -> $baseName (Track 01).bin"
+
+# 3. Process CUE AND MUSIC dir - Copy and Rename BINs (Excluding Track 1)
+$musicBins = Get-ChildItem -Path $CueMusicDir -Filter *.bin -File
+foreach ($mBin in $musicBins) {
+    if ($mBin.Name -match 'Track\s*0?1\b') {
+        Write-Host "Skipping Track 1 from music dir: $($mBin.Name)"
+        continue
+    }
+
+    if ($mBin.Name -match 'Track\s*(\d+)') {
+        $trackNum = "{0:D2}" -f [int]$Matches[1]
+        $newName = "$baseName (Track $trackNum).bin"
+        $destPath = Join-Path $FinalOut $newName
+
+        Copy-Item -Path $mBin.FullName -Destination $destPath -Force
+        Write-Host "Copied $($mBin.Name) -> $newName"
+    }
+}
+
+# 4. Process CUE File - Find and Replace FILE lines, then Copy
+$cueFile = Get-ChildItem -Path $CueMusicDir -Filter *.cue -File | Select-Object -First 1
+if ($cueFile) {
+    $cueLines = Get-Content $cueFile.FullName
+    $newCueLines = @()
+    $trackCounter = 1
+
+    foreach ($line in $cueLines) {
+        # Check if the line starts with FILE (ignoring leading spaces)
+        if ($line -match '^\s*FILE\b') {
+            $trackStr = "{0:D2}" -f $trackCounter
+            # Overwrite the line with the exact requested hyphen string
+            $newCueLines += "FILE `"Zaturn - Complete (USA) (Track $trackStr).bin`" BINARY"
+            $trackCounter++
+        } else {
+            # Keep all TRACK and INDEX lines exactly as they are
+            $newCueLines += $line
+        }
+    }
+
+    $destCue = Join-Path $FinalOut "$baseName.cue"
+
+    # Write the modified lines to the new destination (NON-DESTRUCTIVE)
+    $newCueLines | Set-Content -Path $destCue -Encoding UTF8
+
+    Write-Host "Processed and copied CUE file -> $baseName.cue"
+} else {
+    Write-Warning "No .cue file found in $CueMusicDir"
+}
+
+Write-Host "Done!"
