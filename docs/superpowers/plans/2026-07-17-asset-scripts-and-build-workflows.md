@@ -919,7 +919,7 @@ git commit -m "Add asset-kit scaffolding, .gitignore, and README"
 
 **Interfaces:**
 - Consumes: `games.bat`, `music.bat`, the SDK build, `saturn/BuildDrop/mojozork.iso` as the base ISO.
-- Produces: a workflow artifact `zork-full-image-<sha>` containing `tools/assets/output/`.
+- Produces: a workflow artifact `zaturn-complete-<sha>` containing `tools/assets/output/`.
 
 - [ ] **Step 1: Write the workflow**
 
@@ -999,7 +999,7 @@ jobs:
       - name: Upload full disc artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zork-full-image-${{ github.sha }}
+          name: zaturn-complete-${{ github.sha }}
           path: tools/assets/output
 ```
 

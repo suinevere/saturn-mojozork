@@ -75,5 +75,5 @@ jobs:
       - name: Upload full disc artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zork-full-image-${{ github.sha }}
+          name: zaturn-complete-${{ github.sha }}
           path: tools/assets/Zaturn - Complete (USA) (Netlink Edition)/
