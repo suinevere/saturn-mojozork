@@ -18,8 +18,11 @@ static const char *const BG_NAME[DISP_BG_COLOR_N] = {
     "Bright Cyan", "Green", "Bright White"
 };
 
-/* Text colors, in selector order. White is ANSI 37 (light gray), not true
-   white -- that is what makes the BBC Micro and MSX presets look right. */
+/* Text colors, in selector order. ANSI 37 is a light gray, and it is named that
+   here: it is what makes the BBC Micro and MSX presets look right, but it is not
+   what a player asking for white expects. True white (ANSI 97) is its own entry,
+   appended last so the indices already written into save blobs keep their
+   colors. */
 static const unsigned short TEXT_RGB[DISP_TEXT_N] = {
     DISP_RGB555(0xFF, 0xAF, 0x00),   /* Bright Amber   ANSI 38;5;214 */
     DISP_RGB555(0x00, 0x00, 0x00),   /* Black          ANSI 30  */
@@ -27,13 +30,14 @@ static const unsigned short TEXT_RGB[DISP_TEXT_N] = {
     DISP_RGB555(0x55, 0x55, 0xFF),   /* Light Blue     ANSI 94  */
     DISP_RGB555(0x00, 0xAA, 0xAA),   /* Cyan           ANSI 36  */
     DISP_RGB555(0xFF, 0xFF, 0x55),   /* Bright Yellow  ANSI 93  */
-    DISP_RGB555(0xAA, 0xAA, 0xAA),   /* White          ANSI 37  */
-    DISP_RGB555(0x55, 0xFF, 0x55)    /* Bright Green   ANSI 92  */
+    DISP_RGB555(0xAA, 0xAA, 0xAA),   /* Gray           ANSI 37  */
+    DISP_RGB555(0x55, 0xFF, 0x55),   /* Bright Green   ANSI 92  */
+    DISP_RGB555(0xFF, 0xFF, 0xFF)    /* White          ANSI 97  */
 };
 
 static const char *const TEXT_NAME[DISP_TEXT_N] = {
     "Bright Amber", "Black", "Green", "Light Blue",
-    "Cyan", "Bright Yellow", "White", "Bright Green"
+    "Cyan", "Bright Yellow", "Gray", "Bright Green", "White"
 };
 
 /* Microcomputer presets. Names are shortened where the full hardware name
@@ -52,8 +56,8 @@ static const DisplayPreset PRESETS[DISP_PRESET_N] = {
     { "VIC-20",          DISP_BG_LIGHT_GRAY,   DISP_TEXT_CYAN          },
     { "TI-99/4A",        DISP_BG_BRIGHT_CYAN,  DISP_TEXT_BLACK         },
     { "Amstrad CPC 464", DISP_BG_BLUE,         DISP_TEXT_BRIGHT_YELLOW },
-    { "BBC Micro",       DISP_BG_BLACK,        DISP_TEXT_WHITE         },
-    { "MSX Standard",    DISP_BG_BLUE,         DISP_TEXT_WHITE         },
+    { "BBC Micro",       DISP_BG_BLACK,        DISP_TEXT_GRAY          },
+    { "MSX Standard",    DISP_BG_BLUE,         DISP_TEXT_GRAY          },
     { "TRS-80 CoCo",     DISP_BG_GREEN,        DISP_TEXT_BLACK         },
     { "Atari 800",       DISP_BG_BLUE,         DISP_TEXT_LIGHT_BLUE    },
     { "IBM PC (MDA)",    DISP_BG_BLACK,        DISP_TEXT_BRIGHT_GREEN  },

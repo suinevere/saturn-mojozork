@@ -7,7 +7,7 @@
     ((unsigned short)(0x8000 | (((b) >> 3) << 10) | (((g) >> 3) << 5) | ((r) >> 3)))
 
 #define DISP_BG_COLOR_N 7    /* background colors; indices >= this are images */
-#define DISP_TEXT_N     8
+#define DISP_TEXT_N     9
 #define DISP_PRESET_N   15
 #define DISP_IMAGE_MAX  8    /* cap on bitmaps read from the disc's TGA folder */
 
@@ -27,8 +27,9 @@
 #define DISP_TEXT_LIGHT_BLUE    3
 #define DISP_TEXT_CYAN          4
 #define DISP_TEXT_BRIGHT_YELLOW 5
-#define DISP_TEXT_WHITE         6
+#define DISP_TEXT_GRAY          6
 #define DISP_TEXT_BRIGHT_GREEN  7
+#define DISP_TEXT_WHITE         8
 
 #ifdef __cplusplus
 extern "C" {

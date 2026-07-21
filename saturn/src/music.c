@@ -76,7 +76,8 @@ static int g_active_cat = -1;           /* category currently sounding, -1 = non
 static int g_pending_cat = -1;          /* debounce: category waiting to commit */
 static int g_pending_track = 0;
 static int g_pending_frames = 0;
-#define MUSIC_DEBOUNCE_FRAMES 360       /* ~6s @ 60fps */
+#define MUSIC_DEBOUNCE_FRAMES 180       /* ~3s @ 60fps: how long a new room must
+                                           hold before its track takes over */
 static int g_debounce_frames = MUSIC_DEBOUNCE_FRAMES;
 static int (*g_isplaying)(void) = 0;
 static int (*g_isshort)(int) = 0;
@@ -93,10 +94,17 @@ void music_set_isshort(int (*fn)(int)) { g_isshort = fn; }
 void music_set_debounce_frames(int n) { g_debounce_frames = (n < 0) ? 0 : n; }
 static int trk_is_short(int t) { return g_isshort ? g_isshort(t) : 0; }
 
+/* Room the current Dynamic track was chosen for, so loop-end can tell "still
+   here" (repeat the same track) from "moved on" (pick a fresh one). */
+static unsigned int g_track_room = 0;
+static int          g_track_room_valid = 0;
+
 /* Play `track`: looped unless it is a short/play-once track. */
 static void play_dyn(int track) {
     g_active_track = track;
     g_await_play = 1;
+    g_track_room = g_cur_room;
+    g_track_room_valid = g_have_room;
     if (g_play) g_play(track, trk_is_short(track) ? 0 : 1);
 }
 /* Pick a track from `cat`'s pool, preferring a non-short one. */
@@ -124,6 +132,7 @@ void music_reset(void) {
     g_active_cat = -1; g_pending_cat = -1; g_pending_track = 0; g_pending_frames = 0;
     g_seq_track = MUSIC_TRACK_MIN;
     g_await_play = 0;
+    g_track_room = 0; g_track_room_valid = 0;
     if (g_play) g_play(0, 0);   /* 0 = stop / keep-none */
 }
 
@@ -196,7 +205,14 @@ void music_tick(void) {
         } else if (g_mix_mode == MIX_RANDOM) {
             play_random_now();
         } else if (g_mix_mode == MIX_DYNAMIC && g_active_cat >= 0) {
-            play_dyn(pick_prefer_long(g_active_cat));
+            /* Standing in the same room the track was picked for: play it again,
+               rather than shuffling to another track of the same category under
+               a player who has not moved. Once the room has changed, a fresh
+               pick (preferring a long track) scores the new place. */
+            if (g_track_room_valid && g_have_room && g_track_room == g_cur_room)
+                play_dyn(g_active_track);
+            else
+                play_dyn(pick_prefer_long(g_active_cat));
         }
         /* MIX_OVERRIDE loops; isplaying stays true; nothing to do. */
     }

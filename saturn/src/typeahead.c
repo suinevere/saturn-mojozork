@@ -117,6 +117,11 @@ void destroy_typeahead(TrieNode* node) {
 #define SCREEN_BONUS 500
 #define HOT_MAX 64
 
+// Weight for the candidate that IS what the player typed. Above every other tier
+// (including a solution link's 20000 + base) so a complete word always leads its
+// own longer completions -- "n" stays "n" until the player cycles off it.
+#define EXACT_MATCH_WEIGHT 100000
+
 static int g_hot_gen = 0;                 // bumped each time the screen is set
 static DictionaryWord* g_hot[HOT_MAX];    // on-screen words, for empty-prefix surfacing
 static int g_nhot = 0;
@@ -329,6 +334,19 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
             if (!drop) { cand[w2] = cand[i]; wt[w2] = wt[i]; w2++; }
         }
         n = w2;
+    }
+
+    // What the player has already typed, when it is a word in its own right, leads
+    // its own completions: typing "n" offers "n" (nothing to complete, so Accept
+    // submits the move) rather than silently growing into "north". The longer
+    // words stay in the list one cycle away.
+    if (plen > 0) {
+        for (int i = 0; i < n; i++) {
+            const char* t = cand[i]->text;
+            int j = 0;
+            while (j < plen && t[j] && t[j] == (char) tolower((unsigned char) prefix[j])) j++;
+            if (j == plen && t[j] == '\0') { wt[i] = EXACT_MATCH_WEIGHT; break; }
+        }
     }
 
     // Selection-sort the top `max` by descending weight.

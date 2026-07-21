@@ -103,7 +103,7 @@ int main(void) {
     CHECK(g_track >= MUSIC_TRACK_MIN && g_track <= MUSIC_TRACK_MAX);
     playing = 1; (void)r0;
 
-    /* --- Short Dynamic track: one-shot, then re-pick from same pool (prefer long) --- */
+    /* --- Short Dynamic track, same room: repeats itself --- */
     for (int i = 0; i < 64; i++) short_set[i] = 0;
     music_set_mix(MIX_DYNAMIC, 10); music_reset(); music_set_debounce_frames(0);
     /* Make every UNDERGROUND track short except one, force first pick short via seed search. */
@@ -114,10 +114,19 @@ int main(void) {
     music_note_output("A cave tunnel passage.", 22); music_on_turn(40);
     /* first pick may be short -> played one-shot */
     if (isshort(g_track)) CHECK(g_loop == 0);
+    int room40_track = g_track;
     playing = 1; music_tick();     /* track registers as playing -> latch clears */
-    playing = 0; music_tick();     /* short ended -> re-pick, must land on the one long track */
+    playing = 0; music_tick();     /* short ended, player has not moved -> same track again */
+    CHECK(g_track == room40_track);
+    playing = 1;
+
+    /* --- Same category, new room: loop-end re-picks (prefer long) --- */
+    music_note_output("Another cave tunnel passage.", 28); music_on_turn(41);
+    CHECK(g_track == room40_track);  /* the move alone does not interrupt the stream */
+    playing = 1; music_tick();       /* repeat registers as playing -> latch clears */
+    playing = 0; music_tick();       /* the room moved on -> fresh pick for the new place */
     CHECK(in_pool(MC_UNDERGROUND, g_track));
-    CHECK(isshort(g_track) == 0);  /* prefers the non-short track */
+    CHECK(isshort(g_track) == 0);    /* prefers the non-short track */
     CHECK(g_loop == 1);
     playing = 1;
 

@@ -36,8 +36,10 @@ static void test_known_colors(void) {
     assert(display_bg_rgb(DISP_BG_BRIGHT_WHITE) == rgb(0xFF, 0xFF, 0xFF));
     assert(display_text_rgb(DISP_TEXT_BRIGHT_AMBER) == rgb(0xFF, 0xAF, 0x00));
     assert(display_text_rgb(DISP_TEXT_BRIGHT_GREEN) == rgb(0x55, 0xFF, 0x55));
-    /* ANSI 37 is light gray, not true white -- keeps BBC Micro / MSX authentic. */
-    assert(display_text_rgb(DISP_TEXT_WHITE) == rgb(0xAA, 0xAA, 0xAA));
+    /* ANSI 37 is light gray and named Gray -- keeps BBC Micro / MSX authentic.
+       White is its own entry and is actually white. */
+    assert(display_text_rgb(DISP_TEXT_GRAY)  == rgb(0xAA, 0xAA, 0xAA));
+    assert(display_text_rgb(DISP_TEXT_WHITE) == rgb(0xFF, 0xFF, 0xFF));
 }
 
 static void test_preset_contents(void) {
