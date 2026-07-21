@@ -48,7 +48,7 @@ jobs:
         run: |
           set -e
           mkdir -p tools/assets/base
-          cp saturn/BuildDrop/zaturn.iso tools/assets/base/zaturn.iso
+          cp saturn/BuildDrop/zaturn.iso tools/assets/Zaturn (USA) (Netlink Edition)/zaturn.iso
 
       - name: Download games + inject
         working-directory: tools/assets
