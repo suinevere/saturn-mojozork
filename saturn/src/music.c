@@ -94,25 +94,31 @@ void music_set_isshort(int (*fn)(int)) { g_isshort = fn; }
 void music_set_debounce_frames(int n) { g_debounce_frames = (n < 0) ? 0 : n; }
 static int trk_is_short(int t) { return g_isshort ? g_isshort(t) : 0; }
 
-/* Room the current Dynamic track was chosen for, so loop-end can tell "still
-   here" (repeat the same track) from "moved on" (pick a fresh one). */
-static unsigned int g_track_room = 0;
-static int          g_track_room_valid = 0;
+/* Category the current Dynamic track was chosen for, so loop-end can tell "the
+   place still sounds the same" (repeat the same track) from "the mood changed"
+   (pick a fresh one). Room identity is deliberately NOT the test: walking from
+   one cave to the next cave is the same music, and re-rolling there would shuffle
+   the score under a player who has not left the category. */
+static int g_track_cat = -1;
 
 /* Play `track`: looped unless it is a short/play-once track. */
 static void play_dyn(int track) {
     g_active_track = track;
     g_await_play = 1;
-    g_track_room = g_cur_room;
-    g_track_room_valid = g_have_room;
+    g_track_cat = g_active_cat;
     if (g_play) g_play(track, trk_is_short(track) ? 0 : 1);
 }
-/* Pick a track from `cat`'s pool, preferring a non-short one. */
+/* Pick a track from `cat`'s pool, preferring a non-short one and, where the pool
+   allows it, one other than what is sounding now: a category change should be
+   audible, so it cycles off the current track instead of possibly re-rolling it. */
 static int pick_prefer_long(int cat) {
     const unsigned char* p; int n = music_category_pool(cat, &p);
     if (n <= 0) return 0;
     int longs[64], m = 0;
-    for (int i = 0; i < n && m < 64; i++) if (!trk_is_short(p[i])) longs[m++] = p[i];
+    for (int i = 0; i < n && m < 64; i++)
+        if (!trk_is_short(p[i]) && p[i] != g_active_track) longs[m++] = p[i];
+    if (m == 0)   /* every long track is the one playing (or the pool is all short) */
+        for (int i = 0; i < n && m < 64; i++) if (!trk_is_short(p[i])) longs[m++] = p[i];
     if (m > 0) return longs[rng_next_pub() % (unsigned)m];
     return music_category_track(cat);
 }
@@ -132,7 +138,7 @@ void music_reset(void) {
     g_active_cat = -1; g_pending_cat = -1; g_pending_track = 0; g_pending_frames = 0;
     g_seq_track = MUSIC_TRACK_MIN;
     g_await_play = 0;
-    g_track_room = 0; g_track_room_valid = 0;
+    g_track_cat = -1;
     if (g_play) g_play(0, 0);   /* 0 = stop / keep-none */
 }
 
@@ -205,11 +211,12 @@ void music_tick(void) {
         } else if (g_mix_mode == MIX_RANDOM) {
             play_random_now();
         } else if (g_mix_mode == MIX_DYNAMIC && g_active_cat >= 0) {
-            /* Standing in the same room the track was picked for: play it again,
-               rather than shuffling to another track of the same category under
-               a player who has not moved. Once the room has changed, a fresh
-               pick (preferring a long track) scores the new place. */
-            if (g_track_room_valid && g_have_room && g_track_room == g_cur_room)
+            /* Still in the category this track was picked for: play it again,
+               rather than shuffling under a player whose surroundings have not
+               changed mood. A category change re-picks (see music_on_turn), so
+               the fresh-pick arm here only covers a category that moved on
+               without its own play -- keep it, and prefer a long track. */
+            if (g_track_cat == g_active_cat)
                 play_dyn(g_active_track);
             else
                 play_dyn(pick_prefer_long(g_active_cat));
@@ -244,10 +251,10 @@ void music_on_turn(unsigned int room) {
     if (target == g_active_cat) {
         g_pending_cat = -1; g_pending_track = 0;          /* smooth: keep the current stream */
     } else if (g_active_track == 0) {
-        g_active_cat = target; play_dyn(music_category_track(target));  /* first switch: immediate */
+        g_active_cat = target; play_dyn(pick_prefer_long(target));      /* first switch: immediate */
     } else if (target != g_pending_cat) {
         g_pending_cat = target;
-        g_pending_track = music_category_track(target);
+        g_pending_track = pick_prefer_long(target);
         g_pending_frames = g_debounce_frames;             /* new target: (re)start countdown */
     }
     g_turn_len = 0; g_turn_text[0] = 0;

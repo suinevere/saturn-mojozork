@@ -75,6 +75,34 @@ static void check_overlay_stub_is_reclassified(void) {
     destroy_typeahead(root);
 }
 
+/* d(own), u(p), g (again) and x (examine) are whole commands the trie does not
+   hold as words of their own, so nothing can float them to the front of their own
+   completions the way the twelve above are floated. Typed as the first word they
+   must offer NOTHING, so Accept submits the bare letter instead of growing it into
+   "door"/"under"/"get"/"xyzzy". Mid-command they are an ordinary prefix again. */
+static void check_single_letter_pass_through(void) {
+    TrieNode* root = create_trie_node();
+    insert_trie(root, create_word("door",  TYPE_NOUN, 40));
+    insert_trie(root, create_word("under", TYPE_VERB, 46));
+    insert_trie(root, create_word("get",   TYPE_VERB, 46));
+    insert_trie(root, create_word("xyzzy", TYPE_VERB, 46));
+    typeahead_add_abbreviations(root);
+    typeahead_set_easy(0, 0);
+
+    DictionaryWord* out[24];
+    static const char* PASS[] = { "d", "u", "g", "x" };
+    for (int i = 0; i < 4; i++) {
+        int n = predict_candidates(root, NULL, PASS[i], out, 24, 1);
+        if (n != 0) printf("FAIL: \"%s\" offered %d suggestion(s), first \"%s\"\n",
+                           PASS[i], n, out[0]->text);
+        CHECK(n == 0);
+    }
+    /* Two letters is a real prefix again, and so is a "d" past the first word. */
+    CHECK(predict_candidates(root, NULL, "do", out, 24, 1) > 0);
+    CHECK(predict_candidates(root, NULL, "d", out, 24, 0) > 0);
+    destroy_typeahead(root);
+}
+
 int main(void) {
     TrieNode* root = create_trie_node();
 
@@ -106,6 +134,7 @@ int main(void) {
     check_all_modes(root, "EASY/no-solution");
 
     check_overlay_stub_is_reclassified();
+    check_single_letter_pass_through();
 
     printf(fails ? "\n%d FAILURES\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;

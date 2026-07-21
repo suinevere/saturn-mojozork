@@ -120,14 +120,26 @@ int main(void) {
     CHECK(g_track == room40_track);
     playing = 1;
 
-    /* --- Same category, new room: loop-end re-picks (prefer long) --- */
+    /* --- Same category, new room: the track stays. Only a change of category
+           cycles the music; another cave is the same mood as this cave. --- */
     music_note_output("Another cave tunnel passage.", 28); music_on_turn(41);
     CHECK(g_track == room40_track);  /* the move alone does not interrupt the stream */
     playing = 1; music_tick();       /* repeat registers as playing -> latch clears */
-    playing = 0; music_tick();       /* the room moved on -> fresh pick for the new place */
+    playing = 0; music_tick();       /* loop-end, same category -> same track again */
+    CHECK(g_track == room40_track);
     CHECK(in_pool(MC_UNDERGROUND, g_track));
-    CHECK(isshort(g_track) == 0);    /* prefers the non-short track */
-    CHECK(g_loop == 1);
+    playing = 1;
+
+    /* --- New room, NEW category: the track cycles to the new category's pool --- */
+    music_note_output("A sunny forest clearing, tall trees all around.", 46);
+    music_on_turn(42);
+    music_tick();                    /* debounce is 0 -> the switch commits at once */
+    CHECK(in_pool(MC_WILDERNESS, g_track));
+    CHECK(g_track != room40_track);
+    int forest_track = g_track;
+    playing = 1; music_tick();       /* new track registers as playing */
+    playing = 0; music_tick();       /* loop-end, still wilderness -> holds */
+    CHECK(g_track == forest_track);
     playing = 1;
 
     /* --- Anti-runaway: no advance during the CD seek window ---

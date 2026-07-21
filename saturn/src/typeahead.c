@@ -262,6 +262,19 @@ int predict_candidates(TrieNode* root, DictionaryWord* prev_word,
     int wt[CAND_MAX];
     int n = 0;
     int plen = prefix ? (int) strlen(prefix) : 0;
+
+    // The four stock abbreviations the trie does NOT hold as words of their own --
+    // d(own), u(p), g (again), x (examine). The other eight one-letter commands are
+    // real trie words, so the exact-match rule below floats them to the front and
+    // Accept submits them unchanged; these four have no such entry, so the front of
+    // the list would be some longer word sharing the letter ("d" -> "door") and
+    // Accept would silently grow the command. Offer nothing at all instead: the
+    // letter the player typed is the whole command and passes through as itself.
+    if (first_word && plen == 1) {
+        char c0 = (char) tolower((unsigned char) prefix[0]);
+        if (c0 == 'd' || c0 == 'u' || c0 == 'g' || c0 == 'x') return 0;
+    }
+
     // Easy mode restricts context suggestions to the winning path, but only for an
     // actual continuation (a prev word) of a game that has a solution overlay.
     int easy_here = g_pred_easy && g_have_solution && prev_word != NULL;
