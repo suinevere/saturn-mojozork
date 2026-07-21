@@ -2,8 +2,8 @@
  | menu_pages.cxx
  | Description: Implements the Options menu and its sub-pages: the Network
  |   dial-number editor, the live control-remap editor and its two read-only
- |   Controls views (gamepad and keyboard), Sound Options and its CD TOC
- |   diagnostic dump, and Display Options. Every page constructs a
+ |   Controls views (gamepad and keyboard), Sound Options, and Display
+ |   Options. Every page constructs a
  |   MenuBacking on entry (menu.h) so an image background stays suppressed
  |   for the page's lifetime, and drops the input edge that opened it with an
  |   initial SRL::Core::Synchronize() before entering its poll loop, so the
@@ -426,103 +426,12 @@ void keyboard_controls_page(void) {
 }
 
 /*----------------------
- | toc_dump_page
- | Description: Diagnostic dump of the raw 102-longword BIOS table of contents
- |   (CDC_TgetToc), reached from Sound Options. Deliberately does NOT go
- |   through SRL::Cd::TableOfContents: that struct measures 812 bytes against
- |   the BIOS's 408, so every track entry read through it is misaligned and
- |   the tail is uninitialized stack -- see music_cdda.cxx. The TOC is static
- |   for the disc's life, so it is snapshotted once on entry. Prints the
- |   first-track, last-track and lead-out records above a scrollable per-track
- |   table showing, for CD tracks 1..99, the raw 4-bit Control nibble, the
- |   Adr nibble, the decoded type, and the 24-bit frame address. This exists
- |   to hunt the "empty / no audio track" signal: an absent track reads
- |   Control=15 (0x0f) with type Unk and frame address 16777215 (0x00FFFFFF),
- |   while a real audio track reads type Aud with a plausible frame address.
- |   Up/Down scroll one row;
- |   Left/Right page by a full screen (rows_per), clamped to
- |   [0, total - rows_per]; A/B/C/Start (or Enter/Esc/Backspace) returns.
- | Author: suinevere
- | Dependencies: SRL (SRL::Cd::TableOfContents), console_view.c
- |   (note_input_device/hint), input.c (pad_repeat_update), menu.c
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-static void toc_dump_page(void) {
-    // Raw 102-longword BIOS TOC, not SRL::Cd::TableOfContents -- that struct measures
-    // 812 bytes against the BIOS's 408, so reading through it misaligns every track
-    // entry and runs off the end of the data. See music_cdda.cxx for the layout.
-    uint32_t toc[102];
-    CDC_TgetToc(toc);
-    const int total    = 99;   // toc[0..98] = CD tracks 1..99
-    const int rows_per = 19;
-    int top = 0;
-    SRL::Core::Synchronize();
-    for (;;) {
-        check_soft_reset();
-        SaturnKeyEvent ke = saturn_keyboard_poll();
-        note_input_device(ke);
-        pad_repeat_update();
-        bool up    = g_pad->WasPressed(Button::Up)   || ke.kind == SATURN_KEY_UP;
-        bool down  = g_pad->WasPressed(Button::Down) || ke.kind == SATURN_KEY_DOWN;
-        bool left  = g_pad->WasPressed(Button::Left) || ke.kind == SATURN_KEY_LEFT;
-        bool right = g_pad->WasPressed(Button::Right)|| ke.kind == SATURN_KEY_RIGHT;
-        bool done  = g_pad->WasPressed(Button::A) || g_pad->WasPressed(Button::B)
-                   || g_pad->WasPressed(Button::C) || g_pad->WasPressed(Button::START)
-                   || ke.kind == SATURN_KEY_ENTER || ke.kind == SATURN_KEY_ESCAPE
-                   || ke.kind == SATURN_KEY_BACKSPACE;
-        if (done) break;
-        if (up)    top--;
-        if (down)  top++;
-        if (left)  top -= rows_per;
-        if (right) top += rows_per;
-        if (top > total - rows_per) top = total - rows_per;
-        if (top < 0) top = 0;
-
-        menu_clear();
-        int x = 1, y = 0;
-        SRL::Debug::Print(x, y++, "CD TOC DUMP");
-        SRL::Debug::Print(x, y++, "First C=%d N=%d",
-            (int)((toc[99]  >> 28) & 0xf), (int)((toc[99]  >> 16) & 0xff));
-        SRL::Debug::Print(x, y++, "Last  C=%d N=%d",
-            (int)((toc[100] >> 28) & 0xf), (int)((toc[100] >> 16) & 0xff));
-        SRL::Debug::Print(x, y++, "Lead  C=%d fad=%d",
-            (int)((toc[101] >> 28) & 0xf), (int)(toc[101] & 0x00ffffff));
-        y++;
-        SRL::Debug::Print(x,     y, "Trk");
-        SRL::Debug::Print(x + 6,  y, "Ct");
-        SRL::Debug::Print(x + 10, y, "Ad");
-        SRL::Debug::Print(x + 14, y, "Type");
-        SRL::Debug::Print(x + 22, y, "Frame");
-        y++;
-        for (int i = 0; i < rows_per; i++) {
-            int t = top + i;
-            if (t >= total) break;
-            int ctrl = (int)((toc[t] >> 28) & 0xf);
-            int adr  = (int)((toc[t] >> 24) & 0xf);
-            const char *tn = (ctrl == 0xf) ? "Unk" : ((ctrl & 0x4) ? "Dat" : "Aud");
-            SRL::Debug::Print(x,      y, "%d", t + 1);   // CD track number, 1-based
-            SRL::Debug::Print(x + 6,  y, "%d", ctrl);
-            SRL::Debug::Print(x + 10, y, "%d", adr);
-            SRL::Debug::Print(x + 14, y, "%s", tn);
-            SRL::Debug::Print(x + 22, y, "%d", (int)(toc[t] & 0x00ffffff));
-            y++;
-        }
-        SRL::Debug::Print(x, 27, "%s", hint("Up/Dn scroll  <> page  B=back",
-                                            "Up/Dn scroll  <> page  Esc=back"));
-        menu_sync();
-    }
-    SRL::Core::Synchronize();
-}
-
-/*----------------------
  | sound_options_page
  | Description: Sound Options (full-screen, OK/Cancel). Which rows appear
  |   depends on what is actually available: Audio Mix / Track / Music level
  |   need CD-DA on the disc (has_cd, from music_cdda_audio_tracks() > 0);
  |   PCM level needs the loaded game's .BLB (has_blb, from
- |   sound_has_audio()); OK/Cancel and the CD TOC diagnostic row always show.
+ |   sound_has_audio()); OK/Cancel always show.
  |   `sel` indexes the resulting visible-row list, not a fixed row number.
  |   Snapshots g_mix_mode/g_sel_track/g_music_level/g_pcm_level for Cancel.
  |   `previewed` tracks whether a live demo (Track row Left/Right, which
@@ -542,7 +451,7 @@ static void toc_dump_page(void) {
  | Dependencies: music.c (music_cdda_audio_tracks/music_cdda_play/
  |   music_set_volume/music_set_level/music_set_mix/music_refresh/
  |   music_start/music_cdda_has_audio/MIX_*), sound.c (sound_has_audio/
- |   sound_set_level), menu_pages.cxx (toc_dump_page), console_view.c
+ |   sound_set_level), console_view.c
  |   (note_input_device/hint/g_kbd_visible), input.c (pad_repeat_update),
  |   menu.c, menu_layout.c (MENU_DIGIT_COLS), options.c (options_save),
  |   soft_reset.h (check_soft_reset)
@@ -553,15 +462,14 @@ static void toc_dump_page(void) {
 void sound_options_page(void) {
     MenuBacking backing;
     static const char *const MIX[] = { "Dynamic", "Repeat", "Sequential", "Random" };
-    enum { SR_MIX, SR_TRACK, SR_MUSIC, SR_PCM, SR_TOC, SR_OK, SR_CANCEL };
+    enum { SR_MIX, SR_TRACK, SR_MUSIC, SR_PCM, SR_OK, SR_CANCEL };
     const unsigned char* atracks; int an = music_cdda_audio_tracks(&atracks);
     bool has_cd  = (an > 0);
     bool has_blb = (sound_has_audio() != 0);
 
-    int rows[7], nrows = 0;
+    int rows[6], nrows = 0;
     if (has_cd)  { rows[nrows++] = SR_MIX; rows[nrows++] = SR_TRACK; rows[nrows++] = SR_MUSIC; }
     if (has_blb) rows[nrows++] = SR_PCM;
-    rows[nrows++] = SR_TOC;
     rows[nrows++] = SR_OK;
     rows[nrows++] = SR_CANCEL;
 
@@ -618,7 +526,6 @@ void sound_options_page(void) {
                                     if (left || right) music_set_volume(g_music_level); }
         else if (row == SR_PCM)   { if (left && g_pcm_level > 0) g_pcm_level--; if (right && g_pcm_level < 7) g_pcm_level++;
                                     if (left || right) sound_set_level(g_pcm_level); }
-        else if (ok && row == SR_TOC) { toc_dump_page(); menu_clear(); }
         else if (ok && row == SR_OK) {
             music_set_level(g_music_level); sound_set_level(g_pcm_level);
             music_set_mix(g_mix_mode, g_sel_track);
@@ -647,7 +554,7 @@ void sound_options_page(void) {
                 case SR_TRACK:
                     if (nums) SRL::Debug::Print(x, y, "%c %d) Track", cur, i + 1);
                     else      SRL::Debug::Print(x, y, "%c    Track", cur);
-                    SRL::Debug::Print(vx, y++, "%d  (A=demo)", aidx + 1);
+                    SRL::Debug::Print(vx, y++, "%d", aidx + 1);
                     break;
                 case SR_MUSIC:
                     if (nums) SRL::Debug::Print(x, y, "%c %d) Music", cur, i + 1);
@@ -658,10 +565,6 @@ void sound_options_page(void) {
                     if (nums) SRL::Debug::Print(x, y, "%c %d) PCM", cur, i + 1);
                     else      SRL::Debug::Print(x, y, "%c    PCM", cur);
                     SRL::Debug::Print(vx, y++, "%d", g_pcm_level);
-                    break;
-                case SR_TOC:
-                    if (nums) SRL::Debug::Print(x, y++, "%c %d) View CD TOC", cur, i + 1);
-                    else      SRL::Debug::Print(x, y++, "%c    View CD TOC", cur);
                     break;
                 case SR_OK:
                     y++;

@@ -15,10 +15,11 @@ enum {
 /* Audio Mix modes (Options > Sound Options). */
 enum { MIX_DYNAMIC = 0, MIX_OVERRIDE = 1, MIX_SEQUENTIAL = 2, MIX_RANDOM = 3 };
 #define MUSIC_TRACK_MIN 2
-#define MUSIC_TRACK_MAX 33   /* Selectable ceiling: CD tracks 2..33 (selector display 1..32).
-                                This target's TOC can't count the disc's real tracks, so this
-                                is a fixed offer, not a detected count -- playing a track the
-                                disc lacks is a harmless no-op. */
+#define MUSIC_TRACK_MAX 33   /* Ceiling for the Sequential/Random mix modes and the override
+                                clamp. A fixed offer, not a detected count: playing a track
+                                the disc lacks is a harmless no-op. The Sound Options track
+                                selector does NOT use this -- it lists the disc's real audio
+                                tracks from music_cdda_audio_tracks(). */
 
 typedef struct { const char* word; unsigned char cat; } MusicKeyword;
 

@@ -2,7 +2,7 @@
  | menu_pages.h
  | Description: The Options menu and its sub-pages -- Network dial number,
  |   Controls (live remap editor + controller/keyboard controls views), Sound,
- |   Display, and the CD TOC diagnostic dump. Owns the option-menu UI only;
+ |   and Display. Owns the option-menu UI only;
  |   persistence and runtime apply of the settings these pages edit live in
  |   options.h. Three entries are called from outside this module: the main
  |   loop's Options/F10 and Sound/F12 hotkeys, and the in-game F11 Controls
@@ -50,8 +50,8 @@ void keyboard_controls_page(void);
  | sound_options_page
  | Description: Sound Options page. Which rows appear depends on what the
  |   disc/game actually provide: Audio Mix / Track / Music need CD-DA;
- |   PCM level needs the loaded game's .BLB; OK/Cancel always show. Also
- |   offers the CD TOC diagnostic dump. Previews audio live while open; OK
+ |   PCM level needs the loaded game's .BLB; OK/Cancel always show.
+ |   Previews audio live while open; OK
  |   commits and saves, Cancel restores the snapshot including live audio.
  |   Reached from the Options menu's Sound row and directly from the in-game
  |   F12 key.
