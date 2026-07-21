@@ -47,8 +47,8 @@ jobs:
       - name: Stage base ISO for the asset kit
         run: |
           set -e
-          mkdir -p tools/assets/base
-          cp saturn/BuildDrop/zaturn.iso tools/assets/Zaturn (USA) (Netlink Edition)/zaturn.iso
+          mkdir -p "tools/assets/Zaturn (USA) (Netlink Edition)"
+          cp saturn/BuildDrop/zaturn.iso "tools/assets/Zaturn (USA) (Netlink Edition)/zaturn.iso"
 
       - name: Download games + inject
         working-directory: tools/assets
@@ -62,7 +62,7 @@ jobs:
         working-directory: tools/assets
         run: |
           set -e
-          cue=$(ls output/**/*.cue)
+          cue="Zaturn - Complete (USA) (Netlink Edition)/Zaturn - Complete (USA) (Netlink Edition).cue"
           echo "=== $cue ==="; cat "$cue"
           grep -q 'TRACK 01 MODE1/2352' "$cue"
           audio=$(grep -c 'TRACK .* AUDIO' "$cue")
@@ -75,4 +75,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zork-full-image-${{ github.sha }}
-          path: tools/assets/output/Zaturn - Complete (USA) (Netlink Edition) (${REV})/
+          path: tools/assets/Zaturn - Complete (USA) (Netlink Edition)/

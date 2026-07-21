@@ -76,6 +76,7 @@ jobs:
           # One zip, files at its root -- unzip yields the files directly:
           # no nested zip, no wrapper folder. The .zip is the release asset;
           # the workflow-artifact upload uses the same staged folder.
+          mkdir -p "$RUNNER_TEMP/${NAME}"
           (cd "$STAGE" && zip -r "$RUNNER_TEMP/${NAME}/${NAME} - ${VER}.zip" .)
           echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
           echo "artifact_name=${NAME} - ${VER}"             >> "$GITHUB_OUTPUT"

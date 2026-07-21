@@ -17,8 +17,9 @@
 :; curl -L -o "$tmp/audio.zip" "$AUDIO_URL"
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
 :;
-:; # 3. Setup Final Output Directory
-:; FINAL_OUT="$OUTPUT_DIR/$DISC_NAME"
+:; # 3. Setup Final Output Directory -- OUTPUT_DIR *is* the disc folder; DISC_NAME
+:; # only names the files inside it (matching what games.bat writes there).
+:; FINAL_OUT="$OUTPUT_DIR"
 :; mkdir -p "$FINAL_OUT"
 :; echo "Processing files into -> $FINAL_OUT"
 :;

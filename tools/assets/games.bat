@@ -42,7 +42,10 @@
 :; . lib/merge.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; BASE_ISO=$(cfg BASE_ISO); OUTPUT_DIR=$(cfg OUTPUT_DIR); DISC_NAME=$(cfg DISC_NAME)
-:; inject_games "${BASE_ISO:-./Zaturn (USA) (Netlink Edition)}" "Z3" "${OUTPUT_DIR:-./game}" "${DISC_NAME:-Zaturn - Complete (USA) (Netlink Edition)}"
+:; BASE_ISO=${BASE_ISO:-./Zaturn (USA) (Netlink Edition)/zaturn.iso}
+:; DISC_NAME=${DISC_NAME:-Zaturn - Complete (USA) (Netlink Edition)}
+:; OUTPUT_DIR=${OUTPUT_DIR:-./$DISC_NAME}
+:; inject_games "$BASE_ISO" "Z3" "$OUTPUT_DIR" "$DISC_NAME"
 :; exit
 
 @ECHO OFF
@@ -90,14 +93,15 @@ IF NOT DEFINED DISC_NAME SET "DISC_NAME=Zaturn - Complete (USA) (Netlink Edition
 
 REM Normalize any forward slashes so CMD's IF EXIST / COPY behave.
 SET "BASE_ISO=%BASE_ISO:/=\%"
+SET "OUTPUT_DIR=%OUTPUT_DIR:/=\%"
 
 REM Stage the base ISO from the SDK build output if it hasn't been placed yet.
 REM (CI stages it in full-image.yml; a local run must do the same.)
 IF NOT EXIST "%BASE_ISO%" (
-    IF EXIST "..\..\saturn\BuildDrop\%DISC_NAME%.iso" (
+    IF EXIST "..\..\saturn\BuildDrop\zaturn.iso" (
         ECHO Staging base ISO from saturn\BuildDrop -^> %BASE_ISO%
         FOR %%I IN ("%BASE_ISO%") DO IF NOT EXIST "%%~dpI" MKDIR "%%~dpI"
-        COPY /Y "..\..\saturn\BuildDrop\%DISC_NAME%.iso" "%BASE_ISO%" >NUL
+        COPY /Y "..\..\saturn\BuildDrop\zaturn.iso" "%BASE_ISO%" >NUL
     )
 )
 IF NOT EXIST "%BASE_ISO%" (

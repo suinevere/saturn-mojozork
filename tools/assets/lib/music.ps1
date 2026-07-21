@@ -4,9 +4,11 @@ param(
     [Parameter(Mandatory=$true)][string]$DiscName
 )
 
-$FinalOut = Join-Path $OutDir $DiscName
+# OutDir *is* the disc folder; DiscName only names the files inside it
+# (matching what games.bat writes there).
+$FinalOut = $OutDir
 
-# 1. Create the new subdirectory in Output
+# 1. Create the disc folder if the game-injection step hasn't already
 if (-not (Test-Path $FinalOut)) {
     New-Item -ItemType Directory -Force -Path $FinalOut | Out-Null
 }
@@ -40,8 +42,8 @@ if ($cueFile) {
         # Check if the line starts with FILE (ignoring leading spaces)
         if ($line -match '^\s*FILE\b') {
             $trackStr = "{0:D2}" -f $trackCounter
-            # Overwrite the line with the exact requested hyphen string
-            $newCueLines += "FILE `"Zaturn - Complete (USA) (Track $trackStr).bin`" BINARY"
+            # Must match the names process_audio wrote above, i.e. $DiscName.
+            $newCueLines += "FILE `"$DiscName (Track $trackStr).bin`" BINARY"
             $trackCounter++
         } else {
             # Keep all TRACK and INDEX lines exactly as they are

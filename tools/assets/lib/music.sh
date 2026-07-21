@@ -30,10 +30,11 @@ process_cue() {
   [ ${#cues[@]} -gt 0 ] || { echo "Warning: No .cue file found in $am_dir"; return 0; }
 
   # Strip Windows line endings, rewrite FILE lines, pass rest through
-  tr -d '\r' < "${cues[0]}" | awk '
+  # FILE lines must match the names process_audio wrote, i.e. "$base (Track NN).bin".
+  tr -d '\r' < "${cues[0]}" | awk -v base="$base" '
     BEGIN { t = 1 }
     /^[[:space:]]*FILE/ {
-      printf "FILE \"Zaturn - Complete (USA) (Track %02d).bin\" BINARY\n", t
+      printf "FILE \"%s (Track %02d).bin\" BINARY\n", base, t
       t++
       next
     }
