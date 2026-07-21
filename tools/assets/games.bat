@@ -69,8 +69,11 @@ powershell -NoProfile -Command "Expand-Archive -Path 'temp_games.zip' -Destinati
 DEL temp_games.zip
 
 ECHO Parsing VERSIONS.ndjson and mapping files...
-REM Process the NDJSON, pipe through standard regex matchers, and move the hit
-powershell -NoProfile -Command "if (Test-Path 'VERSIONS.ndjson') { Get-Content 'VERSIONS.ndjson' | ForEach-Object { $obj = $_ | ConvertFrom-Json; $match = Get-ChildItem -Path '%TEMP_DIR%' -Recurse -File | Where-Object { $_.Name -match $obj.release -and $_.Name -match $obj.version } | Select-Object -First 1; if ($match) { Move-Item -Path $match.FullName -Destination \"Z3\$($obj.title)\" -Force; Write-Host \" -> Matched and moved: $($obj.title)\" } } }"
+REM Process the NDJSON, pipe through standard regex matchers, and move the hit.
+REM Use ONLY single quotes inside -Command: CMD doesn't honour \" as an escape,
+REM so an inner double quote reopens CMD's parser and the '>' in the progress
+REM message becomes a redirect (it used to spew a stray file named "Matched").
+powershell -NoProfile -Command "if (Test-Path 'VERSIONS.ndjson') { Get-Content 'VERSIONS.ndjson' | ForEach-Object { $obj = $_ | ConvertFrom-Json; $match = Get-ChildItem -Path '%TEMP_DIR%' -Recurse -File | Where-Object { $_.Name -match $obj.release -and $_.Name -match $obj.version } | Select-Object -First 1; if ($match) { Move-Item -LiteralPath $match.FullName -Destination (Join-Path 'Z3' $obj.title) -Force; Write-Host (' -> Matched and moved: ' + $obj.title) } } }"
 
 RMDIR /S /Q "%TEMP_DIR%"
 
