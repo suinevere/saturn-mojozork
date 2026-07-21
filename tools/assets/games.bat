@@ -41,23 +41,8 @@
 :;
 :; . lib/inject.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
-:; BASE_ISO=$(cfg BASE_ISO); BASE_ISO=${BASE_ISO:-./base/mojozork.iso}
-:; GAME_DIR=$(cfg GAME_DIR); GAME_DIR=${GAME_DIR:-./game}
-:; DISC_NAME=$(cfg DISC_NAME); DISC_NAME=${DISC_NAME:-mojozork}
-:;
-:; # Stage the base ISO from the SDK build output if it hasn't been placed yet.
-:; # (CI stages it in full-image.yml; a local run must do the same.)
-:; if [ ! -f "$BASE_ISO" ] && [ -f "../../saturn/BuildDrop/$DISC_NAME.iso" ]; then
-:;   echo "Staging base ISO from saturn/BuildDrop -> $BASE_ISO"
-:;   mkdir -p "$(dirname "$BASE_ISO")"
-:;   cp "../../saturn/BuildDrop/$DISC_NAME.iso" "$BASE_ISO"
-:; fi
-:; if [ ! -f "$BASE_ISO" ]; then
-:;   echo "ERROR: base ISO not found: $BASE_ISO"
-:;   echo "Build the Saturn disc first (cd saturn && ./compile.bat), then re-run."
-:;   exit 1
-:; fi
-:; inject_games "$BASE_ISO" "Z3" "$GAME_DIR" "$DISC_NAME"
+:; BASE_ISO=$(cfg BASE_ISO); GAME_DIR=$(cfg GAME_DIR); DISC_NAME=$(cfg DISC_NAME)
+:; inject_games "${BASE_ISO:-./base/mojozork.iso}" "Z3" "${GAME_DIR:-./game}" "${DISC_NAME:-mojozork}"
 :; exit
 
 @ECHO OFF

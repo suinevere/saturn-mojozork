@@ -67,54 +67,60 @@ jobs:
           else
             VER="${GITHUB_SHA::7}"
           fi
-          # Zip contains a single versioned folder holding the burnable disc:
-          # cue sheet + MODE1/2352 raw track.
-          STAGE=$(mktemp -d)
-          DISC_DIR="Zork - Infocom Collection (Netlink Edition)"
-          mkdir -p "$STAGE/$DISC_DIR"
-          cp saturn/BuildDrop/zaturn.cue "$STAGE/$DISC_DIR/zaturn.cue"
-          cp saturn/BuildDrop/zaturn.bin "$STAGE/$DISC_DIR/zaturn.bin"
-          NAME="zork-infocom-collection-netlink-edition-${VER}"
+          # Stage the burnable disc files flat: cue + MODE1/2352 raw track.
+          STAGE="$RUNNER_TEMP/release-stage"
+          mkdir -p "$STAGE"
+          cp saturn/BuildDrop/zaturn.cue "$STAGE/zaturn.cue"
+          cp saturn/BuildDrop/zaturn.bin "$STAGE/zaturn.bin"
+          NAME="zaturn-netlink-edition-${VER}"
+          # One zip, files at its root -- unzip yields the files directly:
+          # no nested zip, no wrapper folder. The .zip is the release asset;
+          # the workflow-artifact upload uses the same staged folder.
           (cd "$STAGE" && zip -r "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
           echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
-          echo "zip_name=${NAME}.zip"              >> "$GITHUB_OUTPUT"
 
       - name: Package build-it-yourself kit
         id: kit
         run: |
           set -e
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
-          STAGE=$(mktemp -d)
-          KIT="$STAGE/zork-asset-kit"
-          mkdir -p "$KIT/base"
+          # Stage the kit contents flat at the zip root (no wrapper folder).
+          STAGE="$RUNNER_TEMP/kit-stage"
+          mkdir -p "$STAGE/base"
           # Base ISO = injection input for games.bat (Zork 1/2/3 baked in).
-          cp saturn/BuildDrop/zaturn.iso "$KIT/base/zaturn.iso"
+          cp saturn/BuildDrop/zaturn.iso "$STAGE/base/zaturn.iso"
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
-          cp -r tools/assets/. "$KIT/"
+          cp -r tools/assets/. "$STAGE/"
           # png/ is background source art for the build's PNG->TGA step, not kit
           # input -- the kit injects games and audio into an already-built ISO.
-          rm -rf "$KIT/png"
+          rm -rf "$STAGE/png"
           # Ensure working dirs exist but are empty save for .gitkeep.
-          for d in game audio output; do mkdir -p "$KIT/$d"; find "$KIT/$d" -type f ! -name .gitkeep -delete; done
-          NAME="zork-asset-kit-${VER}"
+          for d in game audio output; do mkdir -p "$STAGE/$d"; find "$STAGE/$d" -type f ! -name .gitkeep -delete; done
+          NAME="zaturn-asset-kit-${VER}"
+          # One zip, kit contents at its root -- unzip yields the kit directly:
+          # no nested zip, no wrapper folder. The .zip is the release asset;
+          # the workflow-artifact upload uses the same staged folder.
           (cd "$STAGE" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
           echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
-          echo "zip_name=${NAME}.zip"              >> "$GITHUB_OUTPUT"
 
       # Manual runs: surface the build as a workflow artifact for inspection.
       - name: Upload as workflow artifact (manual runs)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.zip_name }}
-          path: ${{ steps.package.outputs.zip_path }}
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.stage_dir }}
 
       - name: Upload kit as workflow artifact (manual runs)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.kit.outputs.zip_name }}
-          path: ${{ steps.kit.outputs.zip_path }}
+          name: ${{ steps.kit.outputs.artifact_name }}
+          path: ${{ steps.kit.outputs.stage_dir }}
 
       # Tag runs: attach to a release, creating it if missing.
       - name: Attach to GitHub release (tag runs)
