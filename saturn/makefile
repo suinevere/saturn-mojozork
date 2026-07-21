@@ -17,8 +17,11 @@ SGL_MAX_POLYGONS = 1500         # Number of polygons that can be used
 SGL_MAX_EVENTS = 1             	# Number of events that can be used
 SGL_MAX_WORKS = 1             	# Number of works that can be used 
 
-# Disk name
-CD_NAME = zaturn
+# Disk name. Drives every BuildDrop artifact basename (.elf/.iso/.bin/.cue/.map)
+# and the cue's FILE line, so the build output is release-named as-is.
+# Safe despite the spaces/parens: shared.mk never uses BUILD_* as a rule target,
+# only inside recipes where each reference is already double-quoted.
+CD_NAME = Zaturn (USA) (Netlink Edition)
 
 # Directory build will be placed into
 BUILD_DROP = ./BuildDrop
