@@ -1175,14 +1175,16 @@ int main(void) {
     // line, and this is safe on first boot too (no backend registered yet).
     music_reset();                       // clear stale engine state (also on soft-reset re-entry)
 
-    // Show the title art first (no prompt), then load the game catalog while it is on
-    // screen, then start the menu music and let title_and_seed add the prompt on the
-    // same screen. The catalog's CD reads (Z3 folder scan + each game's header) stop
-    // CD-DA -- the Saturn's single drive head cannot play audio while reading data --
-    // so the load window is briefly silent by necessity. Doing all CD reads here means
-    // no menu screen from here on (title, categories, games) ever touches the CD again,
-    // so the menu track then plays uninterrupted. On soft-reset re-entry the preload is
-    // a no-op (already cached), so no read happens and the music starts cleanly.
+    // Show the title art first (no prompt), then load the game catalog and the
+    // background art while it is on screen, then start the menu music and let
+    // title_and_seed add the prompt on the same screen. Those CD reads (Z3 folder scan
+    // + each game's header, then every TGA) stop CD-DA -- the Saturn's single drive
+    // head cannot play audio while reading data -- so the load window is briefly silent
+    // by necessity. Doing all CD reads here means no menu screen from here on (title,
+    // categories, games, and the Options background selector) ever touches the CD
+    // again, so the menu track then plays uninterrupted. On soft-reset re-entry both
+    // preloads are no-ops (already cached), so no read happens and the music starts
+    // cleanly.
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
     text_set_color(DISP_RGB555(0xFF, 0xFF, 0xFF));
     title_bg_show("HOUSE.TGA");
@@ -1190,6 +1192,7 @@ int main(void) {
     SRL::Core::Synchronize();
 
     preload_game_catalog();              // CD reads happen once, here
+    display_preload_images();            // and the background art, into Low Work RAM
 
     music_set_level(g_music_level);      // honor the saved music level for menu audio
     music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow

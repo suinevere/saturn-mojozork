@@ -27,8 +27,10 @@ void title_draw_art(void);
 
 /*----------------------
  | title_bg_show
- | Description: Loads a TGA image from the CD into VDP2 NBG0 and displays it behind
- |   the title text (menus and gameplay stay on solid black). Accepts only uncompressed
+ | Description: Shows a TGA image on VDP2 NBG0 behind the title text (menus and
+ |   gameplay stay on solid black). Serves it from the Low Work RAM cache when
+ |   display_preload_images took it, which keeps the CD idle and the music
+ |   playing; otherwise reads it from the disc once. Accepts only uncompressed
  |   8bpp colour-mapped TGA. Returns false if the load fails or the format is
  |   unsupported, so the caller can fall back to a colour background.
  | Author: suinevere
@@ -75,6 +77,24 @@ int title_and_seed(void);
  | Returns: N/A
  ----------------------*/
 void display_scan_images(void);
+
+/*----------------------
+ | display_preload_images
+ | Description: Decodes every background registered by display_scan_images into
+ |   a Low Work RAM cache, so that cycling pictures in the Options menu uploads
+ |   from RAM instead of reading the disc. The Saturn cannot play CD-DA while
+ |   reading data, so a read under the menu track is heard as a skip; this moves
+ |   those reads into the title screen's already-silent window. Call after
+ |   display_scan_images() and before the menu music starts. Idempotent, and the
+ |   cache survives the soft-reset longjmp, so a return to title costs no reads.
+ |   Pictures that do not fit the cache budget still work, read on demand.
+ | Author: suinevere
+ | Dependencies: display.c, SRL
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void display_preload_images(void);
 
 /*----------------------
  | cd_capture_root
