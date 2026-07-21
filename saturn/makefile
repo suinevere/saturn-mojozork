@@ -33,6 +33,23 @@ SRL_INSTALL_ROOT ?= ../SaturnRingLib
 SOURCES = $(patsubst ./%,%,$(shell find src/ -name '*.c')) 
 SOURCES += $(patsubst ./%,%,$(shell find src/ -name '*.cxx'))
 
+# --- .netbin build ------------------------------------------------------
+# `make NETBIN=1` (see compile-netbin.bat) links a self-contained image for
+# the PlanetWeb 4.0 loader: base 0x06010000 instead of 0x06004000, with the
+# story file and SGL sound driver embedded rather than read from CD.
+#
+# LDFILE cannot be set here: shared.mk:10 assigns it with `=` and this file
+# is included first, so the SDK would overwrite us. compile-netbin.bat passes
+# it on the make command line, which does override a makefile assignment.
+#
+# SRL_USE_SGL_SOUND_DRIVER deliberately stays 1. The netbin still needs SRL's
+# sound stack compiled; it only replaces where the driver bytes come from
+# (see netbin_sound.cxx).
+ifeq ($(strip $(NETBIN)),1)
+SRL_CUSTOM_CCFLAGS += -DNETBIN
+BUILD_NETBIN = $(BUILD_DROP)/zaturn.netbin
+endif
+
 # Include shared makefile
 SDK_ROOT = $(SRL_INSTALL_ROOT)/saturnringlib
 include $(SDK_ROOT)/shared.mk
