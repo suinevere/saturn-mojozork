@@ -232,10 +232,10 @@ static int g_scroll = 0;
 
 Drop the `static` when defining them in `app_state.cxx` (they gain external linkage). `#define DIALNUM_MAX 11` currently sits at `main.cxx:47`; the `DIFF_*` and `MIX_*` enums are near the top comments — grep for their definitions (`grep -n "DIFF_EASY\|MIX_DYNAMIC" main.cxx`) and move the enum definitions too. In `app_state.cxx`, `nullptr` is valid (it is a `.cxx`); keep it.
 
-- [ ] **Step 1: Create `app_state.h`** — file-box; `#ifndef APP_STATE_H`; `#include <setjmp.h>` and `#include "display.h"` (for `DisplayState`); `extern "C"` guard; the enums/`DIALNUM_MAX`; one `extern` line per global with a short `.h` *what*-box each (e.g. `g_display` → "Current display colors/background, applied to VDP2 by display_apply and persisted in MOJOOPTS.").
-- [ ] **Step 2: Create `app_state.cxx`** — file-box; `#include "app_state.h"`; the single **definition** of each global, moved verbatim from `main.cxx` (preserve initializers exactly: `g_dialnum = "199403"`, `g_story_filename = "ZORK1.Z3"`, `g_difficulty = DIFF_EASY`, etc.).
-- [ ] **Step 3: Edit `main.cxx`** — delete those 17 definitions and the `DIFF_*`/`MIX_*`/`DIALNUM_MAX` definitions; add `#include "app_state.h"` beneath the existing includes.
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Create `app_state.h`** — file-box; `#ifndef APP_STATE_H`; `#include <setjmp.h>` and `#include "display.h"` (for `DisplayState`); `extern "C"` guard; the enums/`DIALNUM_MAX`; one `extern` line per global with a short `.h` *what*-box each (e.g. `g_display` → "Current display colors/background, applied to VDP2 by display_apply and persisted in MOJOOPTS.").
+- [x] **Step 2: Create `app_state.cxx`** — file-box; `#include "app_state.h"`; the single **definition** of each global, moved verbatim from `main.cxx` (preserve initializers exactly: `g_dialnum = "199403"`, `g_story_filename = "ZORK1.Z3"`, `g_difficulty = DIFF_EASY`, etc.).
+- [x] **Step 3: Edit `main.cxx`** — delete those 17 definitions and the `DIFF_*`/`MIX_*`/`DIALNUM_MAX` definitions; add `#include "app_state.h"` beneath the existing includes.
+- [x] **Step 4: Commit**
 ```bash
 git add saturn/src/app_state.h saturn/src/app_state.cxx saturn/src/main.cxx
 git commit -m "Extract cross-cutting app_state seam from main.cxx"
@@ -251,10 +251,10 @@ git commit -m "Extract cross-cutting app_state seam from main.cxx"
 - Consumes: `app_state.h` globals; `display.h`; `saturn_backup.h`.
 - Produces: `void options_load(void); void options_save(void); bool display_apply(void); void display_cycle_row(DisplayCycleRow which, int dir); bool valid_dialnum(const char *s);` and `enum DisplayCycleRow { DCR_PALETTE, DCR_BG, DCR_TEXT };` (move the enum into `options.h`).
 
-- [ ] **Step 1: Apply SMEP** for functions `options_load`, `options_save`, `display_apply`, `display_cycle_row`, `valid_dialnum` and the `DisplayCycleRow` enum. `text_set_color` is used only by `display_apply` and `console_view` — keep a copy decision: it belongs to display hardware, so move it into `options.cxx` as `static` **and** expose it via `options.h` if `console_view` needs it; grep first (`grep -n text_set_color main.cxx`) and if `console_view`'s functions use it, declare it in `options.h`.
-- [ ] **Step 2: Forward-declare title hooks** — at the top of `options.cxx` add `bool title_bg_show(const char *file); void title_bg_hide(void);` with a one-line comment box noting these are resolved by `#include "title.h"` in Phase 3. (Recorded cross-edge.)
-- [ ] **Step 3: Dead-code check** — `for f in options_load options_save display_apply display_cycle_row valid_dialnum; do echo "$f:"; grep -rn "\\b$f\\b" saturn/src | grep -v "options\." ; done` — confirm each has a caller outside its own file; record any with none.
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Apply SMEP** for functions `options_load`, `options_save`, `display_apply`, `display_cycle_row`, `valid_dialnum` and the `DisplayCycleRow` enum. `text_set_color` is used only by `display_apply` and `console_view` — keep a copy decision: it belongs to display hardware, so move it into `options.cxx` as `static` **and** expose it via `options.h` if `console_view` needs it; grep first (`grep -n text_set_color main.cxx`) and if `console_view`'s functions use it, declare it in `options.h`.
+- [x] **Step 2: Forward-declare title hooks** — at the top of `options.cxx` add `bool title_bg_show(const char *file); void title_bg_hide(void);` with a one-line comment box noting these are resolved by `#include "title.h"` in Phase 3. (Recorded cross-edge.)
+- [x] **Step 3: Dead-code check** — `for f in options_load options_save display_apply display_cycle_row valid_dialnum; do echo "$f:"; grep -rn "\\b$f\\b" saturn/src | grep -v "options\." ; done` — confirm each has a caller outside its own file; record any with none.
+- [x] **Step 4: Commit**
 ```bash
 git add saturn/src/options.h saturn/src/options.cxx saturn/src/main.cxx
 git commit -m "Extract options persistence/apply into options module"
@@ -277,10 +277,10 @@ git commit -m "Extract options persistence/apply into options module"
 - Produces (input.h, C++-only): the `MultiPad` struct and `extern MultiPad *g_pad;`, consumed by `console_view`, `menu`, `menu_pages`, `save_ui`, `online`, and `main.cxx`.
 - Produces: declarations for what the loop and menu pages call: `face_button`, `face_btn_name`, `slot_name`, `slot_raw`, `caps_combo_fired`, `chord_tick`, `chord_fired`, `pad_scroll_update`, `pad_repeat_update`, `pad_fired`, `scroll_handle_key`, `history_push`, `history_load`, `history_recall`, `face_assign`, `chord_assign`, `mapping_reset_defaults`, and the `FA_*`/`CA_*`/`SL_*` enums (move enums into `input.h` since `menu_pages` reads them).
 
-- [ ] **Step 1: Move the mapping enums/labels** — `FA_*`, `CA_*`, `SL_*` and their `*_DEFAULT` tables into `input.h`/`input.cxx`. `FACE_LABEL`/`CHORD_LABEL` are used only by menu pages → leave them for Task 6, but if `face_btn_name`/`slot_name` reference them, they move here; grep to decide.
-- [ ] **Step 2: Apply SMEP** for the listed functions and statics, including `MultiPad`/`g_pad`.
-- [ ] **Step 3: Dead-code check** over the moved names.
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Move the mapping enums/labels** — `FA_*`, `CA_*`, `SL_*` and their `*_DEFAULT` tables into `input.h`/`input.cxx`. `FACE_LABEL`/`CHORD_LABEL` are used only by menu pages → leave them for Task 6, but if `face_btn_name`/`slot_name` reference them, they move here; grep to decide.
+- [x] **Step 2: Apply SMEP** for the listed functions and statics, including `MultiPad`/`g_pad`.
+- [x] **Step 3: Dead-code check** over the moved names.
+- [x] **Step 4: Commit**
 ```bash
 git add saturn/src/input.h saturn/src/input.cxx saturn/src/main.cxx
 git commit -m "Extract controller mapping / pad / history into input module"
@@ -301,16 +301,16 @@ git commit -m "Extract controller mapping / pad / history into input module"
 - Consumes: `app_state.h` (`g_scroll`), `input.h` (`g_pad`), `console.h`, `keyboard.h`, `saturn_keyboard.h`, `typeahead.h`, SRL.
 - Produces: declarations for the functions `main.cxx`'s loop calls (`render_console`, `render_keyboard`, `console_height`, `console_scroll_to_output`, `install_block_glyph`, `note_input_device`, `hint`) with `.h` *what*-boxes. `g_kbd_visible`/`g_caret_arrows`/`g_more_below` are also written by `main.cxx` (e.g. `main.cxx:1082`, `main.cxx:3389`), so declare them `extern` in `console_view.h` rather than leaving them file-`static` (grep to confirm which; any read/written outside `console_view` gets the `extern` treatment).
 
-- [ ] **Step 1: Grep the rendering statics** — `for g in g_kbd_visible g_caret_arrows g_more_below; do echo "$g:"; grep -rn "\\b$g\\b" saturn/src | grep -v console_view; done`. Any with external references get `extern` in `console_view.h`; purely local ones stay `static` in `console_view.cxx`. Record the decision in the commit message.
-- [ ] **Step 2: Apply SMEP** for the listed functions and resolved statics. `console_view.cxx` includes `input.h` (for `g_pad`) and `app_state.h` (for `g_scroll`).
-- [ ] **Step 3: Dead-code check** (same pattern as Task 2 Step 3 over the moved names).
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Grep the rendering statics** — `for g in g_kbd_visible g_caret_arrows g_more_below; do echo "$g:"; grep -rn "\\b$g\\b" saturn/src | grep -v console_view; done`. Any with external references get `extern` in `console_view.h`; purely local ones stay `static` in `console_view.cxx`. Record the decision in the commit message.
+- [x] **Step 2: Apply SMEP** for the listed functions and resolved statics. `console_view.cxx` includes `input.h` (for `g_pad`) and `app_state.h` (for `g_scroll`).
+- [x] **Step 3: Dead-code check** (same pattern as Task 2 Step 3 over the moved names).
+- [x] **Step 4: Commit**
 ```bash
 git add saturn/src/console_view.h saturn/src/console_view.cxx saturn/src/main.cxx saturn/src/app_state.h saturn/src/app_state.cxx
 git commit -m "Extract text/keyboard rendering into console_view module"
 ```
 
-- [ ] **Phase 1 compile checkpoint** — hand off: user runs `saturn/compile.bat` and the host tests. Proceed only on a clean link + green tests. Fix any unresolved symbol by adding the missing declaration to the owning module's header (or a temporary forward declaration per SMEP step 4).
+- [x] **Phase 1 compile checkpoint** — hand off: user runs `saturn/compile.bat` and the host tests. Proceed only on a clean link + green tests. Fix any unresolved symbol by adding the missing declaration to the owning module's header (or a temporary forward declaration per SMEP step 4).
 
 ---
 
@@ -326,9 +326,9 @@ git commit -m "Extract text/keyboard rendering into console_view module"
 - Consumes: `menu_layout.h`, `app_state.h`, `console_view.h`, `input.h`, `display.h`, `sound.h` (`menu_sync` services sound), SRL.
 - Produces: `void menu_sync(void); void menu_clear(void); void menu_window_rect(int,int,int,int); void menu_frame(int,int,int,int,const char*); void menu_wait(void); void menu_message(const char*,const char*,const char*); int menu_select(const char*,const char*const*,int); bool menu_confirm(const char*,const char*);` with `.h` *what*-boxes.
 
-- [ ] **Step 1: Apply SMEP** for the listed functions/statics.
-- [ ] **Step 2: Dead-code check.**
-- [ ] **Step 3: Commit**
+- [x] **Step 1: Apply SMEP** for the listed functions/statics.
+- [x] **Step 2: Dead-code check.**
+- [x] **Step 3: Commit**
 ```bash
 git add saturn/src/menu.h saturn/src/menu.cxx saturn/src/main.cxx
 git commit -m "Extract menu-drawing framework into menu module"
@@ -344,9 +344,9 @@ git commit -m "Extract menu-drawing framework into menu module"
 - Consumes: `menu.h`, `input.h`, `options.h`, `display.h`, `music.h`, `sound.h`, `app_state.h`, `typeahead.h`.
 - Produces: `void options_menu(void);` (the only entry the loop calls) with `.h` *what*-box; the six page functions may stay file-local (`static`) if only `options_menu` calls them — grep; declare in `.h` only those with external callers.
 
-- [ ] **Step 1: Apply SMEP.** Verify each page's external calls resolve to already-extracted headers (`menu.h`, `input.h`, `options.h`, `music.h`, `sound.h`).
-- [ ] **Step 2: Dead-code check.**
-- [ ] **Step 3: Commit**
+- [x] **Step 1: Apply SMEP.** Verify each page's external calls resolve to already-extracted headers (`menu.h`, `input.h`, `options.h`, `music.h`, `sound.h`).
+- [x] **Step 2: Dead-code check.**
+- [x] **Step 3: Commit**
 ```bash
 git add saturn/src/menu_pages.h saturn/src/menu_pages.cxx saturn/src/main.cxx
 git commit -m "Extract option pages into menu_pages module"
@@ -361,15 +361,15 @@ git commit -m "Extract option pages into menu_pages module"
 - Consumes: `menu.h`, `saturn_backup.h`, `app_state.h`, `saturn_keyboard.h`.
 - Produces: `void make_slot_name(char *out, int slot); int choose_device(const char *title); int pick_slot_and_name(int device, int *out_slot, char *out_name, int maxchars);` with `.h` *what*-boxes.
 
-- [ ] **Step 1: Apply SMEP.**
-- [ ] **Step 2: Dead-code check.**
-- [ ] **Step 3: Commit**
+- [x] **Step 1: Apply SMEP.**
+- [x] **Step 2: Dead-code check.**
+- [x] **Step 3: Commit**
 ```bash
 git add saturn/src/save_ui.h saturn/src/save_ui.cxx saturn/src/main.cxx
 git commit -m "Extract save/restore pickers into save_ui module"
 ```
 
-- [ ] **Phase 2 compile checkpoint** — user runs `saturn/compile.bat` + host tests. Proceed only on clean link.
+- [x] **Phase 2 compile checkpoint** — user runs `saturn/compile.bat` + host tests. Proceed only on clean link.
 
 ---
 
@@ -385,12 +385,12 @@ git commit -m "Extract save/restore pickers into save_ui module"
 - Consumes: `display.h` (`display_set_images`, `DISP_*`), `app_state.h`, `menu.h`, SRL/GFS.
 - Produces: `bool title_bg_show(const char *file); void title_bg_hide(void); int title_and_seed(void); void display_scan_images(void);` (and any other function `main.cxx`/`options` call) with `.h` *what*-boxes.
 
-- [ ] **Step 1: Apply SMEP** for the listed functions/statics.
-- [ ] **Step 2: Resolve the recorded cross-edge** — in `options.cxx`, delete the Phase-1 forward declarations of `title_bg_show`/`title_bg_hide` and add `#include "title.h"`.
-- [ ] **Step 3: Dead-code check.** Note the three near-identical CD-scan blocks (`root`/`tga`/`z3`) — do **not** consolidate (out of scope); just box each.
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Apply SMEP** for the listed functions/statics.
+- [x] **Step 2: Resolve the recorded cross-edge** — in `options.cxx`, delete the Phase-1 forward declarations of `title_bg_show`/`title_bg_hide` and add `#include "title.h"`.
+- [x] **Step 3: Dead-code check.** Note the three near-identical CD-scan blocks (`root`/`tga`/`z3`) — do **not** consolidate (out of scope); just box each.
+- [x] **Step 4: Commit**
 ```bash
-git add saturn/src/title.h saturn/src/title.cxx saturn/src/main.cxx saturn/src/options.cxx
+g it add saturn/src/title.h saturn/src/title.cxx saturn/src/main.cxx saturn/src/options.cxx
 git commit -m "Extract title screen / background art / TGA loading into title module"
 ```
 
@@ -404,8 +404,8 @@ git commit -m "Extract title screen / background art / TGA loading into title mo
 - Consumes: `menu.h`, `game_titles.h`, `app_state.h`, `title.h` (if `game_select` draws over the title bg), SRL/GFS.
 - Produces: `const char* game_select(void); void preload_game_catalog(void);` with `.h` *what*-boxes. `game_select` currently has external (non-`static`) linkage — keep it `extern` and declare in `game_catalog.h`.
 
-- [ ] **Step 1: Apply SMEP.**
-- [ ] **Step 2: Dead-code check.**
+- [x] **Step 1: Apply SMEP.**
+- [x] **Step 2: Dead-code check.**
 - [ ] **Step 3: Commit**
 ```bash
 git add saturn/src/game_catalog.h saturn/src/game_catalog.cxx saturn/src/main.cxx

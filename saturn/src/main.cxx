@@ -16,7 +16,6 @@ extern "C" {
 #include "typeahead_extract.h"
 #include "typeahead_solution.h"
 #include "music.h"
-#include "game_titles.h"
 }
 #include "app_state.h"
 #include "input.h"
@@ -27,6 +26,7 @@ extern "C" {
 #include "menu_pages.h"
 #include "save_ui.h"
 #include "title.h"
+#include "game_catalog.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -691,198 +691,6 @@ extern "C" int saturn_load_blob(uint8_t *buf, uint32_t maxlen) {
         menu_wait();
     }
     return ok;
-}
-
-// ---- game selection: scan the CD "Z3" folder for *.Z3 story files ----------
-
-// Z3 directory state captured at boot and used by scan_z3_folder. Defined here
-// (not in title.cxx) so scan_z3_folder can read/write them; title.cxx declares them
-// as extern so it can restore the current directory after bitmap loads.
-GfsDirName g_z3_dirnames[SRL_MAX_CD_FILES];
-GfsDirTbl  g_z3_tbl;
-bool       g_z3_dir_valid = false;   // set once scan_z3_folder has run
-
-// True if `s` ends in ".z3" / ".Z3".
-static int has_z3_ext(const char *s) {
-    int len = 0; while (s[len]) len++;
-    if (len < 3) return 0;
-    const char *e = s + len - 3;
-    return e[0] == '.' && (e[1] == 'z' || e[1] == 'Z') && e[2] == '3';
-}
-
-// Scan the CD "Z3" directory and collect up to `max` *.Z3 filenames into `out`.
-// Also makes Z3 the current CD directory so later SRL::Cd::File() opens resolve
-// there. Returns the number of matches (0 if none), or -1 if the Z3 folder is
-// absent. Saturn/ISO9660: names are uppercase 8.3 (GFS_FNAME_LEN = 12), possibly
-// with a ";1" version suffix, which is stripped. Directory records "." / ".."
-// carry non-".Z3" names and are naturally filtered out.
-static int scan_z3_folder(char out[][16], int max) {
-    // GFS_SetDir below makes Z3 the current CD directory, and that persists. After a
-    // soft reset we re-enter here still inside Z3, so "Z3" would resolve relative to
-    // Z3 and fail. Return to the root directory first so the scan is idempotent.
-    cd_enter_root();
-
-    int32_t fid = GFS_NameToId((int8_t *) "Z3");
-    if (fid < 0) return -1;
-
-    GFS_DIRTBL_TYPE(&g_z3_tbl)    = GFS_DIR_NAME;
-    GFS_DIRTBL_DIRNAME(&g_z3_tbl) = g_z3_dirnames;
-    GFS_DIRTBL_NDIR(&g_z3_tbl)    = SRL_MAX_CD_FILES;
-
-    int32_t count = GFS_LoadDir(fid, &g_z3_tbl);
-    if (count < 0) return -1;
-    GFS_SetDir(&g_z3_tbl);   // subsequent File() opens resolve inside Z3
-    g_z3_dir_valid = true;   // cd_restore_z3() may now re-apply this directory
-
-    int n = 0;
-    for (int i = 0; i < count && n < max; i++) {
-        char nm[16];
-        int j = 0;
-        for (; j < GFS_FNAME_LEN && j < 15; j++) {
-            char c = (char) g_z3_dirnames[i].fname[j];
-            if (c == '\0' || c == ';') break;   // stop at NUL or version suffix
-            nm[j] = c;
-        }
-        nm[j] = '\0';
-        if (has_z3_ext(nm)) {
-            int k = 0;
-            for (; nm[k] && k < 15; k++) out[n][k] = nm[k];
-            out[n][k] = '\0';
-            n++;
-        }
-    }
-    return n;
-}
-
-// Read a game's header (release 0x02 + serial 0x12) from the CD. Returns its
-// display title (NULL if unknown/unreadable) and sets *cat to its category
-// (GAME_CAT_OTHER if unknown). Reads one sector.
-static const char* read_game_info(const char* filename, int* cat) {
-    static uint8_t hdr[64];
-    *cat = GAME_CAT_OTHER;
-    // One sector-addressed LoadBytes instead of Size-stat + Open + Read + Close:
-    // fewer GFS calls per file (faster over ~25 games) and it sidesteps the
-    // flaky first-access GFS_GetFileSize the old Size check had to retry around.
-    for (int attempt = 0; attempt < 8; attempt++) {
-        SRL::Cd::File f(filename);
-        int32_t got = f.LoadBytes(0, (int32_t) sizeof(hdr), hdr);   // header lives in sector 0
-        if (got >= 0x1a) {
-            if (hdr[0] != 3) return nullptr;                        // read ok, not a v3 story
-            unsigned short rel = (unsigned short)((hdr[2] << 8) | hdr[3]);
-            const char* serial = (const char*)(hdr + 0x12);
-            *cat = game_category(rel, serial);
-            return game_title(rel, serial);
-        }
-        for (int i = 0; i < 4; i++) SRL::Core::Synchronize();
-    }
-    return nullptr;
-}
-
-static const char *const CAT_NAMES[GAME_CAT_COUNT] = {
-    "The Zork Universe", "The Planetfall Series", "The Mystery Series",
-    "Tales of Adventure & Fantasy", "Sci-Fi & Horror", "Comedy", "Other",
-};
-
-// Release year parsed from a label's trailing "(YYYY)" (e.g. "Zork I (1980)").
-// Returns 9999 when there's no 4-digit year, so undated games sort after dated
-// ones (then alphabetically among themselves) per the menu's sort order.
-// Lexicographic compare, <0 / 0 / >0 like strcmp (avoids a <string.h> dependency).
-static int label_cmp(const char* a, const char* b) {
-    while (*a && (*a == *b)) { a++; b++; }
-    return (int)(unsigned char)*a - (int)(unsigned char)*b;
-}
-
-static int label_year(const char* s) {
-    int n = 0; while (s[n]) n++;
-    if (n >= 6 && s[n-6] == '(' && s[n-1] == ')') {
-        int y = 0;
-        for (int k = n-5; k <= n-2; k++) {
-            if (s[k] < '0' || s[k] > '9') return 9999;
-            y = y * 10 + (s[k] - '0');
-        }
-        return y;
-    }
-    return 9999;
-}
-
-// Game catalog cache: filled once by preload_game_catalog() at title time.
-// game_select's browse loop reads these directly and does no CD I/O.
-static const int MAX_GAMES = 32;       // headroom for the full Infocom Z3 catalogue
-static char names[MAX_GAMES][16];      // static so the returned pointer stays valid
-static char labels[MAX_GAMES][40];     // display titles (or filename fallback)
-static int  cats[MAX_GAMES];
-static int  g_catalog_count = 0;
-static bool g_catalog_ready = false;
-
-// Read the Z3 folder + each game's header ONCE (these CD reads stop CD-DA); cache
-// the result so game_select does no CD I/O and the menu track plays uninterrupted.
-static void preload_game_catalog(void) {
-    if (g_catalog_ready) return;
-    g_catalog_count = scan_z3_folder(names, MAX_GAMES);
-    if (g_catalog_count > 0) {
-        for (int i = 0; i < g_catalog_count; i++) {
-            const char* title = read_game_info(names[i], &cats[i]);
-            // Cap at the width a menu row can actually draw, not at the buffer
-            // size. A row is "> N) " (5 cols) plus the title, and a full-width
-            // box leaves 37 columns from the content origin to the border, so
-            // anything past 32 chars would overwrite the border. 31 keeps a
-            // column of margin. Every real title fits; this only guards the
-            // filename fallback and any future long entry. Once the deferred
-            // marquee lands, long titles can scroll instead of being clipped.
-            int j = 0; const char* src = title ? title : names[i];
-            for (; src[j] && j < MENU_ROW_TEXT_MAX; j++) labels[i][j] = src[j];
-            labels[i][j] = '\0';
-        }
-    }
-    g_catalog_ready = true;
-}
-
-const char* game_select() {
-    const char *items[MAX_GAMES];
-
-    preload_game_catalog();   // idempotent: the CD reads happen once, at the title
-    int count = g_catalog_count;
-
-    if (count <= 0) {
-        MenuBacking backing;
-        menu_message("NO GAMES", (count < 0)
-            ? "No Z3 folder found on the CD."
-            : "No .Z3 games found in the Z3 folder.",
-            "(press any key/button to go back)");
-        menu_wait();
-        return nullptr;   // back to the single/multiplayer select menu
-    }
-
-    // Category page -> game page. Back from the game page returns to categories.
-    for (;;) {
-        int catmap[GAME_CAT_COUNT], ncat = 0;   // menu index -> category id
-        for (int c = 0; c < GAME_CAT_COUNT; c++) {
-            int any = 0;
-            for (int i = 0; i < count && !any; i++) if (cats[i] == c) any = 1;
-            if (any) { items[ncat] = CAT_NAMES[c]; catmap[ncat] = c; ncat++; }
-        }
-        int cs = (ncat == 1) ? 0 : menu_select("Choose a category:", items, ncat);
-        if (cs < 0) return nullptr;   // B/Esc at categories: back to the mode menu
-
-        int gmap[MAX_GAMES], ng = 0;   // menu index -> game index
-        for (int i = 0; i < count; i++) if (cats[i] == catmap[cs]) gmap[ng++] = i;
-        // Sort within the category by release year (from the label's "(YYYY)"),
-        // then alphabetically by title (also breaks ties among undated games).
-        for (int a = 1; a < ng; a++) {
-            int key = gmap[a], ya = label_year(labels[key]);
-            int b = a - 1;
-            while (b >= 0) {
-                int yb = label_year(labels[gmap[b]]);
-                if (yb < ya || (yb == ya && label_cmp(labels[gmap[b]], labels[key]) <= 0)) break;
-                gmap[b+1] = gmap[b]; b--;
-            }
-            gmap[b+1] = key;
-        }
-        for (int i = 0; i < ng; i++) items[i] = labels[gmap[i]];
-        int gs = menu_select(CAT_NAMES[catmap[cs]], items, ng);
-        if (gs < 0) { if (ncat == 1) return nullptr; else continue; }   // back to categories
-        return names[gmap[gs]];       // the caller loads by filename, not the label
-    }
 }
 
 // ---- online mode (multizork telnet terminal) -------------------------------

@@ -3,7 +3,8 @@
  | Description: Title screen, background art, TGA loading and its Low Work RAM
  |   cache, CD directory juggling, and the boot sequence random seed.
  | Author: suinevere
- | Dependencies: app_state.h, display.h, menu.h, soft_reset.h, SRL
+ | Dependencies: app_state.h, display.h, menu.h, soft_reset.h, game_catalog.h
+ |   (the Z3 directory record cd_restore_z3 re-applies), SRL
  ----------------------*/
 #include "title.h"
 #include "app_state.h"
@@ -13,6 +14,7 @@
 #include "input.h"
 #include "soft_reset.h"
 #include "saturn_keyboard.h"
+#include "game_catalog.h"
 #include <srl.hpp>
 #include <string.h>
 
@@ -29,8 +31,11 @@ static GfsDirName g_tga_dirnames[SRL_MAX_CD_FILES];
 static GfsDirTbl  g_tga_tbl;
 static bool       g_tga_dir_valid = false;
 
+/* The Z3 directory record lives in game_catalog.cxx (scan_z3_folder captures it);
+   game_catalog.h cannot name a GfsDirTbl without dragging SRL into a C-safe
+   header, so the table itself is declared here and only the validity flag comes
+   from the header. */
 extern GfsDirTbl g_z3_tbl;
-extern bool g_z3_dir_valid;
 
 /*----------------------
  | title_draw_art
