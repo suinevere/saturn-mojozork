@@ -515,7 +515,6 @@ void display_preload_images(void) {
         const char *name = display_image_file(i);
         if (name == nullptr || name[0] == '\0') continue;
         if (tga_cache_find(name) != nullptr)    continue;
-        SRL::Debug::Print(9, 20, "Loading art %d/%d", i + 1, n);
         SRL::Core::Synchronize();
         tga_cache_admit(name);
     }
