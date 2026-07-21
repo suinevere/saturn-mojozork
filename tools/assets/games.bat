@@ -39,7 +39,7 @@
 :;
 :; echo "Complete."
 :;
-:; . lib/merge.sh
+:; . lib/games.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; BASE_ISO=$(cfg BASE_ISO); OUTPUT_DIR=$(cfg OUTPUT_DIR); DISC_NAME=$(cfg DISC_NAME)
 :; BASE_ISO=${BASE_ISO:-./Zaturn (USA) (Netlink Edition)/Zaturn (USA) (Netlink Edition).iso}
@@ -99,18 +99,20 @@ REM Stage the base ISO from the SDK build output if it hasn't been placed yet.
 REM (CI stages it in full-image.yml; a local run must do the same.)
 IF NOT EXIST "%BASE_ISO%" (
     IF EXIST "..\..\saturn\BuildDrop\Zaturn (USA) (Netlink Edition).iso" (
-        ECHO Staging base ISO from saturn\BuildDrop -^> %BASE_ISO%
+        REM Quote every expansion inside a parenthesized block: the disc name
+        REM contains ( ), which CMD would otherwise parse as block delimiters.
+        ECHO Staging base ISO from saturn\BuildDrop -^> "%BASE_ISO%"
         FOR %%I IN ("%BASE_ISO%") DO IF NOT EXIST "%%~dpI" MKDIR "%%~dpI"
         COPY /Y "..\..\saturn\BuildDrop\Zaturn (USA) (Netlink Edition).iso" "%BASE_ISO%" >NUL
     )
 )
 IF NOT EXIST "%BASE_ISO%" (
-    ECHO ERROR: base ISO not found: %BASE_ISO%
+    ECHO ERROR: base ISO not found: "%BASE_ISO%"
     ECHO Build the Saturn disc first ^(cd saturn ^&^& compile.bat^), then re-run.
     EXIT /B 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\merge.ps1" -BaseIso "%BASE_ISO%" -GamesDir "Z3" -OutDir "%OUTPUT_DIR%" -Name "%DISC_NAME%" -Dd ".\bin\win\dd.exe" -Xorriso ".\bin\win\xorriso.exe" -Iso2raw ".\bin\win\iso2raw.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\games.ps1" -BaseIso "%BASE_ISO%" -GamesDir "Z3" -OutDir "%OUTPUT_DIR%" -Name "%DISC_NAME%" -Xorriso ".\bin\win\xorriso.exe" -Iso2raw ".\bin\win\iso2raw.exe"
 IF ERRORLEVEL 1 ( ECHO ERROR: game injection failed & EXIT /B 1 )
 
 ENDLOCAL

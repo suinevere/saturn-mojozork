@@ -1,4 +1,4 @@
-# Game injection into the Saturn data ISO. Source with: . lib/inject.sh
+# Game injection into the Saturn data ISO. Source with: . lib/games.sh
 . "$(dirname "${BASH_SOURCE[0]}")/cuelib.sh"
 
 # inject_games <base.iso> <games_dir> <out_dir> <disc_name>

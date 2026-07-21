@@ -2,8 +2,8 @@
 :; set -euo pipefail
 :; cd "$(dirname "$0")"
 :;
-:; # 0. Load shared processing functions (process_bin / process_audio / process_cue)
-:; . lib/audio.sh
+:; # 0. Load shared processing functions (process_audio / process_cue)
+:; . lib/music.sh
 :;
 :; # 1. Parse Config
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
@@ -58,7 +58,7 @@ powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -Desti
 IF ERRORLEVEL 1 ( ECHO ERROR: failed to extract audio zip & EXIT /B 1 )
 
 ECHO Processing files and merging directories...
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\add-music.ps1" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%" -DiscName "%DISC_NAME%"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\music.ps1" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%" -DiscName "%DISC_NAME%"
 IF ERRORLEVEL 1 ( ECHO ERROR: disc processing failed & EXIT /B 1 )
 
 ECHO Process complete -^> %OUTPUT_DIR%

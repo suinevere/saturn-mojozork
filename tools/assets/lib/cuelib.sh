@@ -26,7 +26,6 @@ platform_subdir() {
 
 # resolve_tool <name> -> executable path.
 #  - iso2raw: bundled for every OS (bin/<plat>[/<arch>]/iso2raw[.exe])
-#  - dd:      bundled on Windows; system dd elsewhere (always present)
 #  - xorriso: bundled on Windows; system xorriso on mac/linux, and if missing
 #             prints an install hint to stderr and returns 1 (does NOT exit).
 resolve_tool() {
@@ -40,8 +39,6 @@ resolve_tool() {
              else echo "./bin/mac/amd64/iso2raw"; fi;;
         *)   echo "ERROR: unsupported platform for iso2raw" >&2; return 1;;
       esac;;
-    dd)
-      if [ "$plat" = win ]; then echo "./bin/win/dd.exe"; else command -v dd; fi;;
     xorriso)
       if [ "$plat" = win ]; then echo "./bin/win/xorriso.exe"; return 0; fi
       local sys; sys=$(command -v xorriso 2>/dev/null || true)
