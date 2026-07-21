@@ -12,4 +12,6 @@ $b=[System.IO.File]::ReadAllBytes($inj)[0..32767]
 if (Compare-Object $a $b) { Write-Error "IP.BIN not preserved"; exit 1 }
 & $Iso2raw $inj -o "$OutDir\$Name.bin"
 "FILE `"$Name.bin`" BINARY","  TRACK 01 MODE1/2352","    INDEX 01 00:00:00" | Set-Content "$OutDir\$Name.cue"
+Remove-Item -Force -Path $inj
+Remove-Item -Force -Path "$OutDir\ip.bin"
 Write-Host "Injected games -> $OutDir\$Name.bin"
