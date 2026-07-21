@@ -1039,7 +1039,7 @@ In `.github/workflows/release.yml`, after the current "Package release zip" step
           set -e
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
           STAGE=$(mktemp -d)
-          KIT="$STAGE/zork-asset-kit"
+          KIT="$STAGE/zaturn-asset-kit"
           mkdir -p "$KIT/base"
           # Base ISO = injection input for games.bat (Zork 1/2/3 baked in).
           cp saturn/BuildDrop/mojozork.iso "$KIT/base/mojozork.iso"
@@ -1047,7 +1047,7 @@ In `.github/workflows/release.yml`, after the current "Package release zip" step
           cp -r tools/assets/. "$KIT/"
           # Ensure working dirs exist but are empty save for .gitkeep.
           for d in game audio output; do mkdir -p "$KIT/$d"; find "$KIT/$d" -type f ! -name .gitkeep -delete; done
-          NAME="zork-asset-kit-${VER}"
+          NAME="zaturn-asset-kit-${VER}"
           (cd "$STAGE" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
           echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
           echo "zip_name=${NAME}.zip"              >> "$GITHUB_OUTPUT"

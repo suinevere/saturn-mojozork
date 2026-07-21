@@ -72,14 +72,14 @@ jobs:
           mkdir -p "$STAGE"
           cp saturn/BuildDrop/zaturn.cue "$STAGE/zaturn.cue"
           cp saturn/BuildDrop/zaturn.bin "$STAGE/zaturn.bin"
-          NAME="zaturn-netlink-edition-${VER}"
+          NAME="Zaturn (USA) (Netlink Edition)"
           # One zip, files at its root -- unzip yields the files directly:
           # no nested zip, no wrapper folder. The .zip is the release asset;
           # the workflow-artifact upload uses the same staged folder.
-          (cd "$STAGE" && zip -r "$RUNNER_TEMP/${NAME}.zip" .)
+          (cd "$STAGE" && zip -r "$RUNNER_TEMP/${NAME}/${NAME} - ${VER}.zip" .)
           echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
-          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
-          echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${NAME} - ${VER}"             >> "$GITHUB_OUTPUT"
+          echo "zip_path=$RUNNER_TEMP/${NAME}/${NAME} - ${VER}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Package build-it-yourself kit
         id: kit
@@ -88,20 +88,21 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
           # Stage the kit contents flat at the zip root (no wrapper folder).
           STAGE="$RUNNER_TEMP/kit-stage"
-          mkdir -p "$STAGE/base"
-          # Base ISO
-          cp saturn/BuildDrop/zaturn.iso "$STAGE/base/zaturn.iso"
+          
+          # Original iso.
+          mkdir -p "$STAGE/Zaturn (USA) (Netlink Edition)"
+          cp saturn/BuildDrop/zaturn.iso "$STAGE/Zaturn (USA) (Netlink Edition)/zaturn.iso"
+          cp saturn/BuildDrop/zaturn.bin "$STAGE/Zaturn (USA) (Netlink Edition)/zaturn.bin"
+          
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
           cp -r tools/assets/. "$STAGE/"
-          # png/ is background source art for the build's PNG->TGA step, not kit
-          # input -- the kit injects games and audio into an already-built ISO.
           rm -rf "$STAGE/png"
+          rm -rf "$STAGE/tests"
+          
           # Ensure working dirs exist but are empty save for .gitkeep.
           for d in game audio output; do mkdir -p "$STAGE/$d"; find "$STAGE/$d" -type f ! -name .gitkeep -delete; done
-          NAME="zaturn-asset-kit-${VER}"
-          # One zip, kit contents at its root -- unzip yields the kit directly:
-          # no nested zip, no wrapper folder. The .zip is the release asset;
-          # the workflow-artifact upload uses the same staged folder.
+          NAME="Zaturn Complete Patch (${VER})"
+
           (cd "$STAGE" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
           echo "stage_dir=$STAGE"                  >> "$GITHUB_OUTPUT"
           echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"

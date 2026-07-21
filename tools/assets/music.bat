@@ -8,8 +8,8 @@
 :; # 1. Parse Config
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; AUDIO_URL=$(cfg AUDIO_URL)
-:; GAME_DIR=$(cfg GAME_DIR); GAME_DIR=${GAME_DIR:-./game}
-:; OUTPUT_DIR=$(cfg OUTPUT_DIR); OUTPUT_DIR=${OUTPUT_DIR:-./output}
+:; DISC_NAME=$(cfg DISC_NAME)
+:; OUTPUT_DIR=$(cfg OUTPUT_DIR); OUTPUT_DIR=${OUTPUT_DIR:-./Zaturn - Complete (USA) (Netlink Edition)}
 :;
 :; # 2. Download and Extract Audio
 :; tmp=$(mktemp -d)
@@ -18,15 +18,13 @@
 :; unzip -qo "$tmp/audio.zip" -d "$tmp/img"
 :;
 :; # 3. Setup Final Output Directory
-:; BASE_NAME="Zaturn - Complete (USA)"
-:; FINAL_OUT="$OUTPUT_DIR/$BASE_NAME"
+:; FINAL_OUT="$OUTPUT_DIR/$DISC_NAME"
 :; mkdir -p "$FINAL_OUT"
 :; echo "Processing files into -> $FINAL_OUT"
 :;
 :; # 4. Execute new logic
-:; process_bin "$GAME_DIR" "$FINAL_OUT" "$BASE_NAME"
-:; process_audio "$tmp/img" "$FINAL_OUT" "$BASE_NAME"
-:; process_cue "$tmp/img" "$FINAL_OUT" "$BASE_NAME"
+:; process_audio "$tmp/img" "$FINAL_OUT" "$DISC_NAME"
+:; process_cue "$tmp/img" "$FINAL_OUT" "$DISC_NAME"
 :;
 :; # 5. Cleanup temp
 :; rm -rf "$tmp"
@@ -41,12 +39,10 @@ CD /D "%~dp0"
 REM Parse all configuration variables
 FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
     IF "%%A"=="AUDIO_URL" SET "AUDIO_URL=%%B"
-    IF "%%A"=="GAME_DIR" SET "GAME_DIR=%%B"
     IF "%%A"=="OUTPUT_DIR" SET "OUTPUT_DIR=%%B"
 )
 
-IF NOT DEFINED GAME_DIR SET "GAME_DIR=.\game"
-IF NOT DEFINED OUTPUT_DIR SET "OUTPUT_DIR=.\output"
+IF NOT DEFINED OUTPUT_DIR SET "OUTPUT_DIR=./Zaturn - Complete (USA) (Netlink Edition)"
 
 SET "TMP_IMG=%TEMP%\mzaudio"
 IF EXIST "%TMP_IMG%" RMDIR /S /Q "%TMP_IMG%"
@@ -60,7 +56,7 @@ powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -Desti
 IF ERRORLEVEL 1 ( ECHO ERROR: failed to extract audio zip & EXIT /B 1 )
 
 ECHO Processing files and merging directories...
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\add-music.ps1" -BinDir "%GAME_DIR%" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\add-music.ps1" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%" -DiscName "%DISC_NAME%"
 IF ERRORLEVEL 1 ( ECHO ERROR: disc processing failed & EXIT /B 1 )
 
 ECHO Process complete -^> %OUTPUT_DIR%

@@ -1,15 +1,3 @@
-# process_bin <bin_dir> <final_out> <base_name>
-# Copies the single game BIN and renames it to Track 01.
-process_bin() {
-  local bin_dir="$1" out="$2" base="$3"
-  shopt -s nullglob
-  local bins=("$bin_dir"/zaturn.bin)
-  [ ${#bins[@]} -gt 0 ] || { echo "ERROR: No .bin file found in $bin_dir"; exit 1; }
-
-  cp "${bins[0]}" "$out/$base (Track 01).bin"
-  echo "Copied BIN dir track -> $base (Track 01).bin"
-}
-
 # process_audio <cue_music_dir> <final_out> <base_name>
 # Copies and renames all audio BINs, ignoring Track 1.
 process_audio() {

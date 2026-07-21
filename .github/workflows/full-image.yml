@@ -75,4 +75,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zork-full-image-${{ github.sha }}
-          path: tools/assets/output/
+          path: tools/assets/output/Zaturn - Complete (USA) (Netlink Edition) (${REV})/
