@@ -938,8 +938,17 @@ static void online_settle_input(void) {
 
 // Typeahead for the online terminal. multizork is Zork I, so build the trie from
 // the local ZORK1.Z3 on the CD (same dictionary + grammar + solution overlay).
-// Built once, before dialing (so the CD isn't touched mid-connection); the story
-// bytes are freed afterward since the trie is self-contained.
+// The story bytes are freed afterward since the trie is self-contained.
+//
+// Called from the boot preloads, inside the title screen's silent window, so its CD
+// reads land where no music is playing. Doing it lazily on the first "Play Online"
+// instead is what used to stop the menu track dead on the way into the online menu:
+// the Saturn has one drive head, so every read here silences CD-DA, and the
+// flaky-first-stat retry loop below turns that into a long stutter rather than a
+// blip. It was invisible after a soft reset only because g_online_ta survives the
+// longjmp, making the second pass a no-op. Still idempotent, and still re-runs when
+// the difficulty changes (that path does read the CD again, but it is a deliberate
+// options change rather than the boot path).
 static TrieNode* g_online_ta = nullptr;
 static int g_online_diff = -1;
 static void ensure_online_typeahead(void) {
@@ -962,8 +971,10 @@ static void ensure_online_typeahead(void) {
             }
             if (buf != nullptr) SRL::Memory::HighWorkRam::Free(buf);
         }
-        music_cdda_play(g_sel_track);
-        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();;
+        // No music_cdda_play() here: on the boot path the menu track has not started
+        // yet, and kicking it off mid-preload would only have the next retry's CD
+        // read silence it again. Callers re-assert playback once the reads are done.
+        for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
     if (story != nullptr) {
         build_typeahead_from_story(g_online_ta, story, len);
@@ -979,12 +990,12 @@ static void ensure_online_typeahead(void) {
 // drops or the player quits, then return to the mode menu. Auto-redials a few
 // times because the NetLink<->DreamPi carrier handshake is probabilistic.
 static void online_mode(void) {
-    ensure_online_typeahead();   // load the Zork I vocabulary before the modem is up
-    // The first online session's vocab load does CD reads that stop CD-DA, and going
-    // straight here on boot can arrive before the menu track has begun -- either way,
-    // make sure something is playing. But when the menu track is already looping (the
-    // common case: it never stopped), leave it be so it stays seamless rather than
-    // restarting from the top.
+    ensure_online_typeahead();   // normally already built by the boot preloads: a no-op
+    // Only a difficulty change since boot makes the call above touch the CD (and so
+    // stop CD-DA); going straight here on boot can also arrive before the menu track
+    // has begun. Either way, make sure something is playing. But when the menu track is
+    // already looping (the common case: it never stopped), leave it be so it stays
+    // seamless rather than restarting from the top.
     if (!music_cdda_is_playing()) music_cdda_play(g_sel_track);
     const char *number = g_dialnum;   // change it in Options -> Network
 
@@ -1178,13 +1189,13 @@ int main(void) {
     // Show the title art first (no prompt), then load the game catalog and the
     // background art while it is on screen, then start the menu music and let
     // title_and_seed add the prompt on the same screen. Those CD reads (Z3 folder scan
-    // + each game's header, then every TGA) stop CD-DA -- the Saturn's single drive
-    // head cannot play audio while reading data -- so the load window is briefly silent
-    // by necessity. Doing all CD reads here means no menu screen from here on (title,
-    // categories, games, and the Options background selector) ever touches the CD
-    // again, so the menu track then plays uninterrupted. On soft-reset re-entry both
-    // preloads are no-ops (already cached), so no read happens and the music starts
-    // cleanly.
+    // + each game's header, then every TGA, then ZORK1.Z3 for the online vocabulary)
+    // stop CD-DA -- the Saturn's single drive head cannot play audio while reading data
+    // -- so the load window is briefly silent by necessity. Doing all CD reads here
+    // means no menu screen from here on (title, categories, games, Play Online, and the
+    // Options background selector) ever touches the CD again, so the menu track then
+    // plays uninterrupted. On soft-reset re-entry all three preloads are no-ops (already
+    // cached), so no read happens and the music starts cleanly.
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
     text_set_color(DISP_RGB555(0xFF, 0xFF, 0xFF));
     title_bg_show("HOUSE.TGA");
@@ -1193,6 +1204,7 @@ int main(void) {
 
     preload_game_catalog();              // CD reads happen once, here
     display_preload_images();            // and the background art, into Low Work RAM
+    ensure_online_typeahead();           // and the online terminal's Zork I vocabulary
 
     music_set_level(g_music_level);      // honor the saved music level for menu audio
     music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow

@@ -427,16 +427,19 @@ void keyboard_controls_page(void) {
 
 /*----------------------
  | toc_dump_page
- | Description: Diagnostic dump of the raw SRL::Cd::TableOfContents, reached
- |   from Sound Options. The TOC is static for the disc's life, so it is
- |   snapshotted once on entry. Prints the FirstTrack/LastTrack/Session
- |   records in full (Control, Address, Number, Sector/Frame, session frame-
- |   address) above a scrollable per-track table showing, for every
- |   Tracks[] slot, the raw 4-bit Control nibble, the Number, the decoded
- |   type, and the 24-bit FrameAddress. This exists to hunt the "empty / no
- |   audio track" signal: an absent track reads Control=15 (0x0f) with type
- |   Unk and/or FrameAddress=16777215 (0x00FFFFFF), while a real audio track
- |   reads type Aud with a plausible frame address. Up/Down scroll one row;
+ | Description: Diagnostic dump of the raw 102-longword BIOS table of contents
+ |   (CDC_TgetToc), reached from Sound Options. Deliberately does NOT go
+ |   through SRL::Cd::TableOfContents: that struct measures 812 bytes against
+ |   the BIOS's 408, so every track entry read through it is misaligned and
+ |   the tail is uninitialized stack -- see music_cdda.cxx. The TOC is static
+ |   for the disc's life, so it is snapshotted once on entry. Prints the
+ |   first-track, last-track and lead-out records above a scrollable per-track
+ |   table showing, for CD tracks 1..99, the raw 4-bit Control nibble, the
+ |   Adr nibble, the decoded type, and the 24-bit frame address. This exists
+ |   to hunt the "empty / no audio track" signal: an absent track reads
+ |   Control=15 (0x0f) with type Unk and frame address 16777215 (0x00FFFFFF),
+ |   while a real audio track reads type Aud with a plausible frame address.
+ |   Up/Down scroll one row;
  |   Left/Right page by a full screen (rows_per), clamped to
  |   [0, total - rows_per]; A/B/C/Start (or Enter/Esc/Backspace) returns.
  | Author: suinevere
@@ -447,8 +450,12 @@ void keyboard_controls_page(void) {
  | Returns: N/A
  ----------------------*/
 static void toc_dump_page(void) {
-    SRL::Cd::TableOfContents toc = SRL::Cd::TableOfContents::GetTable();
-    const int total    = SRL::Cd::MaxTrackCount;
+    // Raw 102-longword BIOS TOC, not SRL::Cd::TableOfContents -- that struct measures
+    // 812 bytes against the BIOS's 408, so reading through it misaligns every track
+    // entry and runs off the end of the data. See music_cdda.cxx for the layout.
+    uint32_t toc[102];
+    CDC_TgetToc(toc);
+    const int total    = 99;   // toc[0..98] = CD tracks 1..99
     const int rows_per = 19;
     int top = 0;
     SRL::Core::Synchronize();
@@ -476,38 +483,30 @@ static void toc_dump_page(void) {
         menu_clear();
         int x = 1, y = 0;
         SRL::Debug::Print(x, y++, "CD TOC DUMP");
-        SRL::Debug::Print(x, y++, "First C=%d A=%d N=%d S=%d F=%d",
-            toc.FirstTrack.Control, toc.FirstTrack.Address, toc.FirstTrack.Number,
-            toc.FirstTrack.LocationBody.LocationData.Sector,
-            toc.FirstTrack.LocationBody.LocationData.Frame);
-        SRL::Debug::Print(x, y++, "Last  C=%d A=%d N=%d S=%d F=%d",
-            toc.LastTrack.Control, toc.LastTrack.Address, toc.LastTrack.Number,
-            toc.LastTrack.LocationBody.LocationData.Sector,
-            toc.LastTrack.LocationBody.LocationData.Frame);
-        SRL::Debug::Print(x, y++, "Sess  C=%d A=%d fad=%d",
-            toc.Session.Control, toc.Session.Address, toc.Session.fad);
+        SRL::Debug::Print(x, y++, "First C=%d N=%d",
+            (int)((toc[99]  >> 28) & 0xf), (int)((toc[99]  >> 16) & 0xff));
+        SRL::Debug::Print(x, y++, "Last  C=%d N=%d",
+            (int)((toc[100] >> 28) & 0xf), (int)((toc[100] >> 16) & 0xff));
+        SRL::Debug::Print(x, y++, "Lead  C=%d fad=%d",
+            (int)((toc[101] >> 28) & 0xf), (int)(toc[101] & 0x00ffffff));
         y++;
         SRL::Debug::Print(x,     y, "Trk");
         SRL::Debug::Print(x + 6,  y, "Ct");
-        SRL::Debug::Print(x + 10, y, "Nm");
+        SRL::Debug::Print(x + 10, y, "Ad");
         SRL::Debug::Print(x + 14, y, "Type");
         SRL::Debug::Print(x + 22, y, "Frame");
         y++;
         for (int i = 0; i < rows_per; i++) {
             int t = top + i;
             if (t >= total) break;
-            const char *tn;
-            switch (toc.Tracks[t].GetType()) {
-                case SRL::Cd::TableOfContents::TrackType::Audio:    tn = "Aud"; break;
-                case SRL::Cd::TableOfContents::TrackType::Audio4Ch: tn = "A4c"; break;
-                case SRL::Cd::TableOfContents::TrackType::Data:     tn = "Dat"; break;
-                default:                                            tn = "Unk"; break;
-            }
-            SRL::Debug::Print(x,     y, "%d", t);
-            SRL::Debug::Print(x + 6,  y, "%d", toc.Tracks[t].Control);
-            SRL::Debug::Print(x + 10, y, "%d", toc.Tracks[t].Number);
+            int ctrl = (int)((toc[t] >> 28) & 0xf);
+            int adr  = (int)((toc[t] >> 24) & 0xf);
+            const char *tn = (ctrl == 0xf) ? "Unk" : ((ctrl & 0x4) ? "Dat" : "Aud");
+            SRL::Debug::Print(x,      y, "%d", t + 1);   // CD track number, 1-based
+            SRL::Debug::Print(x + 6,  y, "%d", ctrl);
+            SRL::Debug::Print(x + 10, y, "%d", adr);
             SRL::Debug::Print(x + 14, y, "%s", tn);
-            SRL::Debug::Print(x + 22, y, "%d", (int) toc.Tracks[t].FrameAddress);
+            SRL::Debug::Print(x + 22, y, "%d", (int)(toc[t] & 0x00ffffff));
             y++;
         }
         SRL::Debug::Print(x, 27, "%s", hint("Up/Dn scroll  <> page  B=back",
@@ -569,9 +568,16 @@ void sound_options_page(void) {
     int sel = 0;
     int s_mix = g_mix_mode, s_trk = g_sel_track, s_mus = g_music_level, s_pcm = g_pcm_level;
     bool previewed = false;
-    int aidx = 0;
-    for (int i = 0; i < an; i++) if (atracks[i] == g_sel_track) { aidx = i; break; }
-    if (an > 0 && atracks[aidx] != g_sel_track) g_sel_track = atracks[aidx];
+    // Open the Track row on whatever is actually sounding, falling back to the saved
+    // selection and then to the first audio track. Deliberately does NOT write
+    // g_sel_track: the page must be able to open and close without changing anything,
+    // or the OK handler below sees g_sel_track != s_trk and restarts the music the
+    // player came in listening to.
+    int aidx = -1;
+    int cur = music_cdda_current_track();
+    if (cur > 0) for (int i = 0; i < an; i++) if (atracks[i] == cur)         { aidx = i; break; }
+    if (aidx < 0)   for (int i = 0; i < an; i++) if (atracks[i] == g_sel_track) { aidx = i; break; }
+    if (aidx < 0) aidx = 0;
     SRL::Core::Synchronize();
     for (;;) {
         check_soft_reset();
@@ -600,8 +606,13 @@ void sound_options_page(void) {
         else if (row == SR_TRACK) {
             if (left  && aidx > 0)      aidx--;
             if (right && aidx < an - 1) aidx++;
-            g_sel_track = atracks[aidx];
-            if (left || right || ok) { music_cdda_play(g_sel_track); previewed = true; }
+            // Only an actual interaction commits a new selection, so that merely
+            // visiting this row leaves g_sel_track (and the music) alone.
+            if ((left || right || ok) && an > 0) {
+                g_sel_track = atracks[aidx];
+                music_cdda_play(g_sel_track);
+                previewed = true;
+            }
         }
         else if (row == SR_MUSIC) { if (left && g_music_level > 0) g_music_level--; if (right && g_music_level < 7) g_music_level++;
                                     if (left || right) music_set_volume(g_music_level); }

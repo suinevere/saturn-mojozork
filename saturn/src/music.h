@@ -61,6 +61,7 @@ int  music_cdda_is_playing(void);                /* 1 = a CD-DA track is still p
 int  music_cdda_is_short(int track);             /* 1 = track shorter than the short threshold */
 int  music_cdda_audio_tracks(const unsigned char** out);  /* N audio tracks; *out=real track numbers */
 int  music_cdda_has_audio(void);                 /* 1 = disc carries CD-DA audio tracks */
+int  music_cdda_current_track(void);             /* track last handed to the CD block; 0 = none */
 
 #ifdef __cplusplus
 }
