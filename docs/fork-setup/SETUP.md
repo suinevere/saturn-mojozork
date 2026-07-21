@@ -1,4 +1,4 @@
-# Fork setup — reshaping into `suinevere/saturn-mojozork`
+# Fork setup — reshaping into `suinevere/zaturn`
 
 One-time migration from the current working tree (a pile of nested independent
 git repos) into the clean, submodule-based layout described in the top-level
@@ -11,7 +11,7 @@ current tree — **not** on your only copy until you've read it through.
 ## Target layout
 
 ```
-saturn-mojozork/
+zaturn/
 ├── README.md
 ├── .gitmodules
 ├── .gitignore
@@ -29,8 +29,8 @@ saturn-mojozork/
 ## Step 1 — start from your fork
 
 ```bash
-git clone git@github.com:suinevere/saturn-mojozork.git
-cd saturn-mojozork
+git clone git@github.com:suinevere/zaturn.git
+cd zaturn
 ```
 
 ## Step 2 — add the SDK as a submodule
@@ -93,14 +93,14 @@ git rm -r --cached --ignore-unmatch saturn/**/*.o saturn/**/*.exe saturn/BuildDr
 
 ```bash
 git add .gitmodules SaturnRingLib saturn docs README.md .gitignore
-git commit -m "Reorganize into submodule-based saturn-mojozork layout"
+git commit -m "Reorganize into submodule-based zaturn layout"
 git push origin main
 ```
 
 ## Verifying a clean clone builds (the acceptance test)
 
 ```bash
-git clone --recursive git@github.com:suinevere/saturn-mojozork.git test-clone
+git clone --recursive git@github.com:suinevere/zaturn.git test-clone
 cd test-clone/SaturnRingLib && ./tools/scripts/getcompiler.sh 14.2.0 && cd ..
 cd saturn && ./compile.bat debug     # produces BuildDrop/mojozork.cue + .iso
 ```

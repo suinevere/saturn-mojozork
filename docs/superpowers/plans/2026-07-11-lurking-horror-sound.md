@@ -108,7 +108,7 @@ void sound_blorb_close(void);
 
 Run:
 ```bash
-cd /c/Users/saggl/CLionProjects/saturn-mojozork
+cd /c/Users/saggl/CLionProjects/zaturn
 gcc -O2 -I saturn/src -o /tmp/sbt test/sound_blorb_test.c saturn/src/sound_blorb.c
 ```
 Expected: FAIL — link error, `sound_blorb.c` does not exist yet (or undefined references).
@@ -333,7 +333,7 @@ Expected: `BUILD_OK`, no errors. (`GState->sound_effect` is NULL for now, so the
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /c/Users/saggl/CLionProjects/saturn-mojozork
+cd /c/Users/saggl/CLionProjects/zaturn
 git add saturn/mojozork.c
 git commit -m "Implement sound_effect opcode (245) via a GState hook"
 ```
@@ -529,7 +529,7 @@ Expected: `BUILD_OK`, no errors (`slPCMOn`/`slPCMStat`/`slPCMOff` resolve from S
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /c/Users/saggl/CLionProjects/saturn-mojozork
+cd /c/Users/saggl/CLionProjects/zaturn
 git add saturn/src/sound.h saturn/src/sound.cxx saturn/Makefile
 git commit -m "PCM playback module for Lurking Horror sounds; enable SGL sound driver"
 ```
@@ -608,7 +608,7 @@ Expected: `BUILD_OK`.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /c/Users/saggl/CLionProjects/saturn-mojozork
+cd /c/Users/saggl/CLionProjects/zaturn
 git add saturn/src/saturn_glue.h saturn/src/mojozork_saturn.c saturn/src/main.cxx
 git commit -m "Wire sound: boot hook, .BLB init, per-frame service, stop on reset"
 ```
@@ -699,7 +699,7 @@ Expected: `BUILD_OK`.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /c/Users/saggl/CLionProjects/saturn-mojozork
+cd /c/Users/saggl/CLionProjects/zaturn
 git add saturn/src/main.cxx
 git commit -m "Options: Sound On/Off toggle, persisted in MOJOOPTS"
 ```

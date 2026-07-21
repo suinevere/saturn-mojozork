@@ -1,4 +1,4 @@
-# Fork .gitignore  —  rename to ".gitignore" at the root of saturn-mojozork.
+# Fork .gitignore  —  rename to ".gitignore" at the root of zaturn.
 # (SaturnRingLib and zork-netlink are SUBMODULES here, so they are NOT ignored,
 #  unlike in the staging repo where they were plain untracked clones.)
 

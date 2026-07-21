@@ -14,7 +14,7 @@ Our live instance runs on an **Oracle Cloud Free Tier** VM and is reachable at
 ## What the image does
 
 - **Build stage** installs `git` + a C toolchain + `libsqlite3-dev`, clones
-  `suinevere/saturn-mojozork` (branch `main`), and compiles `saturn/multizorkd.c`
+  `suinevere/zaturn` (branch `main`), and compiles `saturn/multizorkd.c`
   (which `#include`s `mojozork.c`) against system SQLite.
 - **Runtime stage** ships only the `multizorkd` binary and `ZORK1.Z3`, runs as a
   **non-root** user, and serves telnet on container port **2323**.
@@ -28,7 +28,7 @@ Our live instance runs on an **Oracle Cloud Free Tier** VM and is reachable at
 
 | Arg | Default | Purpose |
 |---|---|---|
-| `REPO_URL` | `https://github.com/suinevere/saturn-mojozork.git` | source to clone |
+| `REPO_URL` | `https://github.com/suinevere/zaturn.git` | source to clone |
 | `REPO_REF` | `main` | branch/tag to build |
 
 A `docker compose build` picks up new commits automatically (a GitHub API
@@ -40,8 +40,8 @@ cache-bust invalidates the clone layer); force a clean rebuild with
 ## Quick start (any Docker host)
 
 ```bash
-git clone https://github.com/suinevere/saturn-mojozork.git
-cd saturn-mojozork/docker
+git clone https://github.com/suinevere/zaturn.git
+cd zaturn/docker
 docker compose up -d --build
 docker compose logs            # expect: "Now accepting connections on port 2323"
 telnet localhost 23            # "Hello sailor!" = working
@@ -64,8 +64,8 @@ curl -s ifconfig.me; echo                     # note the public IPv4
 
 # deploy
 sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git
-git clone https://github.com/suinevere/saturn-mojozork.git
-cd saturn-mojozork/docker
+git clone https://github.com/suinevere/zaturn.git
+cd zaturn/docker
 sudo docker compose up -d --build
 ```
 

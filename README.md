@@ -1,4 +1,4 @@
-i# saturn-mojozork
+i# zaturn
 
 A Sega Saturn port of [icculus's MojoZork](https://github.com/icculus/mojozork)
 Z-Machine. It boots on real hardware or an emulator and offers two modes:
@@ -11,7 +11,7 @@ Z-Machine. It boots on real hardware or an emulator and offers two modes:
 ## Repository layout
 
 ```
-saturn-mojozork/
+zaturn/
 ├── README.md                 you are here
 ├── .gitmodules
 ├── SaturnRingLib/            → git submodule: ReyeMe/SaturnRingLib (Saturn SDK)
@@ -60,8 +60,8 @@ Builds on Windows, Linux, or macOS:
 ## 1. Clone (with submodules)
 
 ```bash
-git clone --recursive git@github.com:suinevere/saturn-mojozork.git
-cd saturn-mojozork
+git clone --recursive git@github.com:suinevere/zaturn.git
+cd zaturn
 ```
 
 Already cloned without `--recursive`? Pull the submodules in:
@@ -337,7 +337,7 @@ publish**. Leave the target as `main`.
 > Prefer the command line? `git tag v1.0 && git push origin v1.0` triggers the
 > exact same build and creates the release if one doesn't already exist.
 
-The zip name carries the version (`saturn-mojozork-v1.0.zip`); the folder inside
+The zip name carries the version (`zaturn-v1.0.zip`); the folder inside
 it is named for the release so it drops cleanly into a disc library.
 
 ---
