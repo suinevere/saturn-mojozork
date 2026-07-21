@@ -60,7 +60,7 @@ powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\mzaudio.zip' -Desti
 IF ERRORLEVEL 1 ( ECHO ERROR: failed to extract audio zip & EXIT /B 1 )
 
 ECHO Processing files and merging directories...
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\split.ps1" -BinDir "%GAME_DIR%" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\add-music.ps1" -BinDir "%GAME_DIR%" -CueMusicDir "%TMP_IMG%" -OutDir "%OUTPUT_DIR%"
 IF ERRORLEVEL 1 ( ECHO ERROR: disc processing failed & EXIT /B 1 )
 
 ECHO Process complete -^> %OUTPUT_DIR%

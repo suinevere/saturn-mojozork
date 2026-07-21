@@ -39,7 +39,7 @@
 :;
 :; echo "Complete."
 :;
-:; . lib/inject.sh
+:; . lib/merge.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; BASE_ISO=$(cfg BASE_ISO); GAME_DIR=$(cfg GAME_DIR); DISC_NAME=$(cfg DISC_NAME)
 :; inject_games "${BASE_ISO:-./base/mojozork.iso}" "Z3" "${GAME_DIR:-./game}" "${DISC_NAME:-mojozork}"
@@ -106,7 +106,7 @@ IF NOT EXIST "%BASE_ISO%" (
     EXIT /B 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\inject.ps1" -BaseIso "%BASE_ISO%" -GamesDir "Z3" -OutDir "%GAME_DIR%" -Name "%DISC_NAME%" -Dd ".\bin\win\dd.exe" -Xorriso ".\bin\win\xorriso.exe" -Iso2raw ".\bin\win\iso2raw.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\lib\merge.ps1" -BaseIso "%BASE_ISO%" -GamesDir "Z3" -OutDir "%GAME_DIR%" -Name "%DISC_NAME%" -Dd ".\bin\win\dd.exe" -Xorriso ".\bin\win\xorriso.exe" -Iso2raw ".\bin\win\iso2raw.exe"
 IF ERRORLEVEL 1 ( ECHO ERROR: game injection failed & EXIT /B 1 )
 
 ENDLOCAL

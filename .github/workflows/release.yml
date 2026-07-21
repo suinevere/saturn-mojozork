@@ -89,7 +89,7 @@ jobs:
           # Stage the kit contents flat at the zip root (no wrapper folder).
           STAGE="$RUNNER_TEMP/kit-stage"
           mkdir -p "$STAGE/base"
-          # Base ISO = injection input for games.bat (Zork 1/2/3 baked in).
+          # Base ISO
           cp saturn/BuildDrop/zaturn.iso "$STAGE/base/zaturn.iso"
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
           cp -r tools/assets/. "$STAGE/"
