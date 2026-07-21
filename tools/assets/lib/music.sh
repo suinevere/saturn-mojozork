@@ -3,7 +3,7 @@
 process_bin() {
   local bin_dir="$1" out="$2" base="$3"
   shopt -s nullglob
-  local bins=("$bin_dir"/*.bin)
+  local bins=("$bin_dir"/zaturn.bin)
   [ ${#bins[@]} -gt 0 ] || { echo "ERROR: No .bin file found in $bin_dir"; exit 1; }
 
   cp "${bins[0]}" "$out/$base (Track 01).bin"
