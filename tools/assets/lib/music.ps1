@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$CueMusicDir,
     [Parameter(Mandatory=$true)][string]$OutDir,
-    [Parameter(Mandatory=$true)][string]$DiscName,
+    [Parameter(Mandatory=$true)][string]$DiscName
 )
 
 $FinalOut = Join-Path $OutDir $DiscName

@@ -40,6 +40,7 @@ REM Parse all configuration variables
 FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
     IF "%%A"=="AUDIO_URL" SET "AUDIO_URL=%%B"
     IF "%%A"=="OUTPUT_DIR" SET "OUTPUT_DIR=%%B"
+    IF "%%A"=="DISC_NAME" SET "DISC_NAME=%%B"
 )
 
 IF NOT DEFINED OUTPUT_DIR SET "OUTPUT_DIR=./Zaturn - Complete (USA) (Netlink Edition)"
