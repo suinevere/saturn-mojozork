@@ -24,6 +24,7 @@
 :; echo "Processing files into -> $FINAL_OUT"
 :;
 :; # 4. Execute new logic
+:; promote_game_track "$FINAL_OUT" "$DISC_NAME"
 :; process_audio "$tmp/img" "$FINAL_OUT" "$DISC_NAME"
 :; process_cue "$tmp/img" "$FINAL_OUT" "$DISC_NAME"
 :;
