@@ -145,11 +145,22 @@ Requirements:
   everything from the raw 102-longword TOC's control bits (`toc_is_audio`,
   `toc_track_no` on words 99/100) rather than hardcoding an audio-track
   offset, so a differently-laid-out disc is discovered automatically.
-- **Minimal data track 01.** `promote_game_track` (`lib/music.sh:5`) only
-  *warns* when no game track exists, and `process_audio` skips Track 1 from
-  the music dir — so a disc built without `games.bat` yields a cue referencing
-  a missing track 01. The companion disc needs a small data track so it is a
-  proper Saturn mixed-mode disc that authenticates normally on swap.
+- **Data track 01.** `promote_game_track` (`lib/music.sh:5`) only *warns* when
+  no game track exists, and `process_audio` skips Track 1 from the music dir —
+  so a disc built without `games.bat` yields a cue referencing a missing track
+  01. The companion disc needs a data track so it is a proper Saturn
+  mixed-mode disc that authenticates normally on swap.
+
+  The NetLink browser image is commonly distributed as a `.iso`; **just rename
+  it to `.bin`** and use it as track 01. No conversion step is needed.
+
+  > **Sector-mode caveat.** A renamed `.iso` still has **2048-byte** sectors,
+  > so its cue entry must read `TRACK 01 MODE1/2048`. Do *not* reuse the
+  > `games.bat` line: that path runs a real ISO → raw conversion
+  > (`lib/games.sh:30`) and therefore emits `TRACK 01 MODE1/2352`
+  > (`lib/games.sh:34`, `lib/games.ps1:55`). Pairing a renamed 2048-byte image
+  > with a `MODE1/2352` declaration produces a disc that fails silently rather
+  > than erroring at build time.
 
 ### Second `CONFIG.ME`
 
