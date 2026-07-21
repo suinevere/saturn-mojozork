@@ -29,7 +29,12 @@ $inj = Join-Path $OutDir "$Name`_injected.iso"
 $ip = Read-Head $BaseIso
 
 # 2) inject game files into /Z3 (rewrites the ISO, clobbering the system area)
-& $Xorriso -indev $BaseIso -outdev $inj -map $GamesDir /Z3 -commit 2>$null
+# -rockridge off is REQUIRED: xorriso enables Rock Ridge by default, which adds
+# SUSP/PX system-use fields to every directory record (34-46 bytes -> 96-132).
+# Sega mastering never emits those, and the Saturn CD block's ISO9660 parser --
+# the one the BIOS uses to find the first-read file 0.BIN -- chokes on them, so
+# the patched disc stops booting. -joliet off guards the same way.
+& $Xorriso -indev $BaseIso -outdev $inj -rockridge off -joliet off -map $GamesDir /Z3 -commit 2>$null
 if ($LASTEXITCODE -ne 0) { Write-Error "xorriso injection failed"; exit 1 }
 if (-not (Test-Path $inj) -or (Get-Item $inj).Length -le $IpBinSize) {
     Write-Error "xorriso produced no injected ISO"; exit 1

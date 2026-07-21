@@ -12,7 +12,12 @@ inject_games() {
   # 1) rip IP.BIN (first 16 * 2048 = 32768 bytes)
   dd if="$base" of="$out/ip.bin" bs=2048 count=16 2>/dev/null
   # 2) inject game files into /Z3 (rewrites the ISO, clobbering the system area)
-  if ! "$XORRISO" -indev "$base" -outdev "$inj" -map "$gdir" /Z3 -commit >/dev/null 2>&1; then
+  # -rockridge off is REQUIRED: xorriso enables Rock Ridge by default, which adds
+  # SUSP/PX system-use fields to every directory record (34-46 bytes -> 96-132).
+  # Sega mastering never emits those, and the Saturn CD block's ISO9660 parser --
+  # the one the BIOS uses to find the first-read file 0.BIN -- chokes on them, so
+  # the patched disc stops booting. -joliet off guards the same way.
+  if ! "$XORRISO" -indev "$base" -outdev "$inj" -rockridge off -joliet off -map "$gdir" /Z3 -commit >/dev/null 2>&1; then
     echo "ERROR: xorriso injection failed"; return 1
   fi
   [ -s "$inj" ] && [ "$(file_size "$inj")" -gt 32768 ] || {

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-. lib/inject.sh    # sources cuelib.sh; defines inject_games. No main runs.
+. lib/games.sh    # sources cuelib.sh; defines inject_games. No main runs.
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
-    echo "SKIP: bash inject_games is unsupported under git-bash/MSYS (bundled Cygwin xorriso mangles the /Z3 in-ISO path). The bash path is exercised on Linux CI; the Windows path is inject.ps1."; exit 0;;
+    echo "SKIP: bash inject_games is unsupported under git-bash/MSYS (MSYS rewrites the /Z3 in-ISO path into a host path, so xorriso creates a bogus /C_/PROGRAM_FILES tree). The bash path is exercised on Linux CI; the Windows path is lib/games.ps1."; exit 0;;
 esac
 
 # Requires a real base ISO + xorriso + iso2raw. Skip cleanly if unavailable.
-BASE="../../saturn/BuildDrop/mojozork.iso"
+BASE="../../saturn/BuildDrop/Zaturn (USA) (Netlink Edition).iso"
 if [ ! -f "$BASE" ] || ! resolve_tool xorriso >/dev/null 2>&1; then
   echo "SKIP: base ISO or xorriso unavailable"; exit 0
 fi
@@ -30,4 +30,17 @@ grep -q 'TRACK 01 MODE1/2352' "$work/out/mojozork.cue" && echo "ok: cue" || { ec
 # 3) Injected game present in the ISO listing.
 resolve_tool xorriso >/dev/null && "$(resolve_tool xorriso)" -indev "$work/out/mojozork_injected.iso" -find /Z3 2>/dev/null | grep -qi 'TESTGAME' \
   && echo "ok: game injected" || { echo "FAIL: game not in ISO"; fail=1; }
+# 4) Plain ISO9660 directory records — no Rock Ridge/SUSP.
+#    Rock Ridge inflates the "." record from 34 bytes to ~132 and the Saturn CD
+#    block's ISO9660 parser (used by the BIOS to locate 0.BIN) then fails to
+#    boot the disc. Read the root dir LBA out of the PVD and check record 1.
+iso="$work/out/mojozork_injected.iso"
+root_lba=$(od -A n -t u4 -j $((32768 + 158)) -N 4 "$iso" | tr -d ' ')
+dot_reclen=$(od -A n -t u1 -j $((root_lba * 2048)) -N 1 "$iso" | tr -d ' ')
+if [ "$dot_reclen" = "34" ]; then
+  echo "ok: plain ISO9660 (root '.' record = 34 bytes)"
+else
+  echo "FAIL: directory records carry system-use data ('.' record = ${dot_reclen} bytes, expected 34) — xorriso needs -rockridge off"
+  fail=1
+fi
 exit $fail
