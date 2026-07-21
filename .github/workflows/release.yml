@@ -67,12 +67,18 @@ jobs:
           else
             VER="${GITHUB_SHA::7}"
           fi
-          # Stage the burnable disc files flat: cue + MODE1/2352 raw track.
+          NAME="Zaturn (USA) (Netlink Edition)"
+          # Stage the burnable disc files flat: cue + MODE1/2352 raw track,
+          # renamed from the build's internal "zaturn" basename to the release
+          # name. The Makefile sets CD_NAME=zaturn, so the generated cue's FILE
+          # line says "zaturn.bin" -- rewrite it to match the renamed track or
+          # the cue points at a file that isn't in the zip.
           STAGE="$RUNNER_TEMP/release-stage"
           mkdir -p "$STAGE"
-          cp saturn/BuildDrop/zaturn.cue "$STAGE/zaturn.cue"
-          cp saturn/BuildDrop/zaturn.bin "$STAGE/zaturn.bin"
-          NAME="Zaturn (USA) (Netlink Edition)"
+          cp saturn/BuildDrop/zaturn.bin "$STAGE/${NAME}.bin"
+          sed -E 's/^([[:space:]]*FILE[[:space:]]+")[^"]*(")/\1'"${NAME}"'.bin\2/' \
+            saturn/BuildDrop/zaturn.cue > "$STAGE/${NAME}.cue"
+          grep -q "FILE \"${NAME}.bin\" BINARY" "$STAGE/${NAME}.cue"
           # One zip, files at its root -- unzip yields the files directly:
           # no nested zip, no wrapper folder. The .zip is the release asset;
           # the workflow-artifact upload uses the same staged folder.
@@ -92,8 +98,9 @@ jobs:
           
           # Original iso.
           mkdir -p "$STAGE/Zaturn (USA) (Netlink Edition)"
+          # zaturn.iso keeps its build name -- CONFIG.ME's BASE_ISO points at it.
           cp saturn/BuildDrop/zaturn.iso "$STAGE/Zaturn (USA) (Netlink Edition)/zaturn.iso"
-          cp saturn/BuildDrop/zaturn.bin "$STAGE/Zaturn (USA) (Netlink Edition)/zaturn.bin"
+          cp saturn/BuildDrop/zaturn.bin "$STAGE/Zaturn (USA) (Netlink Edition)/Zaturn (USA) (Netlink Edition).bin"
           
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
           cp -r tools/assets/. "$STAGE/"
