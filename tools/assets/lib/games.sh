@@ -28,5 +28,7 @@ inject_games() {
   { printf 'FILE "%s.bin" BINARY\n' "$name";
     printf '  TRACK 01 MODE1/2352\n';
     printf '    INDEX 01 00:00:00\n'; } > "$out/${name}.cue"
+  rm -rf $inj
+  rm -rf "$out/ip.bin"
   echo "Injected games -> $out/${name}.bin"
 }

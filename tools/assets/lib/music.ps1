@@ -13,9 +13,9 @@ if (-not (Test-Path $FinalOut)) {
 }
 
 # 2. Process BIN dir (Track 01)
-$singleBin = Get-ChildItem -Path $BinDir -Filter *.bin -File | Select-Object -First 1
+$singleBin = Get-ChildItem -Path $BinDir -Filter zaturn.bin -File
 if (-not $singleBin) {
-    Write-Error "No .bin file found in $BinDir"
+    Write-Error "No zaturn.bin file found in $BinDir"
     exit 1
 }
 $destTrack01 = Join-Path $FinalOut "$baseName (Track 01).bin"
