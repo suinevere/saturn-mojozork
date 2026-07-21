@@ -42,7 +42,7 @@
 :; . lib/merge.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; BASE_ISO=$(cfg BASE_ISO); OUTPUT_DIR=$(cfg OUTPUT_DIR); DISC_NAME=$(cfg DISC_NAME)
-:; BASE_ISO=${BASE_ISO:-./Zaturn (USA) (Netlink Edition)/zaturn.iso}
+:; BASE_ISO=${BASE_ISO:-./Zaturn (USA) (Netlink Edition)/Zaturn (USA) (Netlink Edition).iso}
 :; DISC_NAME=${DISC_NAME:-Zaturn - Complete (USA) (Netlink Edition)}
 :; OUTPUT_DIR=${OUTPUT_DIR:-./$DISC_NAME}
 :; inject_games "$BASE_ISO" "Z3" "$OUTPUT_DIR" "$DISC_NAME"
@@ -87,7 +87,7 @@ FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
     IF "%%A"=="OUTPUT_DIR" SET "OUTPUT_DIR=%%B"
     IF "%%A"=="DISC_NAME" SET "DISC_NAME=%%B"
 )
-IF NOT DEFINED BASE_ISO SET "BASE_ISO=./Zaturn (USA) (Netlink Edition)/zaturn.iso"
+IF NOT DEFINED BASE_ISO SET "BASE_ISO=./Zaturn (USA) (Netlink Edition)/Zaturn (USA) (Netlink Edition).iso"
 IF NOT DEFINED OUTPUT_DIR SET "OUTPUT_DIR=./Zaturn - Complete (USA) (Netlink Edition)"
 IF NOT DEFINED DISC_NAME SET "DISC_NAME=Zaturn - Complete (USA) (Netlink Edition)"
 
@@ -98,10 +98,10 @@ SET "OUTPUT_DIR=%OUTPUT_DIR:/=\%"
 REM Stage the base ISO from the SDK build output if it hasn't been placed yet.
 REM (CI stages it in full-image.yml; a local run must do the same.)
 IF NOT EXIST "%BASE_ISO%" (
-    IF EXIST "..\..\saturn\BuildDrop\zaturn.iso" (
+    IF EXIST "..\..\saturn\BuildDrop\Zaturn (USA) (Netlink Edition).iso" (
         ECHO Staging base ISO from saturn\BuildDrop -^> %BASE_ISO%
         FOR %%I IN ("%BASE_ISO%") DO IF NOT EXIST "%%~dpI" MKDIR "%%~dpI"
-        COPY /Y "..\..\saturn\BuildDrop\zaturn.iso" "%BASE_ISO%" >NUL
+        COPY /Y "..\..\saturn\BuildDrop\Zaturn (USA) (Netlink Edition).iso" "%BASE_ISO%" >NUL
     )
 )
 IF NOT EXIST "%BASE_ISO%" (

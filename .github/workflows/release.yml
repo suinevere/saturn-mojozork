@@ -68,16 +68,15 @@ jobs:
             VER="${GITHUB_SHA::7}"
           fi
           NAME="Zaturn (USA) (Netlink Edition)"
-          # Stage the burnable disc files flat: cue + MODE1/2352 raw track,
-          # renamed from the build's internal "zaturn" basename to the release
-          # name. The Makefile sets CD_NAME=zaturn, so the generated cue's FILE
-          # line says "zaturn.bin" -- rewrite it to match the renamed track or
-          # the cue points at a file that isn't in the zip.
+          # Stage the burnable disc files flat: cue + MODE1/2352 raw track.
+          # The Makefile's CD_NAME already produces these names, so this is a
+          # straight copy; the cue's FILE line is normalized anyway so a future
+          # CD_NAME change can't ship a cue pointing outside the zip.
           STAGE="$RUNNER_TEMP/release-stage"
           mkdir -p "$STAGE"
-          cp saturn/BuildDrop/zaturn.bin "$STAGE/${NAME}.bin"
+          cp "saturn/BuildDrop/${NAME}.bin" "$STAGE/${NAME}.bin"
           sed -E 's/^([[:space:]]*FILE[[:space:]]+")[^"]*(")/\1'"${NAME}"'.bin\2/' \
-            saturn/BuildDrop/zaturn.cue > "$STAGE/${NAME}.cue"
+            "saturn/BuildDrop/${NAME}.cue" > "$STAGE/${NAME}.cue"
           grep -q "FILE \"${NAME}.bin\" BINARY" "$STAGE/${NAME}.cue"
           # One zip, files at its root -- unzip yields the files directly:
           # no nested zip, no wrapper folder. The .zip is the release asset;
@@ -96,11 +95,11 @@ jobs:
           # Stage the kit contents flat at the zip root (no wrapper folder).
           STAGE="$RUNNER_TEMP/kit-stage"
           
-          # Original iso.
-          mkdir -p "$STAGE/Zaturn (USA) (Netlink Edition)"
-          # zaturn.iso keeps its build name -- CONFIG.ME's BASE_ISO points at it.
-          cp saturn/BuildDrop/zaturn.iso "$STAGE/Zaturn (USA) (Netlink Edition)/zaturn.iso"
-          cp saturn/BuildDrop/zaturn.bin "$STAGE/Zaturn (USA) (Netlink Edition)/Zaturn (USA) (Netlink Edition).bin"
+          # Original iso + raw track, in the folder CONFIG.ME's BASE_ISO expects.
+          DISC="Zaturn (USA) (Netlink Edition)"
+          mkdir -p "$STAGE/$DISC"
+          cp "saturn/BuildDrop/${DISC}.iso" "$STAGE/$DISC/${DISC}.iso"
+          cp "saturn/BuildDrop/${DISC}.bin" "$STAGE/$DISC/${DISC}.bin"
           
           # Scripts + libs + bundled tools + config + docs + empty working dirs.
           cp -r tools/assets/. "$STAGE/"

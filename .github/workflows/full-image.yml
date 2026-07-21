@@ -47,8 +47,9 @@ jobs:
       - name: Stage base ISO for the asset kit
         run: |
           set -e
-          mkdir -p "tools/assets/Zaturn (USA) (Netlink Edition)"
-          cp saturn/BuildDrop/zaturn.iso "tools/assets/Zaturn (USA) (Netlink Edition)/zaturn.iso"
+          DISC="Zaturn (USA) (Netlink Edition)"
+          mkdir -p "tools/assets/$DISC"
+          cp "saturn/BuildDrop/${DISC}.iso" "tools/assets/$DISC/${DISC}.iso"
 
       - name: Download games + inject
         working-directory: tools/assets
