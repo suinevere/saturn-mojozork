@@ -4,6 +4,11 @@
 // Per-game "solution" overlay: base-weight and transition boosts derived from a
 // winning walkthrough, applied on top of the runtime grammar layer. Keyed by the
 // story's release number + serial, so it only touches the game it was built for.
+//
+// NETBIN builds embed only Zork I, so every other game's word/link arrays and
+// its SOLUTIONS[] row are wrapped in #ifndef NETBIN (via gen_solution.py's
+// --netbin-keep). The CD build (NETBIN undefined) compiles all games; the netbin
+// compiles just the kept one, dropping the ~60 KB of rodata it would never use.
 
 #include "typeahead_solution.h"
 #include <string.h>
@@ -165,7 +170,7 @@ static const SolLink g24_links[] = { {"bronze","door",3929}, {"cell","door",3940
 
 static const Solution SOLUTIONS[] = {
 #ifndef NETBIN
-{ 1, "151001", g0_words, 52, g0_links, 43 },
+    { 1, "151001", g0_words, 52, g0_links, 43 },
 #endif
 #ifndef NETBIN
     { 97, "851218", g1_words, 152, g1_links, 203 },

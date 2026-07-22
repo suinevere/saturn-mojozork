@@ -16,16 +16,35 @@
 
 $ErrorActionPreference = "Stop"
 
+# The overlay covers every game we have a walkthrough for, so the whole story
+# library must be on hand -- not just the three ZORK stories the repo tracks.
+# It lives in tools/assets/Z3 (git-ignored, populated by games.bat). If any story
+# a non-empty .WIN needs is missing, fetch it by reusing games.bat in
+# download-only mode (that stops before the ISO injection, which needs a built
+# base ISO). Each solutions/<NAME>.WIN pairs with Z3/<NAME>.Z3 by base name.
+$z3 = "../assets/Z3"
+$needed = Get-ChildItem "./solutions/*.WIN" |
+          Where-Object { $_.Length -gt 0 } | ForEach-Object { $_.BaseName }
+$missing = $needed | Where-Object { -not (Test-Path (Join-Path $z3 "$_.Z3")) }
+if ($missing) {
+    Write-Host "Missing stories: $($missing -join ', '). Fetching via games.bat download..."
+    Push-Location "../assets"
+    try {
+        & cmd /c "games.bat download"
+        if ($LASTEXITCODE -ne 0) { throw "games.bat download failed (exit $LASTEXITCODE)" }
+    } finally { Pop-Location }
+}
+
 # NB: $args is a reserved automatic variable in PowerShell and += inside a
 # ForEach-Object block won't accumulate to the outer scope -- use a plain foreach
 # and a non-reserved name.
 $gameArgs = @()
-foreach ($f in (Get-ChildItem -Path "../../saturn/cd/data/Z3/*.Z3" | Sort-Object Name)) {
+foreach ($f in (Get-ChildItem -Path "$z3/*.Z3" | Sort-Object Name)) {
     $name = $f.BaseName
     $win  = "./solutions/$name.WIN"
     if ((Test-Path $win) -and ((Get-Item $win).Length -gt 0)) {
         $gameArgs += "--game"
-        $gameArgs += "../../saturn/cd/data/Z3/$name.Z3:$win"
+        $gameArgs += "$z3/$name.Z3:$win"
     } else {
         Write-Host "skip $name (no non-empty $win)"
     }

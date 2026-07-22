@@ -39,6 +39,11 @@
 :;
 :; echo "Complete."
 :;
+:; # Download-only mode (used by typeahead's gen_all.ps1): stop before the ISO
+:; # injection, which needs the SDK-built base ISO. Everything above just fetches
+:; # and maps the story files into Z3/.
+:; if [ "$1" = "download" ]; then echo "Download-only: skipping ISO injection."; exit 0; fi
+:;
 :; . lib/games.sh
 :; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
 :; BASE_ISO=$(cfg BASE_ISO); OUTPUT_DIR=$(cfg OUTPUT_DIR); DISC_NAME=$(cfg DISC_NAME)
@@ -84,6 +89,10 @@ ECHO Downloading ADVENT.Z3 into Z3...
 curl -L -o "Z3\ADVENT.Z3" "%ADVENT_URL%"
 
 ECHO Complete.
+
+REM Download-only mode (used by typeahead's gen_all.ps1): stop before the ISO
+REM injection, which needs the SDK-built base ISO.
+IF /I "%~1"=="download" ( ECHO Download-only: skipping ISO injection. & ENDLOCAL & GOTO :eof )
 
 FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
     IF "%%A"=="BASE_ISO" SET "BASE_ISO=%%B"

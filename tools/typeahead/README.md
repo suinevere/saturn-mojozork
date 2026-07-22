@@ -39,8 +39,17 @@ Regenerate the overlay for **all** games in one shot (from `tools/typeahead/`):
 cd ../../saturn ; ./compile.bat     # rebuild the client
 ```
 
-`gen_all.ps1` enumerates `saturn/cd/data/Z3/*.Z3`, skips games with no non-empty
-`.WIN`, and calls `gen_solution.py` **once** with every game.
+`gen_all.ps1` enumerates the story library in `tools/assets/Z3/`, skips games
+with no non-empty `.WIN`, and calls `gen_solution.py` **once** with every game.
+Each `solutions/<NAME>.WIN` pairs with `Z3/<NAME>.Z3` by base name.
+
+The overlay needs the **whole** Infocom library, not just the three ZORK stories
+the repo tracks. `tools/assets/Z3/` is git-ignored and populated by `games.bat`,
+so `gen_all.ps1` guarantees it first: if any story a non-empty `.WIN` needs is
+missing, it runs `games.bat download` (a download-only mode that fetches and maps
+the story files but stops before the ISO injection, which needs a built base
+ISO). On a fresh checkout this pulls the library automatically; when it is
+already present nothing is downloaded.
 
 > It must be one file with all games, not one file per game. The overlay is
 > dispatched at runtime by story release+serial, so a single
