@@ -775,6 +775,15 @@ static void ensure_online_typeahead(void) {
     g_online_ta = create_trie_node();
     g_online_diff = g_difficulty;
     if (g_difficulty == DIFF_HARD) return;      // typeahead off
+#ifdef NETBIN
+    // The story is already resident in .rodata, so the online vocabulary is
+    // built straight from it: no Z3 folder scan, no CD read, and nothing to
+    // free afterwards. Both builders take const pointers, so the blob is used
+    // in place rather than copied.
+    const unsigned char* story = netbin_story_data();
+    uint32_t len = netbin_story_size();
+    if (len == 0) story = nullptr;
+#else
     char names[1][16];
     if (scan_z3_folder(names, 1) < 0) return;   // no Z3 folder -> empty trie (no suggestions)
     uint8_t* story = nullptr; uint32_t len = 0;
@@ -794,13 +803,16 @@ static void ensure_online_typeahead(void) {
         // read silence it again. Callers re-assert playback once the reads are done.
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
+#endif
     if (story != nullptr) {
         build_typeahead_from_story(g_online_ta, story, len);
         int have_solution = (g_difficulty != DIFF_HARD)
                           ? apply_solution_overlay(g_online_ta, story, len) : 0;
         typeahead_add_abbreviations(g_online_ta);
         typeahead_set_easy(g_difficulty == DIFF_EASY, have_solution);
-        SRL::Memory::HighWorkRam::Free(story);
+#ifndef NETBIN
+        SRL::Memory::HighWorkRam::Free(story);   // netbin's story is .rodata, not ours to free
+#endif
     }
 }
 
@@ -1058,11 +1070,10 @@ int main(void) {
     ensure_online_typeahead();           // and the online terminal's Zork I vocabulary
 #endif
     // NETBIN: nothing to preload. The story and driver are already resident and
-    // there is no TGA art. ensure_online_typeahead is skipped too: it scans the
-    // CD's Z3 folder, and its own documented degradation for a missing folder
-    // is an empty trie (main.cxx:769), i.e. Play Online simply offers no
-    // typeahead suggestions. Local play is unaffected -- it builds its trie
-    // from the loaded story image, not from a CD scan.
+    // there is no TGA art. ensure_online_typeahead is skipped here only because
+    // there is no CD read left to front-load -- under NETBIN it builds from the
+    // embedded story with no CD access at all, so its own call inside
+    // online_mode() does the work on first use and costs nothing.
 
     music_set_level(g_music_level);      // honor the saved music level for menu audio
     music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow
