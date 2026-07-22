@@ -28,20 +28,16 @@
 - `tools/gen_blob.py` — converts a binary file into a C byte-array source. One responsibility: bytes → `.c` text.
 - `saturn/src/netbin_blobs.h` — public accessors for embedded payloads.
 - `saturn/src/netbin_blobs.c` — **generated**; the byte arrays. Regenerated, never hand-edited.
-- `saturn/src/toc_decode.h` / `saturn/src/toc_decode.c` — pure-C Saturn CD TOC field decoding, extracted from `music_cdda.cxx` so it is host-testable.
 - `saturn/src/netbin_sound.h` / `saturn/src/netbin_sound.cxx` — RAM-based SGL sound driver initialization.
 - `saturn/sgl-netbin.linker` — SRL's linker script relocated to `0x06010000`.
 - `saturn/post.makefile` — netbin packaging + size gate.
 - `saturn/compile-netbin.bat` — one-command netbin build for the user.
-- `saturn/tests/test_toc_decode.c` — host tests for TOC decoding.
 - `saturn/tests/test_netbin_blobs.c` — host test that the generator round-trips bytes.
 - `tools/assets/CONFIG.NETLINK.ME` — music-only config for the companion disc.
 
 **Modified:**
 - `saturn/Makefile` — `NETBIN` block.
-- `saturn/src/music_cdda.cxx` — use `toc_decode`, gate the TOC cache on sanity.
 - `saturn/src/main.cxx` — `#ifdef NETBIN` boot guards and embedded story load.
-- `saturn/src/menu_pages.cxx` — TOC reset on Sound Options entry.
 - `tools/assets/music.bat` — config-path override.
 - `tools/assets/README.md` — companion disc documentation.
 
@@ -444,7 +440,13 @@ git commit -m "Add NETBIN build target linking at 0x06010000 with a 400 KB gate"
 
 ---
 
-### Task 3: Extract TOC decoding into a host-testable module
+### Task 3: Extract TOC decoding into a host-testable module — DROPPED
+
+> **Dropped on 2026-07-21 by user decision.** Implemented at 13b8770, never
+> reviewed, then removed from the branch by rebase. Its only remaining consumer
+> was Task 4, which is also skipped, so the extraction carried no netbin value.
+> `music_cdda.cxx` keeps its original inline TOC decoding. Steps below are
+> retained for the record — **do not execute them.**
 
 `music_cdda.cxx` mixes pure TOC arithmetic with SRL calls, so none of it can be
 tested off-hardware. The TOC-validity work in Task 4 changes exactly this logic,
@@ -744,7 +746,13 @@ git commit -m "Extract CD TOC decoding into a host-tested pure-C module"
 
 ---
 
-### Task 4: Do not cache a bogus TOC
+### Task 4: Do not cache a bogus TOC — SKIPPED
+
+> **Skipped on 2026-07-21 by user decision.** The hazard is real but unproven:
+> it only matters if the browser leaves the CD block unsettled at hand-over,
+> which cannot be established without hardware. Deferred until testing shows
+> music is dead under the netbin. Steps below are retained for the record —
+> **do not execute them.**
 
 `toc_raw()` reads the TOC once and caches it forever. The disc never changes —
 there is one disc, the NetLink Custom Web Browser disc, and it stays in the
@@ -1569,7 +1577,6 @@ gcc -o /tmp/t1 saturn/tests/test_console.c      saturn/src/console.c      && /tm
 gcc -o /tmp/t2 saturn/tests/test_display.c      saturn/src/display.c      && /tmp/t2
 gcc -o /tmp/t3 saturn/tests/test_keyboard.c     saturn/src/keyboard.c     && /tmp/t3
 gcc -o /tmp/t4 saturn/tests/test_menu_layout.c  saturn/src/menu_layout.c  && /tmp/t4
-gcc -o /tmp/t5 saturn/tests/test_toc_decode.c   saturn/src/toc_decode.c   && /tmp/t5
 ```
 
 Expected: every binary prints its own `: OK` line and the script exits 0. If
