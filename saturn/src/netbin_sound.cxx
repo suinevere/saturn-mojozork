@@ -3,8 +3,9 @@
  | Description: RAM-based SGL sound driver bring-up for the .netbin build.
  |   Mirrors SRL's Sound::Hardware::Initialize() (srl_sound.hpp:24) call for
  |   call -- slSoundOffWait, SND_Init, SND_ChgMap, slInitSound, the SCSP
- |   enable poke, CDC_CdInit, SND_SetCdDaLev -- but sources the driver program
- |   and area map from netbin_blobs instead of Cd::File. SRL's version is left
+ |   enable poke, CDC_CdInit, SND_SetCdDaLev, slSoundOnWait -- but sources the
+ |   driver program and area map from netbin_blobs instead of Cd::File. SRL's
+ |   version is left
  |   to run and harmlessly skip itself: its body is guarded on both files
  |   existing on the disc, which they do not under the PlanetWeb loader.
  | Author: suinevere
@@ -49,6 +50,12 @@ extern "C" void netbin_sound_init(void) {
     *(volatile unsigned char *) (0x25a004e1) = 0x0;
     CDC_CdInit(0x00, 0x00, 0x05, 0x0f);
     SND_SetCdDaLev(7, 7);
+
+    // Sound back on. SRL's Initialize() calls slSoundOffWait/slSoundOnWait
+    // outside its file-exists guard, so it has already left sound ON by the
+    // time we run; without this the slSoundOffWait above would stick and every
+    // sound in the netbin build would be silent.
+    slSoundOnWait();
 }
 
 #else  /* !NETBIN -- SRL's own Cd::File path handles this in the CD build */
