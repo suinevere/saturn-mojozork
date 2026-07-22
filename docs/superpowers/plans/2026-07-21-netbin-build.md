@@ -1314,7 +1314,11 @@ netbin cannot rely on `Core::Initialize`'s assumptions. Immediately after
     // The PlanetWeb loader leaves the VDPs in the browser's state, not a
     // post-reset one. Re-assert the TV mode and clear both scroll screens
     // before anything draws.
-    slInitSystem(TV_320x224, NULL, 1);
+    // Mirror srl_core.hpp:75-78 exactly -- same resolution constant, SRL's own
+    // VDP1 texture table, same frame rate. Passing NULL here would deregister
+    // that table and break every textured sprite.
+    SRL::TV::SetScreenSize(INT_SRL_DEF_RES);
+    slInitSystem((uint16_t) INT_SRL_DEF_RES, SRL::VDP1::Textures->SglPtr(), SRL_FRAMERATE);
     slScrAutoDisp(NBG0ON | NBG1ON | NBG2ON | NBG3ON);
     slTVOff();
     slTVOn();
