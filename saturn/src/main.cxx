@@ -16,6 +16,7 @@ extern "C" {
 #include "typeahead_extract.h"
 #include "typeahead_solution.h"
 #include "music.h"
+#include "netbin_blobs.h"
 }
 #include "app_state.h"
 #include "input.h"
@@ -509,10 +510,17 @@ extern "C" void saturn_readline(char *buf, int maxlen) {
     buf[n + 1] = '\0';
 }
 
-// Re-read the story image from CD (used by opcode_restart). The GFS size read can
-// come back garbage, so retry the stat until it reports the expected size, then read
-// the whole file. Returns 1 on success, 0 on failure.
+// Re-read the story image (used by opcode_restart). In the netbin build the
+// story lives in .rodata, so this is a copy rather than a CD read. On CD the
+// GFS size read can come back garbage, so retry the stat until it reports the
+// expected size, then read the whole file. Returns 1 on success, 0 on failure.
 extern "C" int saturn_read_story_file(uint8_t *buf, uint32_t len) {
+#ifdef NETBIN
+    const unsigned char *src = netbin_story_data();
+    if (src == 0 || netbin_story_size() != len) return 0;
+    for (uint32_t i = 0; i < len; i++) buf[i] = src[i];
+    return 1;
+#else
     for (int attempt = 0; attempt < 300; attempt++) {
         SRL::Cd::File f(g_story_filename);
         if (f.Size.SectorSize == 2048 && (uint32_t) f.Size.Bytes == len) {
@@ -525,6 +533,7 @@ extern "C" int saturn_read_story_file(uint8_t *buf, uint32_t len) {
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
     return 0;
+#endif
 }
 
 extern "C" void saturn_die(const char *fmt, ...) {
@@ -1053,14 +1062,31 @@ int main(void) {
     }
     g_story_filename = game_file;   // save/restart must re-read the selected game
 
+    uint8_t *story = nullptr;
+    uint32_t len = 0;
+#ifdef NETBIN
+    // The story is embedded in .rodata. The Z-machine writes to its story
+    // image and initStory takes ownership of this buffer, so copy into HWRAM
+    // rather than pointing at the read-only original.
+    {
+        const unsigned char *src = netbin_story_data();
+        uint32_t n = netbin_story_size();
+        if (src != nullptr && n > 0) {
+            uint8_t *buf = (uint8_t *) SRL::Memory::HighWorkRam::Malloc(n);
+            if (buf != nullptr) {
+                for (uint32_t i = 0; i < n; i++) buf[i] = src[i];
+                story = buf; len = n;
+            }
+        }
+    }
+    if (story == nullptr) { saturn_die("Embedded story missing"); }
+#else
     // Load *.Z3 from CD. GFS_GetFileSize (used by SRL::Cd::File's ctor) can
     // return an uninitialized size on first access, and File::Read relies on that
     // size for both its work-buffer and its read bound. So retry the stat until it
     // reports a sane size (2048-byte data sectors, plausible length), then allocate
     // exactly that and read the whole file. A wrong size corrupts the story buffer
     // and makes the interpreter crash / report bogus "Out of memory".
-    uint8_t *story = nullptr;
-    uint32_t len = 0;
     for (int attempt = 0; attempt < 300 && story == nullptr; attempt++) {
         SRL::Cd::File f(game_file);
         int32_t bytes = f.Size.Bytes;
@@ -1078,6 +1104,7 @@ int main(void) {
         for (int i = 0; i < 8; i++) SRL::Core::Synchronize();
     }
     if (story == nullptr) { saturn_die("Could not load %s from CD",game_file); }
+#endif
 
     mojo_boot(story, len, seed);   // initStory takes ownership; it frees this on the next boot
 
