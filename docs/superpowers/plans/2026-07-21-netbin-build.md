@@ -39,8 +39,7 @@
 
 **Modified:**
 - `saturn/Makefile` — `NETBIN` block.
-- `saturn/src/music_cdda.cxx` — use `toc_decode`, add `music_cdda_toc_reset()`.
-- `saturn/src/music.h` — declare `music_cdda_toc_reset()`.
+- `saturn/src/music_cdda.cxx` — use `toc_decode`, gate the TOC cache on sanity.
 - `saturn/src/main.cxx` — `#ifdef NETBIN` boot guards and embedded story load.
 - `saturn/src/menu_pages.cxx` — TOC reset on Sound Options entry.
 - `tools/assets/music.bat` — config-path override.
@@ -448,7 +447,7 @@ git commit -m "Add NETBIN build target linking at 0x06010000 with a 400 KB gate"
 ### Task 3: Extract TOC decoding into a host-testable module
 
 `music_cdda.cxx` mixes pure TOC arithmetic with SRL calls, so none of it can be
-tested off-hardware. The disc-swap work in Task 4 changes exactly this logic,
+tested off-hardware. The TOC-validity work in Task 4 changes exactly this logic,
 so extracting it first buys real test coverage for the risky part.
 
 **Files:**
@@ -745,117 +744,140 @@ git commit -m "Extract CD TOC decoding into a host-tested pure-C module"
 
 ---
 
-### Task 4: TOC invalidation for disc swap
+### Task 4: Do not cache a bogus TOC
 
-`toc_raw()` caches the TOC forever, and `music_cdda_is_short` caches per-track
-spans. After the player swaps the browser disc for the companion audio disc,
-both caches serve stale data from the wrong disc.
+`toc_raw()` reads the TOC once and caches it forever. The disc never changes —
+there is one disc, the NetLink Custom Web Browser disc, and it stays in the
+drive — so a one-shot cache is correct in principle. The hazard is different:
+the browser has been driving the CD block right up until it hands over to the
+netbin, so if the *first* `CDC_TgetToc` lands before the drive settles, the
+bogus result is frozen in and music is dead for the entire session.
+
+Fix: commit the cache only once the TOC reads sane.
 
 **Files:**
-- Modify: `saturn/src/music_cdda.cxx`
-- Modify: `saturn/src/music.h`
-- Modify: `saturn/src/menu_pages.cxx` (Sound Options entry)
+- Modify: `saturn/src/music_cdda.cxx` (`toc_raw`)
+- Test: `saturn/tests/test_toc_decode.c` (extend)
 
 **Interfaces:**
-- Consumes: `toc_decode.h` from Task 3.
-- Produces: `void music_cdda_toc_reset(void)` — drops the cached TOC and the
-  cached track-length table so the next query re-reads the drive.
+- Consumes: `toc_decode.h` from Task 3 — specifically `toc_track_no`.
+- Produces: no new public symbols. `toc_raw()` gains a validity gate.
 
-- [ ] **Step 1: Declare the reset in music.h**
+- [ ] **Step 1: Write the failing test**
 
-Add to `saturn/src/music.h`, beside the other `music_cdda_*` declarations:
+The sanity rule belongs in `toc_decode` so it can be tested on the host. Add to
+`saturn/src/toc_decode.h`, before the closing `#ifdef __cplusplus`:
 
 ```c
-/* Drop the cached CD TOC and per-track length cache so the next query re-reads
-   the drive. Call after a disc change: the netbin build expects the player to
-   swap the browser disc for the companion audio disc, and without this the
-   stale browser TOC is served for the rest of the session. */
-void music_cdda_toc_reset(void);
+/* 1 when the TOC carries a plausible first/last track pair, i.e. it is worth
+   caching. 0 for an all-absent or not-yet-ready read. */
+int toc_is_sane(const uint32_t *toc);
 ```
 
-- [ ] **Step 2: Lift the short-track cache to file scope**
+Append to `saturn/tests/test_toc_decode.c`, immediately before the final
+`printf`/`return`:
 
-In `saturn/src/music_cdda.cxx`, move the `cache`/`inited` statics out of
-`music_cdda_is_short` so the reset can clear them. Place them next to
-`g_toc`/`g_toc_ready`:
+```c
+    /* a populated TOC is worth caching */
+    assert(toc_is_sane(toc) == 1);
 
-```cpp
-static uint32_t g_toc[TOC_WORDS];
-static int      g_toc_ready = 0;
+    /* an all-absent TOC (no disc, or a read before the drive settled) is not:
+       caching this would freeze music off for the whole session */
+    {
+        uint32_t empty[TOC_WORDS];
+        int i;
+        for (i = 0; i < TOC_WORDS; i++) empty[i] = 0xFFFFFFFFu;
+        assert(toc_is_sane(empty) == 0);
+    }
 
-/* 0 unknown, 1 short, 2 long; indexed by CD track number. File scope (rather
-   than function-local) so music_cdda_toc_reset() can clear it on a disc swap. */
-static signed char g_short_cache[100];
+    /* first/last present but nonsensical (last < first) is not sane either */
+    {
+        uint32_t bad[TOC_WORDS];
+        int i;
+        for (i = 0; i < TOC_WORDS; i++) bad[i] = 0xFFFFFFFFu;
+        bad[TOC_FIRST_WORD] = (0x0u << 28) | (5u << 16);
+        bad[TOC_LAST_WORD]  = (0x0u << 28) | (2u << 16);
+        assert(toc_is_sane(bad) == 0);
+    }
+
+    assert(toc_is_sane(0) == 0);
 ```
 
-Then `music_cdda_is_short`'s body drops its own statics and the `inited` guard,
-using `g_short_cache` directly:
-
-```cpp
-extern "C" int music_cdda_is_short(int track) {
-    if (track < 1 || track > 99) return 0;
-    if (g_short_cache[track]) return g_short_cache[track] == 1;
-    int frames = toc_track_frames(toc_raw(), track);
-    if (frames == 0) return 0;                   // unreadable TOC: treat as long
-    int is_short = (frames < MUSIC_SHORT_SECONDS * 75) ? 1 : 0;
-    g_short_cache[track] = is_short ? 1 : 2;
-    return is_short;
-}
-```
-
-`g_short_cache` is a file-scope static, so it is already zero-initialized —
-the old `inited` flag is no longer needed.
-
-- [ ] **Step 3: Implement the reset**
-
-Add to `saturn/src/music_cdda.cxx`, immediately after `toc_raw()`:
-
-```cpp
-// Drop every TOC-derived cache. The next toc_raw() re-issues CDC_TgetToc, and
-// the next music_cdda_is_short() recomputes from the new disc's frame deltas.
-extern "C" void music_cdda_toc_reset(void) {
-    g_toc_ready = 0;
-    for (int i = 0; i < 100; i++) g_short_cache[i] = 0;
-}
-```
-
-- [ ] **Step 4: Call it on Sound Options entry**
-
-In `saturn/src/menu_pages.cxx`, at the top of `sound_options_page()`, before
-any track enumeration:
-
-```cpp
-    // The netbin build runs with whatever disc the player has swapped in, so
-    // re-read the TOC on entry rather than trusting a cache built against a
-    // different disc. Harmless in the CD build: the TOC is re-read once per
-    // visit to this page.
-    music_cdda_toc_reset();
-```
-
-- [ ] **Step 5: Syntax-check**
-
-```bash
-cd /c/Users/saggl/CLionProjects/saturn-mojozork/saturn
-sh syntax-check.sh src/music_cdda.cxx src/menu_pages.cxx
-```
-
-Expected: both passes exit 0 with no diagnostics.
-
-- [ ] **Step 6: Re-run the TOC tests**
+- [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
 cd /c/Users/saggl/CLionProjects/saturn-mojozork
-gcc -o /tmp/ttoc saturn/tests/test_toc_decode.c saturn/src/toc_decode.c && /tmp/ttoc
+gcc -Wall -Wextra -o /tmp/ttoc saturn/tests/test_toc_decode.c saturn/src/toc_decode.c
 ```
 
-Expected: `test_toc_decode: OK` — the extraction is unchanged by this task, so
-this is a regression check.
+Expected: FAIL with `implicit declaration of function 'toc_is_sane'` /
+`undefined reference to 'toc_is_sane'`.
+
+- [ ] **Step 3: Implement the sanity check**
+
+Add to `saturn/src/toc_decode.c`:
+
+```c
+int toc_is_sane(const uint32_t *toc) {
+    int first, last;
+    if (toc == 0) return 0;
+    first = toc_track_no(toc, TOC_FIRST_WORD);
+    last  = toc_track_no(toc, TOC_LAST_WORD);
+    return (first != 0 && last != 0 && last >= first) ? 1 : 0;
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+```bash
+cd /c/Users/saggl/CLionProjects/saturn-mojozork
+gcc -Wall -Wextra -o /tmp/ttoc saturn/tests/test_toc_decode.c saturn/src/toc_decode.c && /tmp/ttoc
+```
+
+Expected output:
+```
+test_toc_decode: OK
+```
+
+- [ ] **Step 5: Gate the cache on sanity**
+
+In `saturn/src/music_cdda.cxx`, replace `toc_raw()`:
+
+```cpp
+// Read the TOC, caching it only once it reads sane. The disc never changes --
+// the browser disc stays in the drive for the whole session -- so one good
+// read is all we ever need. But the browser drives the CD block right up until
+// it hands control to the netbin, so an early read can come back bogus; if we
+// cached that, music would stay dead for the entire session. Retry instead.
+static const uint32_t* toc_raw(void) {
+    if (!g_toc_ready) {
+        CDC_TgetToc(g_toc);
+        if (toc_is_sane(g_toc)) g_toc_ready = 1;
+    }
+    return g_toc;
+}
+```
+
+- [ ] **Step 6: Syntax-check**
+
+```bash
+cd /c/Users/saggl/CLionProjects/saturn-mojozork/saturn
+sh syntax-check.sh src/music_cdda.cxx
+```
+
+Expected: this file does **not** reach exit 0 — `syntax-check.sh`'s include set
+does not reach SRL's sound headers, so it reports 6 pre-existing
+`'SRL::Sound' has not been declared` errors. That is not a regression. The real
+gate: **no new errors, and no error naming `toc_raw`, `toc_is_sane`, or
+`g_toc_ready`.** Confirm by comparing the error list against the same command
+run on the previous commit.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add saturn/src/music_cdda.cxx saturn/src/music.h saturn/src/menu_pages.cxx
-git commit -m "Invalidate cached CD TOC on Sound Options entry for disc swap"
+git add saturn/src/toc_decode.h saturn/src/toc_decode.c         saturn/src/music_cdda.cxx saturn/tests/test_toc_decode.c
+git commit -m "Retry the CD TOC read until it comes back sane"
+```
 ```
 
 ---
@@ -1397,7 +1419,7 @@ Create `tools/assets/CONFIG.NETLINK.ME`. It carries **only** the three keys
 # that already has its story file embedded.
 #
 # Track 01 must be a data track so the disc authenticates as a Saturn disc on
-# swap. The NetLink browser image is commonly distributed as a .iso -- just
+# boot. The NetLink browser image is commonly distributed as a .iso -- just
 # rename it to .bin and drop it in as track 01. Because a renamed .iso keeps
 # 2048-byte sectors, its cue line must read:
 #     TRACK 01 MODE1/2048
@@ -1468,7 +1490,7 @@ sh music.bat CONFIG.NETLINK.ME
 data tracks onto it defeats the purpose of the disc.
 
 Track 01 must be a data track so the disc authenticates as a Saturn disc when
-swapped in. The NetLink browser image is commonly distributed as a `.iso` —
+in the drive. The NetLink browser image is commonly distributed as a `.iso` —
 rename it to `.bin` and use it directly. A renamed `.iso` keeps 2048-byte
 sectors, so its cue entry must read `TRACK 01 MODE1/2048`, **not** the
 `MODE1/2352` that `games.bat` emits after its real raw conversion
@@ -1601,6 +1623,6 @@ the PlanetWeb 4.0 browser.
 - [ ] Text and background colors apply correctly (validates the empty-image-list fallback).
 - [ ] A game starts, accepts input, and `restart` works (validates the embedded story and `saturn_read_story_file`).
 - [ ] Save and restore work against backup RAM.
-- [ ] Swapping in the companion disc, then opening Sound Options, lists the audio tracks (validates `music_cdda_toc_reset`).
+- [ ] Sound Options lists the browser disc's audio tracks (validates that the TOC read after the browser hands over comes back sane, and `toc_is_audio` correctly skips the browser's data track 01).
 - [ ] CD-DA plays without skipping during gameplay.
 - [ ] **Play Online:** either dials successfully, or fails with a visible error and does **not** hang. A hang here is a defect to fix; a clean failure is an acceptable outcome per the spec.

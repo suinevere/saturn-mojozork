@@ -101,7 +101,7 @@ the CD build; both must continue to work.
 - **Save / Restore** and the **Load Save Game** menu entry — backup RAM via
   `saturn_backup`, which uses the BIOS backup library, not the CD. Already
   required for options persistence (MOJOOPTS blob).
-- **CD-DA music** (`music`, `music_cdda`, `music_data`) — see Companion disc.
+- **CD-DA music** (`music`, `music_cdda`, `music_data`) — see the browser disc.
 - **Play Online** (multizork NetLink telnet) — best-effort; see Risks.
 
 ### Dropped
@@ -123,10 +123,20 @@ the CD build; both must continue to work.
 - `opcode_restart` — currently a CD re-read at `main.cxx:511` — re-copies from
   the embedded blob instead.
 
-## Companion audio disc (optional)
+## The NetLink Custom Web Browser disc
 
-An audio-only disc the player may swap in after the netbin has loaded. The
-netbin is fully resident in HWRAM and the story is embedded, so **no data
+**There is one disc, and it never leaves the drive.** The player burns a custom
+NetLink browser CD:
+
+- **Track 01 (data):** the PlanetWeb browser image itself.
+- **Tracks 02..N (audio):** the Zork CD-DA tracks that `music.bat` already
+  stages.
+
+That disc boots the browser, the browser loads `zaturn.netbin` into HWRAM, the
+netbin runs — and the same disc is still in the drive, so its audio tracks play
+normally. There is no second disc and no disc swap at any point.
+
+The netbin is fully resident in HWRAM and the story is embedded, so **no data
 reads occur during play** — the drive streams audio and nothing else.
 
 This is a genuine improvement over the CD build: the audio-skip problems that
@@ -136,20 +146,23 @@ not exist here.
 
 Requirements:
 
-- **TOC cache invalidation.** `music_cdda.cxx`'s `toc_raw()` guards on
-  `g_toc_ready` and reads the TOC **exactly once, ever**. After a disc change
-  it would keep serving the browser disc's stale TOC. Add a
-  `music_cdda_toc_reset()` that clears the flag, invoked on a swap / on entry
-  to the Sound Options page.
+- **Do not cache a bogus TOC.** `music_cdda.cxx`'s `toc_raw()` guards on
+  `g_toc_ready` and reads the TOC **exactly once, ever**. The disc never
+  changes, so a one-shot cache is correct in principle — but the browser has
+  been driving the CD block immediately before handing over, and if that first
+  `CDC_TgetToc` lands before the drive settles, the bogus result is cached
+  permanently and music is dead for the whole session. Set `g_toc_ready` only
+  once the TOC reads sane (`toc_track_no` returns a valid first/last track), so
+  a too-early read is retried rather than frozen in.
 - **No track-number surgery needed.** `music_cdda.cxx` already derives
   everything from the raw 102-longword TOC's control bits (`toc_is_audio`,
   `toc_track_no` on words 99/100) rather than hardcoding an audio-track
-  offset, so a differently-laid-out disc is discovered automatically.
-- **Data track 01.** `promote_game_track` (`lib/music.sh:5`) only *warns* when
-  no game track exists, and `process_audio` skips Track 1 from the music dir —
-  so a disc built without `games.bat` yields a cue referencing a missing track
-  01. The companion disc needs a data track so it is a proper Saturn
-  mixed-mode disc that authenticates normally on swap.
+  offset, so the browser-plus-audio layout is discovered automatically.
+- **Track 01 is the browser image.** `promote_game_track` (`lib/music.sh:5`)
+  only *warns* when no game track exists, and `process_audio` skips Track 1
+  from the music dir — so the browser image must be placed as track 01
+  deliberately. It also makes the disc a proper Saturn mixed-mode disc that
+  authenticates and boots.
 
   The NetLink browser image is commonly distributed as a `.iso`; **just rename
   it to `.bin`** and use it as track 01. No conversion step is needed.
@@ -203,9 +216,10 @@ dense with CD calls, each of which would fail or hang with no readable disc:
 
 ## Risks (flagged, not solved)
 
-- **Disc swap behavior.** Swapping discs mid-run is ordinary multi-disc Saturn
-  behavior, but the exact CD-block state after a swap under PlanetWeb cannot
-  be predicted from here. Needs hardware testing.
+- **CD-block state at hand-over.** The browser has been driving the CD block
+  right up until it loads the netbin. Whether the drive is settled enough for
+  the first `CDC_TgetToc` to return a sane TOC cannot be predicted from here —
+  hence the retry-until-sane rule above. Needs hardware testing.
 - **Play Online / NetLink modem.** Whether PlanetWeb leaves the NetLink modem
   in a cold-startable state after the browser has used it is *unknown*. The
   code is kept; if the modem proves unusable, Play Online must degrade to an
