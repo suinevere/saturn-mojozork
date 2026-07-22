@@ -27,6 +27,7 @@ extern "C" {
 #include "save_ui.h"
 #include "title.h"
 #include "game_catalog.h"
+#include "netbin_sound.h"
 
 // Global typeahead trie (should be populated by the game backend eventually)
 static TrieNode* g_typeahead_root = nullptr;
@@ -948,6 +949,7 @@ static void online_mode(void) {
 
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
+    netbin_sound_init();   // netbin only: SRL's CD-based driver load found no disc
     saturn_bup_init();
     cd_capture_root();              // must precede any GFS_SetDir: cd_enter_root() needs it
     display_scan_images();          // must precede options_load: display_decode()
