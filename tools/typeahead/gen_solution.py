@@ -96,6 +96,11 @@ C_TOP = """// GENERATED FILE -- do not edit by hand.
 // Per-game "solution" overlay: base-weight and transition boosts derived from a
 // winning walkthrough, applied on top of the runtime grammar layer. Keyed by the
 // story's release number + serial, so it only touches the game it was built for.
+//
+// NETBIN builds embed only Zork I, so every other game's word/link arrays and
+// its SOLUTIONS[] row are wrapped in #ifndef NETBIN (via gen_solution.py's
+// --netbin-keep). The CD build (NETBIN undefined) compiles all games; the netbin
+// compiles just the kept one, dropping the ~60 KB of rodata it would never use.
 
 #include "typeahead_solution.h"
 #include <string.h>
@@ -152,9 +157,14 @@ int apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned 
 """
 
 
-def emit(games, out_path):
+def emit(games, out_path, netbin_keep=()):
     def cstr(s):
         return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    # Serials the .netbin build keeps. When this is empty every game is emitted
+    # unguarded (the plain CD-only default); when it is set, any game whose serial
+    # is not listed is wrapped in #ifndef NETBIN so it drops out of the netbin.
+    keep = set(netbin_keep)
 
     parts = [C_TOP]
     entries = []
@@ -162,10 +172,18 @@ def emit(games, out_path):
         wl = ", ".join(f'{{{cstr(w)},{wt}}}' for w, wt in sorted(words.items()))
         ll = ", ".join(f'{{{cstr(a)},{cstr(b)},{wt}}}'
                        for (a, b), wt in sorted(links.items()))
-        parts.append(f"static const SolWord g{gi}_words[] = {{ {wl} }};\n")
-        parts.append(f"static const SolLink g{gi}_links[] = {{ {ll} }};\n")
-        entries.append(f"    {{ {release}, {cstr(serial)}, "
-                       f"g{gi}_words, {len(words)}, g{gi}_links, {len(links)} }},")
+        guarded = bool(keep) and serial not in keep
+        wdef = f"static const SolWord g{gi}_words[] = {{ {wl} }};\n"
+        ldef = f"static const SolLink g{gi}_links[] = {{ {ll} }};\n"
+        if guarded:
+            parts.append(f"#ifndef NETBIN\n{wdef}#endif\n")
+            parts.append(f"#ifndef NETBIN\n{ldef}#endif\n")
+        else:
+            parts.append(wdef)
+            parts.append(ldef)
+        row = (f"    {{ {release}, {cstr(serial)}, "
+               f"g{gi}_words, {len(words)}, g{gi}_links, {len(links)} }},")
+        entries.append(f"#ifndef NETBIN\n{row}\n#endif" if guarded else row)
     parts.append("\nstatic const Solution SOLUTIONS[] = {\n" + "\n".join(entries) + "\n};\n")
     parts.append(C_APPLY)
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
@@ -177,6 +195,10 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game", action="append", required=True, metavar="STORY:SCRIPT",
                     help="a story file and its walkthrough, colon-separated (repeatable)")
+    ap.add_argument("--netbin-keep", action="append", default=[], metavar="SERIAL",
+                    help="Z-machine serial (header 0x12) of a game the .netbin build "
+                         "keeps; every other game is wrapped in #ifndef NETBIN. "
+                         "Repeatable. Omit to emit all games unguarded (CD-only).")
     ap.add_argument("--out", required=True, help="output C file")
     args = ap.parse_args()
 
@@ -187,7 +209,11 @@ def main():
         print(f"{story}: release {release} serial {serial!r} -> "
               f"{len(words)} word boosts, {len(links)} transitions")
         games.append((release, serial, words, links))
-    emit(games, args.out)
+    emit(games, args.out, netbin_keep=args.netbin_keep)
+    if args.netbin_keep:
+        kept = [g for g in games if g[1] in set(args.netbin_keep)]
+        print(f"netbin keeps {len(kept)}/{len(games)} game(s) unguarded: "
+              f"{', '.join(repr(g[1]) for g in kept) or '(none matched!)'}")
     print(f"wrote {args.out}")
 
 

@@ -31,5 +31,11 @@ foreach ($f in (Get-ChildItem -Path "../../saturn/cd/data/Z3/*.Z3" | Sort-Object
     }
 }
 
+# The .netbin build (PlanetWeb loader) embeds only Zork I and must stay under a
+# 400 KB ceiling, so every other game's overlay is wrapped in #ifndef NETBIN.
+# 840726 is Zork I's Z-machine serial (story header 0x12). The CD build, which
+# does not define NETBIN, still compiles every game.
+$netbinKeep = "840726"
+
 Write-Host "Generating overlay for $($gameArgs.Count / 2) games -> typeahead_solution.c"
-python gen_solution.py @gameArgs --out "../../saturn/src/typeahead_solution.c"
+python gen_solution.py @gameArgs --netbin-keep $netbinKeep --out "../../saturn/src/typeahead_solution.c"

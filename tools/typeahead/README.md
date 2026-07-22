@@ -56,6 +56,21 @@ python gen_solution.py \
     --out  ../../saturn/src/typeahead_solution.c
 ```
 
+### `.netbin` guarding (`--netbin-keep`)
+
+The `.netbin` build (PlanetWeb loader) embeds only Zork I and must stay under a
+400 KB ceiling, so it cannot afford the other ~24 games' overlays. `gen_all.ps1`
+passes `--netbin-keep 840726` (Zork I's Z-machine serial, story header `0x12`);
+`gen_solution.py` then wraps every game whose serial is **not** kept in
+`#ifndef NETBIN … #endif` — both its `gN_words`/`gN_links` arrays and its
+`SOLUTIONS[]` row. The CD build (no `-DNETBIN`) still compiles all games; the
+netbin compiles only the kept one, dropping the rest from `.rodata`.
+
+`--netbin-keep` is repeatable and matches on the 6-char serial. Omit it (as any
+single-game invocation does) and the output is unguarded — every game compiles
+in both builds. **Because this guarding is emitted by the generator, never add or
+remove the `#ifndef NETBIN` guards by hand — regenerate instead.**
+
 ## What the overlay carries
 
 - **Base-weight boosts** from word frequency in the solve.
