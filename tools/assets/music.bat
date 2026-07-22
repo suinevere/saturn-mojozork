@@ -6,7 +6,10 @@
 :; . lib/music.sh
 :;
 :; # 1. Parse Config
-:; cfg() { grep -m1 "^$1=" CONFIG.ME | cut -d'=' -f2- | tr -d '\r'; }
+:; CFG_FILE="${1:-CONFIG.ME}"
+:; [ -f "$CFG_FILE" ] || { echo "music: config not found: $CFG_FILE" >&2; exit 1; }
+:; echo "music: using config $CFG_FILE"
+:; cfg() { grep -m1 "^$1=" "$CFG_FILE" | cut -d'=' -f2- | tr -d '\r'; }
 :; AUDIO_URL=$(cfg AUDIO_URL)
 :; DISC_NAME=$(cfg DISC_NAME)
 :; OUTPUT_DIR=$(cfg OUTPUT_DIR); OUTPUT_DIR=${OUTPUT_DIR:-./Zaturn - Complete (USA) (Netlink Edition)}
@@ -39,7 +42,10 @@ SETLOCAL
 CD /D "%~dp0"
 
 REM Parse all configuration variables
-FOR /F "usebackq tokens=1,* delims==" %%A IN ("CONFIG.ME") DO (
+IF "%~1"=="" (SET "CFG_FILE=CONFIG.ME") ELSE (SET "CFG_FILE=%~1")
+IF NOT EXIST "%CFG_FILE%" ( ECHO ERROR: config not found: %CFG_FILE% & EXIT /B 1 )
+ECHO Using config: %CFG_FILE%
+FOR /F "usebackq tokens=1,* delims==" %%A IN ("%CFG_FILE%") DO (
     IF "%%A"=="AUDIO_URL" SET "AUDIO_URL=%%B"
     IF "%%A"=="OUTPUT_DIR" SET "OUTPUT_DIR=%%B"
     IF "%%A"=="DISC_NAME" SET "DISC_NAME=%%B"

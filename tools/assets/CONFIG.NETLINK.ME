@@ -1,0 +1,17 @@
+# Companion audio disc for the .netbin build.
+#
+# MUSIC ONLY. Do NOT run games.bat against this config: it would stage game
+# data tracks onto a disc whose entire purpose is to carry CD-DA for a netbin
+# that already has its story file embedded.
+#
+# Track 01 must be a data track so the disc authenticates as a Saturn disc on
+# boot. The NetLink browser image is commonly distributed as a .iso -- just
+# rename it to .bin and drop it in as track 01. Because a renamed .iso keeps
+# 2048-byte sectors, its cue line must read:
+#     TRACK 01 MODE1/2048
+# NOT the MODE1/2352 that games.bat emits (games.sh:34) -- that path runs a
+# real raw conversion first (games.sh:30). Pairing a renamed .iso with a
+# MODE1/2352 declaration yields a disc that fails silently.
+AUDIO_URL=https://archive.org/download/sega_saturn/Zork%20I%20-%20The%20Great%20Underground%20Empire%20%28Japan%29.zip
+DISC_NAME=NetLink Custom Web Browser
+OUTPUT_DIR=./NetLink Custom Web Browser
