@@ -1317,7 +1317,10 @@ netbin cannot rely on `Core::Initialize`'s assumptions. Immediately after
     // Mirror srl_core.hpp:75-78 exactly -- same resolution constant, SRL's own
     // VDP1 texture table, same frame rate. Passing NULL here would deregister
     // that table and break every textured sprite.
-    SRL::TV::SetScreenSize(INT_SRL_DEF_RES);
+    // srl_core.hpp:75's SRL::TV::SetScreenSize() is deliberately NOT mirrored:
+    // it is private (friend SRL::Core only, srl_tv.hpp:78-95) and SaturnRingLib
+    // is pinned. Core::Initialize above already called it with this same
+    // INT_SRL_DEF_RES, and the resolution never changes, so it is redundant.
     slInitSystem((uint16_t) INT_SRL_DEF_RES, SRL::VDP1::Textures->SglPtr(), SRL_FRAMERATE);
     slScrAutoDisp(NBG0ON | NBG1ON | NBG2ON | NBG3ON);
     slTVOff();
