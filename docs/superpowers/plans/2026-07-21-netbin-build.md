@@ -1261,16 +1261,20 @@ Replace lines 1009 and 1013-1015:
     ensure_online_typeahead();           // and the online terminal's Zork I vocabulary
 #endif
     // NETBIN: nothing to preload. The story and driver are already resident and
-    // there is no TGA art. ensure_online_typeahead is skipped too: it scans the
-    // CD's Z3 folder, and its own documented degradation for a missing folder
-    // is an empty trie (main.cxx:769), i.e. Play Online simply offers no
-    // typeahead suggestions. Local play is unaffected -- it builds its trie
-    // from the loaded story image, not from a CD scan.
+    // there is no TGA art. ensure_online_typeahead is skipped here only because
+    // there is no CD read left to front-load -- under NETBIN it builds from the
+    // embedded story with no CD access at all, so its own call inside
+    // online_mode() does the work on first use and costs nothing.
 ```
 
-Note the deliberate scope decision here: online-mode typeahead is **absent** in
-the netbin, not reimplemented from the embedded blob. Wiring it to the blob is
-possible later but is not in this plan's scope.
+**Scope decision, revised 2026-07-21 (user):** online-mode typeahead is
+**built from the embedded blob**, not dropped. `ensure_online_typeahead` is
+also reachable from `online_mode()` (`main.cxx:811`) with no guard, so leaving
+it CD-based would have kept one mandatory CD access alive on the Play Online
+path -- against the browser's own disc. `build_typeahead_from_story` and
+`apply_solution_overlay` both take `const unsigned char *`, so the netbin path
+passes `netbin_story_data()` straight through: no scan, no read, no copy, and
+no `Free` (the blob is `.rodata`). See the follow-up commit on this task.
 
 - [ ] **Step 4: Collapse game selection to the embedded title**
 
