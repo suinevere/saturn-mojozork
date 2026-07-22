@@ -5,9 +5,9 @@
  |   call -- slSoundOffWait, SND_Init, SND_ChgMap, slInitSound, the SCSP
  |   enable poke, CDC_CdInit, SND_SetCdDaLev, slSoundOnWait -- but sources the
  |   driver program and area map from netbin_blobs instead of Cd::File. SRL's
- |   version is left
- |   to run and harmlessly skip itself: its body is guarded on both files
- |   existing on the disc, which they do not under the PlanetWeb loader.
+ |   version is left to run and harmlessly skip itself: its body is guarded on
+ |   both files existing on the disc, which they do not under the PlanetWeb
+ |   loader.
  | Author: suinevere
  | Dependencies: netbin_blobs.h, netbin_sound.h, SGL
  ----------------------*/
