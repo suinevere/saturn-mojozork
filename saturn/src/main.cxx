@@ -959,9 +959,34 @@ static void online_mode(void) {
 int main(void) {
     SRL::Core::Initialize(HighColor::Colors::Black);
     netbin_sound_init();   // netbin only: SRL's CD-based driver load found no disc
+
+#ifdef NETBIN
+    // The PlanetWeb loader leaves the VDPs in the browser's state, not a
+    // post-reset one. Re-assert the TV mode and clear both scroll screens
+    // before anything draws.
+    // Mirror srl_core.hpp:75-78 -- same resolution constant, SRL's own VDP1
+    // texture table, same frame rate. Passing NULL here would deregister that
+    // table and break every textured sprite.
+    // NOTE: srl_core.hpp:75's SRL::TV::SetScreenSize() call is skipped here --
+    // it is private (friend SRL::Core only; see srl_tv.hpp:78-95) and
+    // SaturnRingLib is a pinned submodule we cannot touch. It is also
+    // redundant: SRL::Core::Initialize() above already called it with this
+    // same INT_SRL_DEF_RES, so TV::Resolution/Width/Height are already correct.
+    slInitSystem((uint16_t) INT_SRL_DEF_RES, SRL::VDP1::Textures->SglPtr(), SRL_FRAMERATE);
+    slScrAutoDisp(NBG0ON | NBG1ON | NBG2ON | NBG3ON);
+    slTVOff();
+    slTVOn();
+#endif
+
     saturn_bup_init();
+#ifndef NETBIN
     cd_capture_root();              // must precede any GFS_SetDir: cd_enter_root() needs it
     display_scan_images();          // must precede options_load: display_decode()
+#endif
+    // NETBIN: neither runs, so their ordering contract with options_load holds
+    // vacuously. display_defaults validates image indices against an empty
+    // list, leaving g_display on solid colors -- which is what display_apply
+    // falls back to anyway when an image will not load.
     display_defaults(&g_display);   // validates image indices against this list
     options_load();   // restore saved difficulty (defaults to Easy)
 
@@ -979,9 +1004,13 @@ int main(void) {
     int cd_reentry = setjmp(g_title_jmp);
     (void) cd_reentry;   // no step below branches on first-boot vs. reset anymore
     g_title_jmp_armed = true;
+#ifndef NETBIN
     GFS_Reset();
     cd_capture_root();   // GFS_Reset returns us to root; re-snapshot it there
     g_z3_dir_valid = false;   // the pre-reset Z3 table is stale until re-scanned
+#endif
+    // NETBIN: no GFS handles are ever opened, so there is no stale CD state for
+    // a soft reset to clear.
     // The soft reset longjmps here, which skips destructors -- so a MenuBacking
     // held by a page we jumped out of never ran. Clear it by hand, or NBG3
     // stays opaque and the title image is hidden for the rest of the session.
@@ -1017,13 +1046,23 @@ int main(void) {
     // cached), so no read happens and the music starts cleanly.
     for (int r = 0; r <= 28; r++) SRL::Debug::PrintClearLine(r);
     text_set_color(DISP_RGB555(0xFF, 0xFF, 0xFF));
+#ifndef NETBIN
     title_bg_show("HOUSE.TGA");
+#endif
     title_draw_art();
     SRL::Core::Synchronize();
 
+#ifndef NETBIN
     preload_game_catalog();              // CD reads happen once, here
     display_preload_images();            // and the background art, into Low Work RAM
     ensure_online_typeahead();           // and the online terminal's Zork I vocabulary
+#endif
+    // NETBIN: nothing to preload. The story and driver are already resident and
+    // there is no TGA art. ensure_online_typeahead is skipped too: it scans the
+    // CD's Z3 folder, and its own documented degradation for a missing folder
+    // is an empty trie (main.cxx:769), i.e. Play Online simply offers no
+    // typeahead suggestions. Local play is unaffected -- it builds its trie
+    // from the loaded story image, not from a CD scan.
 
     music_set_level(g_music_level);      // honor the saved music level for menu audio
     music_cdda_play(g_sel_track);        // start the menu track; no CD reads remain in the menu flow
@@ -1044,8 +1083,12 @@ int main(void) {
         if (mode == 3) { options_menu(); continue; }
         if (mode == 1) { online_mode(); continue; }
         if (mode == 2) {   // Load Save Game: pick a game, then one of its save slots.
+#ifdef NETBIN
+            game_file = "ZORK1.Z3";   // the only title in this build
+#else
             game_file = game_select();
             if (game_file == nullptr) continue;
+#endif
             g_story_filename = game_file;   // so the slot names resolve to this game
             int device, slot;
             if (!choose_dest("LOAD - device?", "LOAD - slot?", &device, &slot)) continue;
@@ -1056,8 +1099,12 @@ int main(void) {
         // Play Local (or B at this top menu): pick a game. Pressing B on the game
         // menu returns nullptr, so we loop back to this mode menu instead of trying
         // to load a bogus story file.
+#ifdef NETBIN
+        game_file = "ZORK1.Z3";   // the only title in this build
+#else
         game_file = game_select();
         if (game_file == nullptr) continue;
+#endif
         break;
     }
     g_story_filename = game_file;   // save/restart must re-read the selected game
