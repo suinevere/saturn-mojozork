@@ -406,13 +406,13 @@ git commit -m "Extract title screen / background art / TGA loading into title mo
 
 - [x] **Step 1: Apply SMEP.**
 - [x] **Step 2: Dead-code check.**
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 ```bash
 git add saturn/src/game_catalog.h saturn/src/game_catalog.cxx saturn/src/main.cxx
 git commit -m "Extract CD game scan / catalog / select into game_catalog module"
 ```
 
-- [ ] **Phase 3 compile checkpoint** — user runs `saturn/compile.bat` + host tests.
+- [x] **Phase 3 compile checkpoint** — user runs `saturn/compile.bat` + host tests.
 
 ---
 

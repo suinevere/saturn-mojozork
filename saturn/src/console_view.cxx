@@ -3,9 +3,12 @@
  | Description: Implements console-scrollback and on-screen-keyboard rendering,
  |   input-device hint tracking, and the blinking block text cursor (including
  |   its one-time DEL-slot glyph and the input-line drawing it shares between the
- |   real-keyboard and on-screen-keyboard layouts).
+ |   real-keyboard and on-screen-keyboard layouts), plus typeahead_edit -- the
+ |   one-frame input-editing pass with typeahead that the local prompt and the
+ |   online terminal share.
  | Author: suinevere
- | Dependencies: console_view.h, app_state.h, input.h, console.c, keyboard.c, SRL
+ | Dependencies: console_view.h, app_state.h, input.h, console.c, keyboard.c,
+ |   typeahead.c, SRL
  ----------------------*/
 
 #include <srl.hpp>
@@ -226,6 +229,150 @@ static void draw_input_line(int row, const KeyboardState &k,
 
 // Half-period, in frames, of the cursor blink (~0.33s at 60fps -> ~1.5Hz).
 #define CURSOR_BLINK_FRAMES 20
+
+/*----------------------
+ | typeahead_edit
+ | Description: Gamepad editing runs first (Caps toggle on the L+R combo; history
+ |   recall and text-caret moves on their configurable chords; plain D-pad moves
+ |   the on-screen picker; the mapped face buttons type and backspace). Then a
+ |   refresh lambda re-derives the current word (text after the last space), the
+ |   previous word (looked up in the trie so grammar can filter), and the
+ |   candidate list, resetting the cycle index whenever the current word changes.
+ |   accept commits the ghost suffix, matching the case the player is typing --
+ |   uppercasing the completion when the last typed char is uppercase (see
+ |   draw_input_line). Typeahead is live only when the caret sits at the end of
+ |   the line. Insert toggles whether plain or Ctrl arrows move the caret vs cycle
+ |   suggestions. Accept (mapped face button / Tab) commits the ghost with no
+ |   trailing space, or -- with no ghost -- submits, unless the line already ends
+ |   in a space so a just-typed separator does not fire the command; X commits the
+ |   ghost plus a space, or types a space to open the next word. Remaining key
+ |   events type/erase/submit/recall or fall through to scroll handling.
+ | Author: suinevere
+ | Dependencies: keyboard.c, input.cxx, typeahead.c
+ | Globals: g_pad, g_caret_arrows
+ | Params: k -- keyboard/input-line state, edited in place; root -- typeahead
+ |   trie; sug_index -- suggestion-cycle index (in/out); sug_last -- word the
+ |   cycle index belongs to (in/out); ke -- decoded key event, consumed as
+ |   handled; pad -- gamepad is the active device; selected_out -- chosen
+ |   suggestion or null; cw_len_out -- current word length
+ | Returns: N/A
+ ----------------------*/
+void typeahead_edit(KeyboardState &k, TrieNode *root,
+                    int &sug_index, char *sug_last,
+                    SaturnKeyEvent &ke, bool pad,
+                    DictionaryWord *&selected_out, int &cw_len_out) {
+    if (pad) {
+        if (caps_combo_fired()) keyboard_set_caps(!keyboard_get_caps());
+        if (chord_fired(CA_RECALL, -1)) history_recall(&k, 1);
+        if (chord_fired(CA_RECALL, +1)) history_recall(&k, 0);
+        if (chord_fired(CA_CURSOR, -1)) keyboard_caret_left(&k);
+        if (chord_fired(CA_CURSOR, +1)) keyboard_caret_right(&k);
+        if (!g_pad->IsHeld(Button::Z) && !g_pad->IsHeld(Button::Y)) {
+            if (pad_fired(Button::Up))    keyboard_move(&k, 0, -1);
+            if (pad_fired(Button::Down))  keyboard_move(&k, 0,  1);
+            if (pad_fired(Button::Left))  keyboard_move(&k, -1, 0);
+            if (pad_fired(Button::Right)) keyboard_move(&k,  1, 0);
+        }
+        if (pad_fired(face_button(FA_TYPE))) keyboard_type(&k);
+        if (pad_fired(face_button(FA_BACK))) keyboard_backspace(&k);
+    }
+
+    char current_word[256]; int cw_len; DictionaryWord *prev_word;
+    DictionaryWord *cands[24]; int ncand; DictionaryWord *selected;
+    auto refresh = [&]() {
+        int ws = 0;
+        for (int i = k.input_len - 1; i >= 0; i--) if (k.input[i] == ' ') { ws = i + 1; break; }
+        cw_len = k.input_len - ws;
+        if (cw_len > 255) cw_len = 255;
+        for (int i = 0; i < cw_len; i++) current_word[i] = k.input[ws + i];
+        current_word[cw_len] = '\0';
+        prev_word = nullptr;
+        if (ws > 1) {
+            int ps = 0;
+            for (int i = ws - 2; i >= 0; i--) if (k.input[i] == ' ') { ps = i + 1; break; }
+            char pw[256]; int pl = (ws - 1) - ps; if (pl > 255) pl = 255;
+            for (int i = 0; i < pl; i++) pw[i] = k.input[ps + i];
+            pw[pl] = '\0';
+            prev_word = find_exact_word(root, pw);
+        }
+        ncand = predict_candidates(root, prev_word, current_word, cands, 24, ws == 0);
+        bool same = true;
+        for (int i = 0; i <= cw_len; i++) if (current_word[i] != sug_last[i]) { same = false; break; }
+        if (!same) { sug_index = 0; for (int i = 0; i <= cw_len; i++) sug_last[i] = current_word[i]; }
+        if (ncand == 0) sug_index = 0; else if (sug_index >= ncand) sug_index %= ncand;
+        selected = ncand > 0 ? cands[sug_index] : nullptr;
+    };
+    refresh();
+
+    auto ghost_len = [&]() -> int {
+        if (!selected) return 0;
+        int n = 0; while (selected->text[n]) n++;
+        return n > cw_len ? n - cw_len : 0;
+    };
+    auto accept = [&](bool add_space) {
+        bool up = cw_len > 0 && k.input_len > 0 &&
+                  k.input[k.input_len - 1] >= 'A' && k.input[k.input_len - 1] <= 'Z';
+        if (ghost_len() > 0)
+            for (int i = cw_len; selected->text[i] && k.input_len < KB_INPUT_MAX - 1; i++) {
+                char c = selected->text[i];
+                if (up && c >= 'a' && c <= 'z') c = (char) (c - 'a' + 'A');
+                keyboard_type_char(&k, c);
+            }
+        if (add_space && k.input_len < KB_INPUT_MAX - 1) keyboard_type_char(&k, ' ');
+        sug_index = 0;
+    };
+
+    bool at_end = (k.cursor == k.input_len);
+
+    if (ke.kind == SATURN_KEY_INSERT) { g_caret_arrows = !g_caret_arrows; ke.kind = SATURN_KEY_NONE; }
+
+    bool caret_l = g_caret_arrows ? (ke.kind == SATURN_KEY_LEFT)  : (ke.kind == SATURN_KEY_CTRL_LEFT);
+    bool caret_r = g_caret_arrows ? (ke.kind == SATURN_KEY_RIGHT) : (ke.kind == SATURN_KEY_CTRL_RIGHT);
+    if (caret_l) keyboard_caret_left(&k);
+    if (caret_r) keyboard_caret_right(&k);
+
+    bool kb_prev = g_caret_arrows ? (ke.kind == SATURN_KEY_CTRL_LEFT)  : (ke.kind == SATURN_KEY_LEFT);
+    bool kb_next = g_caret_arrows ? (ke.kind == SATURN_KEY_CTRL_RIGHT) : (ke.kind == SATURN_KEY_RIGHT);
+    bool cyc_prev = (pad && chord_fired(CA_AUTO, -1)) || kb_prev;
+    bool cyc_next = (pad && chord_fired(CA_AUTO, +1)) || kb_next;
+    if (at_end && ncand > 0 && cyc_prev) sug_index = (sug_index - 1 + ncand) % ncand;
+    if (at_end && ncand > 0 && cyc_next) sug_index = (sug_index + 1) % ncand;
+    selected = (at_end && ncand > 0) ? cands[sug_index] : nullptr;
+    if (ke.kind == SATURN_KEY_LEFT || ke.kind == SATURN_KEY_RIGHT ||
+        ke.kind == SATURN_KEY_CTRL_LEFT || ke.kind == SATURN_KEY_CTRL_RIGHT) ke.kind = SATURN_KEY_NONE;
+
+    bool a_press   = pad && g_pad->WasPressed(face_button(FA_ACCEPT));
+    bool x_press   = pad && pad_fired(Button::X);
+    bool has_ghost = selected && ghost_len() > 0;
+    if (a_press) {
+        if (has_ghost) accept(false);
+        else if (k.input_len == 0 || k.input[k.input_len - 1] != ' ') keyboard_submit(&k);
+    }
+    if (ke.kind == SATURN_KEY_TAB) {
+        if (has_ghost) accept(false);
+        else if (at_end && k.input_len > 0 && k.input[k.input_len - 1] != ' ')
+            keyboard_type_char(&k, ' ');
+        ke.kind = SATURN_KEY_NONE;
+    }
+    if (x_press) {
+        if (has_ghost) accept(true);
+        else           keyboard_type_char(&k, ' ');
+    }
+
+    if      (ke.kind == SATURN_KEY_CHAR)      keyboard_type_char(&k, ke.ch);
+    else if (ke.kind == SATURN_KEY_BACKSPACE) keyboard_backspace(&k);
+    else if (ke.kind == SATURN_KEY_DELETE)    keyboard_delete_forward(&k);
+    else if (ke.kind == SATURN_KEY_ENTER)     keyboard_submit(&k);
+    else if (ke.kind == SATURN_KEY_CLEAR)     { k.input_len = 0; k.input[0] = '\0'; k.cursor = 0; }
+    else if (ke.kind == SATURN_KEY_UP)        history_recall(&k, 1);
+    else if (ke.kind == SATURN_KEY_DOWN)      history_recall(&k, 0);
+    else                                      scroll_handle_key(ke);
+
+    refresh();
+    if (k.cursor != k.input_len) selected = nullptr;
+    selected_out = selected;
+    cw_len_out = cw_len;
+}
 
 /*----------------------
  | render_keyboard

@@ -58,6 +58,21 @@ void soft_reset_to_title(void);
 bool soft_reset_chord_held(void);
 
 /*----------------------
+ | confirm_return_to_title
+ | Description: Modal Y/N prompt asking `question`. On Yes it soft-resets to the
+ |   title screen in-process (the same return-to-title as the A+B+C+Start chord),
+ |   retaining the options held in backup RAM; on No it returns false so the
+ |   caller resumes. Shared by the reboot and quit commands (local prompt and the
+ |   online terminal), both of which discard an unsaved game.
+ | Author: suinevere
+ | Dependencies: menu.h, N/A
+ | Globals: N/A
+ | Params: question -- the yes/no question to display
+ | Returns: false when the player declines (on Yes it does not return)
+ ----------------------*/
+bool confirm_return_to_title(const char *question);
+
+/*----------------------
  | check_soft_reset
  | Description: Polls the software-reset chord; call once per frame from any
  |   input loop. Never returns once the chord has been held long enough -- it

@@ -5,8 +5,10 @@
  |   input-method-appropriate hint text to print, tracking which input device (real
  |   keyboard vs gamepad) the player last used, painting the scrollback view and
  |   positioning it on new output, and drawing the on-screen keyboard grid with its
- |   blinking block text cursor. Owns no input handling -- callers feed it key
- |   events and read back its device-tracking state.
+ |   blinking block text cursor. Also runs the shared per-frame input-editing pass
+ |   (typeahead_edit) that both the local prompt and the online terminal drive, so
+ |   the two behave identically; callers still poll the raw key events and feed
+ |   them in.
  | Author: suinevere
  | Dependencies: console.h, keyboard.h, saturn_keyboard.h, typeahead.h
  ----------------------*/
@@ -126,5 +128,32 @@ void install_block_glyph(void);
  | Returns: N/A
  ----------------------*/
 void render_keyboard(const KeyboardState &k, DictionaryWord* prediction, int current_word_len);
+
+/*----------------------
+ | typeahead_edit
+ | Description: Runs one frame of on-screen input editing with typeahead, so the
+ |   local game prompt and the online terminal behave identically. Handles both
+ |   the gamepad (with auto-repeat) and a real keyboard: moves the picker,
+ |   types/deletes, moves the text caret, cycles suggestions, accepts a
+ |   completion (with or without a trailing space), and recalls history. May set
+ |   k.submitted. sug_index/sug_last carry the suggestion-cycle position across
+ |   frames. Reports back the selected suggestion and the length of the word being
+ |   completed so the caller can render the ghost. The caller must poll ke/pad and
+ |   tick the input-repeat helpers before calling.
+ | Author: suinevere
+ | Dependencies: keyboard.c, input.cxx, typeahead.c
+ | Globals: g_pad, g_caret_arrows
+ | Params: k -- keyboard/input-line state, edited in place; root -- the typeahead
+ |   trie; sug_index -- suggestion-cycle index (in/out); sug_last -- the word the
+ |   cycle index belongs to (in/out); ke -- this frame's decoded key event,
+ |   consumed as it is handled; pad -- true when the gamepad is the active device;
+ |   selected_out -- receives the chosen suggestion or null; cw_len_out -- receives
+ |   the current word length
+ | Returns: N/A
+ ----------------------*/
+void typeahead_edit(KeyboardState &k, TrieNode *root,
+                    int &sug_index, char *sug_last,
+                    SaturnKeyEvent &ke, bool pad,
+                    DictionaryWord *&selected_out, int &cw_len_out);
 
 #endif /* CONSOLE_VIEW_H */
