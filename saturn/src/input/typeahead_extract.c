@@ -1,43 +1,69 @@
-// Runtime typeahead builder: decode a loaded Z-machine v3 story's parser model
-// (dictionary + verb grammar + object attributes) and populate the trie. This is
-// the on-device port of tools/typeahead/gen_typeahead.py (Layers 1a-1c); see that
-// file and tools/typeahead/README.md for the format details.
+/*----------------------
+ | typeahead_extract.c
+ | Description: Runtime typeahead builder: decodes a loaded Z-machine v3 story's
+ |   parser model (dictionary + verb grammar + object attributes) and populates the
+ |   trie with full-spelling words and grammar-derived transition links. The
+ |   on-device port of tools/typeahead/gen_typeahead.py (Layers 1a-1c); see that
+ |   file and tools/typeahead/README.md for the format details.
+ | Author: suinevere
+ | Dependencies: typeahead_extract.h (+ typeahead.h types/ops), string.h, ctype.h
+ ----------------------*/
 
 #include "typeahead_extract.h"
 #include <string.h>
 #include <ctype.h>
 
-// Dictionary part-of-speech flag bits (Infocom v3).
+/*----------------------
+ | FL_* (dictionary flag bits)
+ | Description: The Infocom v3 dictionary part-of-speech flag bits: noun, verb,
+ |   adjective, direction, preposition.
+ | Author: suinevere
+ ----------------------*/
 #define FL_NOUN 0x80
 #define FL_VERB 0x40
 #define FL_ADJ  0x20
 #define FL_DIR  0x10
 #define FL_PREP 0x08
 
-// Grammar-derived transition weights (baseline priors; a solution overlay could
-// later raise specific winning-path pairs above these).
+/*----------------------
+ | W_* / MAX_CLASS / BASE_* (weights and priors)
+ | Description: Grammar-derived transition weights (verb->prep, verb->noun,
+ |   prep->noun, adj->noun -- baseline priors a solution overlay can later exceed),
+ |   the MAX_CLASS cap above which verb/prep->noun links are skipped, and the
+ |   part-of-speech base-weight priors. Verbs and directions sit close so a rare
+ |   direction (out/up) does not outrank a common verb; frequency/overlay then rank
+ |   the directions that actually get typed.
+ | Author: suinevere
+ ----------------------*/
 #define W_VERB_PREP 60
 #define W_VERB_NOUN 55
 #define W_PREP_NOUN 55
 #define W_ADJ_NOUN  52
-#define MAX_CLASS   40     // skip verb/prep->noun links for classes larger than this
-// Part-of-speech base-weight priors. Verbs and directions sit close together so a
-// rarely-used direction (out/up) doesn't outrank a common verb; the solution
-// overlay/frequency then ranks the directions that actually get typed (n/s/e/w).
+#define MAX_CLASS   40
 #define BASE_DIR    48
 #define BASE_VERB   46
 #define BASE_DEF    30
 
-// Build-time limits (Sorcerer, the largest v3 game here, has ~1012 dict words).
+/*----------------------
+ | MAXW / MAXOBJ / NAMELEN / CLASSCAP
+ | Description: Build-time limits: max dictionary words (Sorcerer, the largest v3
+ |   game here, has ~1012), max objects, max object-name length, and the per-class
+ |   noun cap.
+ | Author: suinevere
+ ----------------------*/
 #define MAXW      1300
 #define MAXOBJ    500
 #define NAMELEN   48
 #define CLASSCAP  64
 
-// The standard interactive-fiction verb set, most-common first. These lead the
-// first-word suggestions ahead of the game's obscure verbs. Matched against the
-// dictionary form (which may be truncated to 6 chars), so "examine" also hits the
-// stored "examin", "inventory" hits "invent", etc.
+/*----------------------
+ | COMMON_VERBS
+ | Description: The standard interactive-fiction verb set, most-common first, so
+ |   they lead the first-word suggestions ahead of a game's obscure verbs. Matched
+ |   against the dictionary form (which may be truncated to 6 chars), so "examine"
+ |   also hits the stored "examin", "inventory" hits "invent", etc.
+ | Author: suinevere
+ ----------------------*/
 static const char* const COMMON_VERBS[] = {
     "examine", "push", "take", "pull", "drop", "turn", "open", "feel", "put",
     "eat", "climb", "drink", "wave", "fill", "wear", "smell", "listen", "break",
@@ -46,8 +72,17 @@ static const char* const COMMON_VERBS[] = {
     "ask", "tell", "give", "show", "inventory", "wait",
 };
 
-// Base weight for a common verb (0 if not one). Earlier in the list -> heavier;
-// all stay above the default verb prior so any listed verb leads the obscure ones.
+/*----------------------
+ | common_verb_weight
+ | Description: The base weight for a common verb (0 if not one). Earlier in
+ |   COMMON_VERBS means heavier; all stay above the default verb prior so any
+ |   listed verb leads the obscure ones.
+ | Author: suinevere
+ | Dependencies: string.h
+ | Globals: COMMON_VERBS
+ | Params: t -- the dictionary word (possibly 6-char truncated)
+ | Returns: the weight, or 0 if not a common verb
+ ----------------------*/
 static int common_verb_weight(const char* t) {
     int tl = (int) strlen(t);
     int nc = (int)(sizeof(COMMON_VERBS) / sizeof(COMMON_VERBS[0]));
@@ -61,18 +96,26 @@ static int common_verb_weight(const char* t) {
     return 0;
 }
 
-// Bare direction abbreviations -- dropped here so the full word is what the
-// grammar layer offers. The compass eight are put back afterwards by
-// typeahead_add_abbreviations (they rank below their full spelling, so "n" still
-// suggests "north" first); "u"/"d" are the only ones this really removes.
+/*----------------------
+ | is_dir_abbrev
+ | Description: True for a bare direction abbreviation, dropped here so the full
+ |   word is what the grammar layer offers. The compass eight are put back by
+ |   typeahead_add_abbreviations (ranking below their full spelling, so "n" still
+ |   suggests "north" first); "u"/"d" are the only ones this really removes.
+ | Author: suinevere
+ ----------------------*/
 static int is_dir_abbrev(const char* t) {
     return !strcmp(t, "n") || !strcmp(t, "s") || !strcmp(t, "e") || !strcmp(t, "w")
         || !strcmp(t, "u") || !strcmp(t, "d") || !strcmp(t, "ne") || !strcmp(t, "nw")
         || !strcmp(t, "se") || !strcmp(t, "sw");
 }
 
-// Expand a 6-char truncated diagonal to its full name (parser still matches the
-// first 6 chars), so suggestions read "southwest" rather than "southw".
+/*----------------------
+ | diag_full
+ | Description: Expands a 6-char truncated diagonal to its full name (the parser
+ |   still matches the first 6 chars), so suggestions read "southwest" not "southw".
+ | Author: suinevere
+ ----------------------*/
 static void diag_full(char* t) {
     if      (!strcmp(t, "northe")) strcpy(t, "northeast");
     else if (!strcmp(t, "northw")) strcpy(t, "northwest");
@@ -80,21 +123,39 @@ static void diag_full(char* t) {
     else if (!strcmp(t, "southw")) strcpy(t, "southwest");
 }
 
+/*----------------------
+ | A0 / A1 / A2 (ZSCII alphabets)
+ | Description: The three Z-machine alphabet tables mapping z-chars 6..31 to ASCII:
+ |   lowercase, uppercase, and the punctuation/digit set. A2 index 0 (z-char 6) is
+ |   the 10-bit ZSCII escape, handled inline in emit_zchars.
+ | Author: suinevere
+ ----------------------*/
 static const char A0[] = "abcdefghijklmnopqrstuvwxyz";
 static const char A1[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-// A2 for z-chars 6..31; index 0 (z-char 6) is the 10-bit escape, handled inline.
 static const char A2[] = { 0, '\n', '0','1','2','3','4','5','6','7','8','9',
                            '.', ',', '!', '?', '_', '#', '\'', '"', '/', '\\',
                            '-', ':', '(', ')' };
 
-// Canonical spelling preference for shared preposition ids (synonyms collapse to
-// one id, e.g. with/through/using all = 254). Earlier = preferred.
+/*----------------------
+ | PREP_PREF
+ | Description: Canonical spelling preference for shared preposition ids (synonyms
+ |   collapse to one id, e.g. with/through/using all = 254). Earlier = preferred.
+ | Author: suinevere
+ ----------------------*/
 static const char* const PREP_PREF[] = {
     "with", "in", "on", "to", "under", "from", "at", "off", "up", "down",
     "out", "over", "behind", "for", "across", "around", "away", "of",
 };
 
-// --- working state (file-static to keep it off the stack; reused each build) ---
+/*----------------------
+ | working state (d_* / o_* / attr_* / prep_canon / S / SLEN)
+ | Description: Build scratch, file-static to keep it off the stack and reused each
+ |   build. Dictionary side: d_text/d_flags/d_id/d_word and d_count. Object side:
+ |   o_attrs/o_name and o_count. Grammar side: attr_nouns/attr_n (nouns per object
+ |   attribute class) and prep_canon (canonical word per preposition id). S/SLEN are
+ |   the story image being decoded.
+ | Author: suinevere
+ ----------------------*/
 static char    d_text[MAXW][12];
 static unsigned char d_flags[MAXW];
 static unsigned char d_id[MAXW];
@@ -109,16 +170,40 @@ static DictionaryWord* attr_nouns[32][CLASSCAP];
 static int     attr_n[32];
 static DictionaryWord* prep_canon[256];
 
-static const unsigned char* S;   // story image
+static const unsigned char* S;
 static unsigned int         SLEN;
 
+/*----------------------
+ | rd16
+ | Description: Reads a big-endian 16-bit word from the story image at byte address
+ |   `a`.
+ | Author: suinevere
+ ----------------------*/
 static unsigned int rd16(unsigned int a) { return ((unsigned int) S[a] << 8) | S[a + 1]; }
 
-// Decode a Z-string starting at byte address `addr`, expanding abbreviations.
-// Appends into buf[pos..cap) and returns the new position.
+/*----------------------
+ | decode_at (forward declaration)
+ | Description: Decodes a Z-string at byte address `addr`, expanding abbreviations,
+ |   appending into buf[pos..cap) and returning the new position. Declared ahead of
+ |   emit_zchars because the two recurse (an abbreviation reference decodes another
+ |   string).
+ | Author: suinevere
+ ----------------------*/
 static int decode_at(unsigned int addr, unsigned int abbr, int allow_abbr,
                      char* buf, int cap, int pos);
 
+/*----------------------
+ | emit_zchars
+ | Description: Renders a run of z-chars into `buf`, tracking the shift alphabet
+ |   (A0/A1/A2), expanding abbreviation references via decode_at (when allowed), and
+ |   handling the 10-bit ZSCII escape. Stops at the buffer cap.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: A0, A1, A2 (and S via decode_at)
+ | Params: zc/n -- the z-chars; abbr -- abbreviation table addr; allow_abbr --
+ |   whether references expand; buf/cap -- output; pos -- start position
+ | Returns: the new buffer position
+ ----------------------*/
 static int emit_zchars(const unsigned char* zc, int n, unsigned int abbr,
                        int allow_abbr, char* buf, int cap, int pos) {
     int alpha = 0;
@@ -155,6 +240,18 @@ static int emit_zchars(const unsigned char* zc, int n, unsigned int abbr,
     return pos;
 }
 
+/*----------------------
+ | decode_at
+ | Description: Reads the packed z-char words of a Z-string at `addr` (stopping at
+ |   the end-bit or the image end) and renders them via emit_zchars. The other half
+ |   of the decode_at/emit_zchars recursion.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: S, SLEN
+ | Params: addr -- byte address of the string; abbr -- abbreviation table addr;
+ |   allow_abbr -- whether references expand; buf/cap -- output; pos -- start
+ | Returns: the new buffer position
+ ----------------------*/
 static int decode_at(unsigned int addr, unsigned int abbr, int allow_abbr,
                      char* buf, int cap, int pos) {
     unsigned char zc[96];
@@ -168,7 +265,16 @@ static int decode_at(unsigned int addr, unsigned int abbr, int allow_abbr,
     return emit_zchars(zc, n, abbr, allow_abbr, buf, cap, pos);
 }
 
-// Decode one dictionary word (4-byte / 6 z-char form, no abbreviations).
+/*----------------------
+ | dict_word
+ | Description: Decodes one dictionary entry's word (the 4-byte / 6 z-char form, no
+ |   abbreviations) into `buf` and strips trailing padding spaces.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: S (via rd16)
+ | Params: off -- the entry's byte offset; buf -- 12-byte output
+ | Returns: N/A
+ ----------------------*/
 static void dict_word(unsigned int off, char* buf) {
     unsigned int w1 = rd16(off), w2 = rd16(off + 2);
     unsigned char zc[6] = { (unsigned char)((w1 >> 10) & 0x1f), (unsigned char)((w1 >> 5) & 0x1f),
@@ -178,21 +284,44 @@ static void dict_word(unsigned int off, char* buf) {
     while (p > 0 && buf[p - 1] == ' ') buf[--p] = 0;   // strip padding
 }
 
+/*----------------------
+ | is_alpha_word
+ | Description: True when a decoded word is non-empty and purely a-z (so it belongs
+ |   in the alphabetic trie).
+ | Author: suinevere
+ ----------------------*/
 static int is_alpha_word(const char* s) {
     if (!*s) return 0;
     for (; *s; s++) if (*s < 'a' || *s > 'z') return 0;
     return 1;
 }
 
-// Look up a dictionary entry's flags by (already-lowercase) word; 0 if unknown.
+/*----------------------
+ | flags_of
+ | Description: Looks up a dictionary entry's part-of-speech flags by (already
+ |   lowercase) word; 0 if unknown.
+ | Author: suinevere
+ | Dependencies: string.h
+ | Globals: d_text, d_flags, d_count
+ | Params: w -- the word to look up
+ | Returns: the flag byte, or 0
+ ----------------------*/
 static unsigned char flags_of(const char* w) {
     for (int i = 0; i < d_count; i++)
         if (strcmp(d_text[i], w) == 0) return d_flags[i];
     return 0;
 }
 
-// Tokenise a display name into lowercase [a-z]+ tokens; returns token count and
-// fills tok[][]. Non-letters split tokens.
+/*----------------------
+ | tokenize
+ | Description: Splits a display name into lowercase [a-z]+ tokens (non-letters
+ |   split tokens), filling tok[][] and returning the token count.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: name -- the display name; tok -- output token array; maxtok -- capacity
+ | Returns: the number of tokens
+ ----------------------*/
 static int tokenize(const char* name, char tok[][NAMELEN], int maxtok) {
     int nt = 0, tp = 0;
     for (const char* p = name; ; p++) {
@@ -208,14 +337,45 @@ static int tokenize(const char* name, char tok[][NAMELEN], int maxtok) {
     return nt;
 }
 
+/*----------------------
+ | class_add
+ | Description: Adds noun `w` to object-attribute class `a` (0..31), de-duplicating
+ |   and capped at CLASSCAP.
+ | Author: suinevere
+ ----------------------*/
 static void class_add(int a, DictionaryWord* w) {
     if (a < 0 || a >= 32) return;
     for (int i = 0; i < attr_n[a]; i++) if (attr_nouns[a][i] == w) return;   // dedup
     if (attr_n[a] < CLASSCAP) attr_nouns[a][attr_n[a]++] = w;
 }
 
+/*----------------------
+ | specific
+ | Description: True when attribute class `a` is a usefully specific object class:
+ |   populated, but no larger than MAX_CLASS (a huge class carries no signal).
+ | Author: suinevere
+ ----------------------*/
 static int specific(int a) { return a > 0 && a < 32 && attr_n[a] >= 1 && attr_n[a] <= MAX_CLASS; }
 
+/*----------------------
+ | build_typeahead_from_story
+ | Description: The extractor entry point (v3 only). Decodes the dictionary (words,
+ |   flags, ids), the object table (attribute bits + short names), recovers full
+ |   spellings by replacing a 6-char dict form with a longer object-name token that
+ |   shares its first six chars, then creates full-spelling DictionaryWords and
+ |   inserts them (dropping bare direction abbreviations, expanding truncated
+ |   diagonals, lifting the standard IF verbs). Adds the Saturn "reboot" command,
+ |   picks a canonical word per preposition id, links object attributes to concrete
+ |   nouns and adjectives to their head noun, and finally walks each verb's grammar
+ |   table to add verb->prep, verb->noun, and (globally) prep->noun transitions.
+ | Author: suinevere
+ | Dependencies: typeahead.h (create_word/insert_trie/find_exact_word/
+ |   add_next_word), string.h
+ | Globals: S, SLEN, and all the d_* / o_* / attr_* / prep_canon working state
+ | Params: root -- the trie to populate; story -- the loaded story bytes; len --
+ |   its length
+ | Returns: N/A
+ ----------------------*/
 void build_typeahead_from_story(TrieNode* root, const unsigned char* story, unsigned int len) {
     S = story; SLEN = len;
     if (len < 0x40 || story[0] != 3) return;           // v3 only

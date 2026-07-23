@@ -10,14 +10,39 @@
 
 #include "input.h"
 
+/*----------------------
+ | g_pad
+ | Description: The aggregate pad declared in input.h, pointing at the client's
+ |   MultiPad; every helper here reads controller state through it.
+ | Author: suinevere
+ ----------------------*/
 MultiPad *g_pad = nullptr;
 
+/*----------------------
+ | g_face_btn / g_chord_slot
+ | Description: The live controller mapping: which physical button (0=A,1=B,2=C)
+ |   each face action uses, and which shift-chord slot each chord action uses.
+ |   Edited by the Controls page; persisted in MOJOOPTS.
+ | Author: suinevere
+ ----------------------*/
 int g_face_btn[FA_N]   = { 0, 1, 2 };
 int g_chord_slot[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt, SL_YLRt };
 
+/*----------------------
+ | FACE_DEFAULT / CHORD_DEFAULT
+ | Description: The factory mappings, copied back over g_face_btn/g_chord_slot by
+ |   mapping_reset_defaults.
+ | Author: suinevere
+ ----------------------*/
 static const int FACE_DEFAULT[FA_N]  = { 0, 1, 2 };
 static const int CHORD_DEFAULT[CA_N] = { SL_LR, SL_ZUD, SL_YLRd, SL_YUD, SL_ZLRt, SL_YLRt };
 
+/*----------------------
+ | SCROLL_PAGE / SCROLL_ALL
+ | Description: Scrollback deltas: one screen page, and a sentinel large enough to
+ |   mean "scroll all the way to the top" (clamped by the renderer).
+ | Author: suinevere
+ ----------------------*/
 static const int SCROLL_PAGE = 16;
 static const int SCROLL_ALL  = 1 << 30;
 
@@ -47,6 +72,12 @@ bool scroll_handle_key(const SaturnKeyEvent &ke) {
     }
 }
 
+/*----------------------
+ | PAD_SCROLL_DELAY / PAD_SCROLL_RATE
+ | Description: Chord hold-repeat timing in frames: the initial delay before a
+ |   held shift-chord repeats, then the faster repeat interval.
+ | Author: suinevere
+ ----------------------*/
 static const int PAD_SCROLL_DELAY = 30;
 static const int PAD_SCROLL_RATE  = 4;
 
@@ -147,7 +178,13 @@ bool caps_combo_fired(void) {
     return fired;
 }
 
-// Per-slot edge + hold-repeat state, ticked once per input frame by chord_tick.
+/*----------------------
+ | ChordRep / g_chordrep
+ | Description: Per-slot edge + hold-repeat state (held direction, countdown
+ |   timer, and whether it fired this frame), ticked once per input frame by
+ |   chord_tick.
+ | Author: suinevere
+ ----------------------*/
 struct ChordRep { int dir; int timer; bool fired; };
 static ChordRep g_chordrep[SL_N];
 
@@ -211,12 +248,23 @@ void pad_scroll_update(void) {
     if (chord_fired(CA_PAGE,    +1)) g_scroll -= SCROLL_PAGE;
 }
 
-// The editing buttons (D-pad, C, B, Y, L, R) repeat while held, like a real
-// keyboard. pad_repeat_update ticks all their timers once per frame; pad_fired
-// then reports the initial press plus each repeat tick.
+/*----------------------
+ | PAD_REPEAT_DELAY / PAD_REPEAT_RATE
+ | Description: Button auto-repeat timing in frames: the editing buttons (D-pad,
+ |   C, B, Y, L, R) repeat while held like a real keyboard -- the initial delay,
+ |   then the faster repeat interval.
+ | Author: suinevere
+ ----------------------*/
 #define PAD_REPEAT_DELAY 30
 #define PAD_REPEAT_RATE  4
 
+/*----------------------
+ | PadRepeat / g_padrep
+ | Description: Per-button auto-repeat state (button, countdown timer, fired-this-
+ |   frame). pad_repeat_update ticks every entry once per frame; pad_fired then
+ |   reports the initial press plus each repeat tick.
+ | Author: suinevere
+ ----------------------*/
 struct PadRepeat { Button btn; int timer; bool fired; };
 static PadRepeat g_padrep[] = {
     { Button::Up, 0, false }, { Button::Down, 0, false },
@@ -262,7 +310,13 @@ bool pad_fired(Button b) {
     return g_pad->WasPressed(b);
 }
 
-// Up/Down recall previously entered commands into the input line (shell-style).
+/*----------------------
+ | HISTORY_MAX / g_history / g_hist_count / g_hist_head / g_hist_browse
+ | Description: The command-history ring (Up/Down recall previously entered
+ |   commands, shell-style): the fixed-capacity buffer, how many entries are
+ |   valid, the write head, and the current browse offset (-1 = not browsing).
+ | Author: suinevere
+ ----------------------*/
 #define HISTORY_MAX 16
 static char g_history[HISTORY_MAX][KB_INPUT_MAX];
 static int  g_hist_count  = 0;

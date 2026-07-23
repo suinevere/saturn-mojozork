@@ -18,23 +18,51 @@
 #include <srl.hpp>
 #include <string.h>
 
+/*----------------------
+ | SOFT_RESET_HOLD
+ | Description: Frames the reset chord must be held on the title screen before it
+ |   triggers a hard NMI reboot.
+ | Author: suinevere
+ ----------------------*/
 #define SOFT_RESET_HOLD 60
 
+/*----------------------
+ | g_image_name / g_image_ptr
+ | Description: The registered background filenames (owned storage) and a pointer
+ |   array over them, handed to the display system as the selectable image list.
+ | Author: suinevere
+ ----------------------*/
 static char        g_image_name[DISP_IMAGE_MAX][16];
 static const char *g_image_ptr[DISP_IMAGE_MAX];
 
+/*----------------------
+ | g_root_dirnames / g_root_tbl / g_root_dir_valid
+ | Description: The CD root directory record captured right after GFS_Reset, so
+ |   cd_enter_root can return to it; the flag guards against an unread record.
+ | Author: suinevere
+ ----------------------*/
 static GfsDirName g_root_dirnames[SRL_MAX_CD_FILES];
 static GfsDirTbl  g_root_tbl;
 static bool       g_root_dir_valid = false;
 
+/*----------------------
+ | g_tga_dirnames / g_tga_tbl / g_tga_dir_valid
+ | Description: The /TGA directory record captured by display_scan_images, so
+ |   cd_enter_tga can switch to the background-art folder; the flag guards it.
+ | Author: suinevere
+ ----------------------*/
 static GfsDirName g_tga_dirnames[SRL_MAX_CD_FILES];
 static GfsDirTbl  g_tga_tbl;
 static bool       g_tga_dir_valid = false;
 
-/* The Z3 directory record lives in game_catalog.cxx (scan_z3_folder captures it);
-   game_catalog.h cannot name a GfsDirTbl without dragging SRL into a C-safe
-   header, so the table itself is declared here and only the validity flag comes
-   from the header. */
+/*----------------------
+ | g_z3_tbl (extern)
+ | Description: The Z3 directory record, defined in game_catalog.cxx (scan_z3_folder
+ |   captures it) and re-applied here by cd_restore_z3. It lives there because
+ |   game_catalog.h cannot name a GfsDirTbl without dragging SRL into a C-safe
+ |   header, so only the validity flag comes from the header.
+ | Author: suinevere
+ ----------------------*/
 extern GfsDirTbl g_z3_tbl;
 
 /*----------------------
@@ -189,10 +217,15 @@ void display_scan_images(void) {
     display_set_images(found > 0 ? g_image_ptr : NULL, found);
 }
 
-/* Borrows its pixel plane rather than owning it, because the plane usually
-   belongs to the image cache and has to outlive the upload. The palette is
-   still owned: SRL::Bitmap::Palette deletes the color array it was handed, so
-   every RawBitmap gets its own throwaway copy of the cached colors. */
+/*----------------------
+ | RawBitmap
+ | Description: An IBitmap that borrows its pixel plane rather than owning it,
+ |   because the plane usually belongs to the image cache and has to outlive the
+ |   upload. The palette is still owned: SRL::Bitmap::Palette deletes the color
+ |   array it was handed, so every RawBitmap gets its own throwaway copy of the
+ |   cached colors.
+ | Author: suinevere
+ ----------------------*/
 struct RawBitmap final : SRL::Bitmap::IBitmap {
     uint8_t                *Pixels;
     SRL::Bitmap::Palette   *Pal;
@@ -207,11 +240,15 @@ struct RawBitmap final : SRL::Bitmap::IBitmap {
     }
 };
 
-/* One decoded background: the 8bpp pixel plane, top-down and with the leading
-   partial sector already shifted off, plus its 256-entry palette. Pixels is the
-   allocation base, so freeing it frees the plane. LowRam records which
-   allocator the two blocks came from, since a cached image lives in Low Work
-   RAM and a one-off that the cache could not take lives in High Work RAM. */
+/*----------------------
+ | TgaImage
+ | Description: One decoded background: the 8bpp pixel plane (top-down, leading
+ |   partial sector already shifted off) plus its 256-entry palette. Pixels is the
+ |   allocation base, so freeing it frees the plane. LowRam records which allocator
+ |   the two blocks came from -- a cached image lives in Low Work RAM, a one-off the
+ |   cache could not take lives in High Work RAM.
+ | Author: suinevere
+ ----------------------*/
 struct TgaImage {
     uint8_t               *Pixels;
     SRL::Types::HighColor *Colors;
@@ -221,21 +258,29 @@ struct TgaImage {
     char                   Name[16];
 };
 
-/* The Saturn plays CD-DA off the same head it reads data with, so any read
-   stops the music. Every other CD read in the program is front-loaded into the
-   silent window at the title (see main.cxx), and the background art is the last
-   thing that was not: cycling pictures in the Options menu read the disc with
-   the menu track playing, which is heard as a skip. So decode every picture
-   once during that same window and keep it.
-
-   The cache lives in Low Work RAM, the 1 MB zone at 0x00200000 that SRL sets up
-   and nothing else in this program allocates from -- High Work RAM is shared
-   with the story file and the sound buffers and has no room for half a
-   megabyte of art. The eight 320x224 pictures the disc ships come to about
-   573 KB; the budget leaves headroom for a bigger disc rather than filling the
-   zone, and anything that does not fit still loads the old way, from the CD. */
+/*----------------------
+ | TGA_CACHE_BUDGET
+ | Description: Byte budget for the background-art cache. The Saturn plays CD-DA
+ |   off the same head it reads data with, so any read stops the music; every
+ |   other CD read is front-loaded into the title's silent window, and the art was
+ |   the last that was not (cycling pictures in Options read the disc with the menu
+ |   track playing, heard as a skip). So every picture is decoded once during that
+ |   window and kept. The cache lives in Low Work RAM, the 1 MB zone at 0x00200000
+ |   nothing else here allocates from (High Work RAM is shared with the story file
+ |   and sound buffers). The eight 320x224 shipped pictures come to ~573 KB; the
+ |   budget leaves headroom for a bigger disc, and anything that does not fit still
+ |   loads the old way from the CD.
+ | Author: suinevere
+ ----------------------*/
 #define TGA_CACHE_BUDGET  (768u * 1024u)
 
+/*----------------------
+ | g_cache / g_cache_count / g_cache_bytes / g_cache_ready
+ | Description: The decoded-background cache: the image slots, how many are used,
+ |   how many bytes they consume (against TGA_CACHE_BUDGET), and whether the
+ |   preload pass has already run (so a soft reset does not re-read).
+ | Author: suinevere
+ ----------------------*/
 static TgaImage g_cache[DISP_IMAGE_MAX];
 static int      g_cache_count = 0;
 static uint32_t g_cache_bytes = 0;

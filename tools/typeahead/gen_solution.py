@@ -90,16 +90,27 @@ def build_game(story_path, script_path):
     return release, serial, words, links
 
 
-C_TOP = """// GENERATED FILE -- do not edit by hand.
-// Produced by tools/typeahead/gen_solution.py.
-//
-// Per-game "solution" overlay: base-weight and transition boosts derived from a
-// winning walkthrough, applied on top of the runtime grammar layer. Keyed by the
-// story's release number + serial, so it only touches the game it was built for.
+C_TOP = """/*----------------------
+ | typeahead_solution.c
+ | Description: GENERATED FILE -- do not edit by hand; produced by
+ |   tools/typeahead/gen_solution.py. Per-game "solution" overlay: base-weight and
+ |   transition boosts derived from a winning walkthrough, applied on top of the
+ |   runtime grammar layer. Keyed by the story's release number + serial, so it
+ |   only touches the game it was built for.
+ | Author: suinevere
+ | Dependencies: typeahead_solution.h, string.h
+ ----------------------*/
 
 #include "typeahead_solution.h"
 #include <string.h>
 
+/*----------------------
+ | SolWord / SolLink / Solution
+ | Description: One boosted word (text + base weight), one boosted transition
+ |   (word a -> word b + weight), and one game's overlay (release + serial keying
+ |   its word and link arrays).
+ | Author: suinevere
+ ----------------------*/
 typedef struct { const char* w; short wt; } SolWord;
 typedef struct { const char* a; const char* b; short wt; } SolLink;
 typedef struct {
@@ -108,12 +119,26 @@ typedef struct {
     const SolLink* links; int nlinks;
 } Solution;
 
+/*----------------------
+ | gN_words / gN_links (generated per game)
+ | Description: The generated data: for each game index N, its boosted-word and
+ |   boosted-link arrays, referenced by the SOLUTIONS table below.
+ | Author: suinevere
+ ----------------------*/
 """
 
 C_APPLY = """
-// A purely a-z token can be inserted into the (alphabetic) trie; anything with a
-// digit or punctuation cannot (insert_trie skips non-letters, which would corrupt
-// a shorter word's node), so such tokens are left out.
+/*----------------------
+ | sol_word_is_alpha
+ | Description: True when a token is purely a-z, so it can be inserted into the
+ |   alphabetic trie. Tokens with a digit or punctuation cannot (insert_trie skips
+ |   non-letters, which would corrupt a shorter word's node) and are left out.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: s -- the token
+ | Returns: 1 if all-lowercase-letters and non-empty, 0 otherwise
+ ----------------------*/
 static int sol_word_is_alpha(const char* s) {
     if (!s || !*s) return 0;
     for (const char* p = s; *p; p++)
@@ -121,6 +146,21 @@ static int sol_word_is_alpha(const char* s) {
     return 1;
 }
 
+/*----------------------
+ | apply_solution_overlay
+ | Description: Applies the matching game's overlay onto the trie: boosts each
+ |   listed word's base weight (or inserts a-z-only walkthrough vocabulary the
+ |   parser dictionary lacks, e.g. the Lurking Horror password), then adds the
+ |   boosted transition links between words that exist. Matches by release +
+ |   6-byte serial, so it only touches the game it was built for.
+ | Author: suinevere
+ | Dependencies: typeahead.h (find_exact_word/insert_trie/create_word/
+ |   add_solution_link), string.h
+ | Globals: SOLUTIONS
+ | Params: root -- the trie to boost; story -- the loaded story bytes; len -- its
+ |   length
+ | Returns: 1 if a matching overlay was applied, 0 otherwise
+ ----------------------*/
 int apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned int len) {
     if (len < 0x1a) return 0;
     unsigned short release = (unsigned short)((story[2] << 8) | story[3]);
@@ -166,7 +206,14 @@ def emit(games, out_path):
         parts.append(f"static const SolLink g{gi}_links[] = {{ {ll} }};\n")
         entries.append(f"    {{ {release}, {cstr(serial)}, "
                        f"g{gi}_words, {len(words)}, g{gi}_links, {len(links)} }},")
-    parts.append("\nstatic const Solution SOLUTIONS[] = {\n" + "\n".join(entries) + "\n};\n")
+    parts.append(
+        "\n/*----------------------\n"
+        " | SOLUTIONS\n"
+        " | Description: The per-game overlay table, one row per known (release,\n"
+        " |   serial), pairing each game with its gN_words/gN_links arrays.\n"
+        " | Author: suinevere\n"
+        " ----------------------*/\n"
+        "static const Solution SOLUTIONS[] = {\n" + "\n".join(entries) + "\n};\n")
     parts.append(C_APPLY)
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("".join(parts))

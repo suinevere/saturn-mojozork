@@ -1,13 +1,24 @@
-// GENERATED FILE -- do not edit by hand.
-// Produced by tools/gametitles/gen_titles.py.
-//
-// A display title for a Z-machine story, keyed by its header release number
-// (0x02) + serial (0x12). The header carries no title, so this maps the known
-// releases/serials of the Infocom games to a curated name.
+/*----------------------
+ | game_titles.c
+ | Description: GENERATED FILE -- do not edit by hand; produced by
+ |   tools/gametitles/gen_titles.py. A display title for a Z-machine story, keyed
+ |   by its header release number (0x02) + serial (0x12). The header carries no
+ |   title, so this maps the known releases/serials of the Infocom games to a
+ |   curated name.
+ | Author: suinevere
+ | Dependencies: game_titles.h, string.h
+ ----------------------*/
 
 #include "game_titles.h"
 #include <string.h>
 
+/*----------------------
+ | GameTitle / TITLES
+ | Description: One (release, serial) -> (title, category) row, and the generated
+ |   table of every known Infocom version. All versions of a game share a title,
+ |   so any disc carrying one resolves.
+ | Author: suinevere
+ ----------------------*/
 typedef struct { unsigned short release; const char* serial; const char* title; int cat; } GameTitle;
 
 static const GameTitle TITLES[] = {
@@ -151,6 +162,16 @@ static const GameTitle TITLES[] = {
     { 1, "151001", "Colossal Cave Adventure (1977)", 0 },
 };
 
+/*----------------------
+ | find
+ | Description: Linear-scans TITLES for the row matching a release and 6-byte
+ |   serial.
+ | Author: suinevere
+ | Dependencies: string.h (memcmp)
+ | Globals: TITLES
+ | Params: release -- header release word; serial -- 6 raw serial bytes
+ | Returns: the matching row, or NULL if unknown
+ ----------------------*/
 static const GameTitle* find(unsigned short release, const char* serial) {
     for (int i = 0; i < (int)(sizeof(TITLES) / sizeof(TITLES[0])); i++)
         if (TITLES[i].release == release && memcmp(TITLES[i].serial, serial, 6) == 0)
@@ -158,14 +179,31 @@ static const GameTitle* find(unsigned short release, const char* serial) {
     return 0;
 }
 
-// Title for (release, serial), or NULL if unknown. `serial` is the 6 raw header
-// bytes at 0x12 (not necessarily NUL-terminated).
+/*----------------------
+ | game_title
+ | Description: The curated title for (release, serial), or NULL if unknown.
+ |   `serial` is the 6 raw header bytes at 0x12 (not necessarily NUL-terminated).
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: release -- header release word; serial -- 6 raw serial bytes
+ | Returns: the title string, or NULL
+ ----------------------*/
 const char* game_title(unsigned short release, const char* serial) {
     const GameTitle* g = find(release, serial);
     return g ? g->title : 0;
 }
 
-// Category for (release, serial); GAME_CAT_OTHER if unknown.
+/*----------------------
+ | game_category
+ | Description: The GAME_CAT_* category for (release, serial); GAME_CAT_OTHER if
+ |   unknown.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: release -- header release word; serial -- 6 raw serial bytes
+ | Returns: the category id
+ ----------------------*/
 int game_category(unsigned short release, const char* serial) {
     const GameTitle* g = find(release, serial);
     return g ? g->cat : GAME_CAT_OTHER;

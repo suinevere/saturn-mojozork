@@ -1,13 +1,24 @@
-// GENERATED FILE -- do not edit by hand.
-// Produced by tools/typeahead/gen_solution.py.
-//
-// Per-game "solution" overlay: base-weight and transition boosts derived from a
-// winning walkthrough, applied on top of the runtime grammar layer. Keyed by the
-// story's release number + serial, so it only touches the game it was built for.
+/*----------------------
+ | typeahead_solution.c
+ | Description: GENERATED FILE -- do not edit by hand; produced by
+ |   tools/typeahead/gen_solution.py. Per-game "solution" overlay: base-weight and
+ |   transition boosts derived from a winning walkthrough, applied on top of the
+ |   runtime grammar layer. Keyed by the story's release number + serial, so it
+ |   only touches the game it was built for.
+ | Author: suinevere
+ | Dependencies: typeahead_solution.h, string.h
+ ----------------------*/
 
 #include "typeahead_solution.h"
 #include <string.h>
 
+/*----------------------
+ | SolWord / SolLink / Solution
+ | Description: One boosted word (text + base weight), one boosted transition
+ |   (word a -> word b + weight), and one game's overlay (release + serial keying
+ |   its word and link arrays).
+ | Author: suinevere
+ ----------------------*/
 typedef struct { const char* w; short wt; } SolWord;
 typedef struct { const char* a; const char* b; short wt; } SolLink;
 typedef struct {
@@ -15,6 +26,13 @@ typedef struct {
     const SolWord* words; int nwords;
     const SolLink* links; int nlinks;
 } Solution;
+
+/*----------------------
+ | gN_words / gN_links (generated per game)
+ | Description: The generated data: for each game index N, its boosted-word and
+ |   boosted-link arrays, referenced by the SOLUTIONS table below.
+ | Author: suinevere
+ ----------------------*/
 
 static const SolWord g0_words[] = { {"all",41}, {"and",43}, {"attack",41}, {"bear",42}, {"bird",42}, {"black",41}, {"bottle",41}, {"bridge",41}, {"building",41}, {"cage",42}, {"chain",42}, {"climb",41}, {"coins",41}, {"cross",41}, {"diamonds",41}, {"door",41}, {"dragon",41}, {"drop",49}, {"eggs",41}, {"emerald",41}, {"enter",41}, {"fee",41}, {"fie",41}, {"foe",41}, {"foo",41}, {"gate",41}, {"get",53}, {"gold",41}, {"golden",41}, {"grab",41}, {"key",41}, {"keys",41}, {"lamp",41}, {"magazi",41}, {"oil",41}, {"open",42}, {"oyster",41}, {"plant",41}, {"plover",42}, {"plugh",41}, {"pyramid",41}, {"releas",42}, {"rod",47}, {"rug",41}, {"say",41}, {"silver",42}, {"the",41}, {"throw",41}, {"treasure",41}, {"unlock",42}, {"wave",41}, {"xyzzy",41} };
 static const SolLink g0_links[] = { {"all","treasure",3959}, {"and","gold",3986}, {"and","lamp",3997}, {"and","silver",3981}, {"attack","dragon",3979}, {"black","rod",3956}, {"climb","the",3976}, {"coins","and",3982}, {"cross","bridge",3971}, {"diamonds","and",3987}, {"drop","all",3960}, {"drop","bottle",3973}, {"drop","cage",3984}, {"drop","key",3967}, {"drop","magazi",3958}, {"drop","rod",3993}, {"drop","silver",3980}, {"enter","building",4000}, {"get","bear",3966}, {"get","bird",3992}, {"get","black",3957}, {"get","cage",3995}, {"get","diamonds",3988}, {"get","emerald",3963}, {"get","golden",3969}, {"get","keys",3999}, {"get","oil",3977}, {"get","pyramid",3961}, {"get","rod",3994}, {"get","rug",3978}, {"golden","chain",3968}, {"grab","coins",3983}, {"keys","and",3998}, {"open","door",3974}, {"open","oyster",3964}, {"releas","bear",3965}, {"releas","bird",3985}, {"say","plover",3962}, {"the","plant",3975}, {"throw","eggs",3972}, {"unlock","chain",3970}, {"unlock","gate",3996}, {"wave","rod",3990} };
@@ -67,6 +85,12 @@ static const SolLink g23_links[] = { {"all","but",3971}, {"and","matche",3943}, 
 static const SolWord g24_words[] = { {"beam",41}, {"book",41}, {"bread",42}, {"bronze",41}, {"button",42}, {"can",41}, {"cell",41}, {"cover",41}, {"dial",44}, {"door",46}, {"drink",41}, {"drop",42}, {"east",42}, {"enter",41}, {"examin",41}, {"get",49}, {"give",41}, {"hello",41}, {"him",42}, {"hood",41}, {"in",42}, {"jump",41}, {"key",42}, {"knock",41}, {"lake",41}, {"lamp",43}, {"liquid",41}, {"look",42}, {"machine",42}, {"man",41}, {"move",41}, {"north",41}, {"on",42}, {"open",45}, {"out",41}, {"panel",42}, {"pine",41}, {"pole",41}, {"push",47}, {"put",42}, {"raise",41}, {"repellent",41}, {"ring",42}, {"say",41}, {"seat",42}, {"set",42}, {"south",41}, {"spray",41}, {"staff",41}, {"sword",41}, {"table",41}, {"take",41}, {"tell",42}, {"to",46}, {"torch",42}, {"touch",41}, {"turn",43}, {"under",42}, {"unlock",41}, {"vial",41}, {"wake",41}, {"wall",43}, {"west",41}, {"white",41}, {"with",41} };
 static const SolLink g24_links[] = { {"bronze","door",3929}, {"cell","door",3940}, {"dial","to",3979}, {"door","with",3928}, {"drink","liquid",3946}, {"drop","lamp",3997}, {"drop","torch",3991}, {"east","door",3982}, {"east","wall",3958}, {"enter","machine",3978}, {"examin","machine",3981}, {"get","book",3962}, {"get","bread",3986}, {"get","can",3992}, {"get","hood",3987}, {"get","key",3989}, {"get","lamp",4000}, {"get","out",3967}, {"get","ring",3976}, {"get","torch",3994}, {"give","bread",3956}, {"him","to",3938}, {"in","beam",3953}, {"in","lake",3995}, {"jump","in",3996}, {"knock","on",3945}, {"look","under",3966}, {"move","cover",3988}, {"north","door",3973}, {"on","door",3944}, {"on","lamp",3998}, {"open","cell",3941}, {"open","door",3975}, {"open","east",3983}, {"open","north",3974}, {"open","vial",3947}, {"pine","panel",3948}, {"push","button",3977}, {"push","east",3959}, {"push","pine",3949}, {"push","south",3964}, {"push","west",3961}, {"push","white",3951}, {"put","ring",3972}, {"put","sword",3955}, {"raise","pole",3952}, {"ring","under",3971}, {"say","hello",3984}, {"set","dial",3980}, {"south","wall",3963}, {"spray","repellent",3990}, {"sword","in",3954}, {"take","staff",3985}, {"tell","him",3939}, {"to","push",3932}, {"to","turn",3937}, {"touch","table",3993}, {"turn","dial",3969}, {"turn","on",3999}, {"under","seat",3970}, {"unlock","bronze",3930}, {"wake","man",3957}, {"west","wall",3960}, {"white","panel",3950}, {"with","key",3927} };
 
+/*----------------------
+ | SOLUTIONS
+ | Description: The per-game overlay table, one row per known (release, serial),
+ |   pairing each game with its gN_words/gN_links arrays.
+ | Author: suinevere
+ ----------------------*/
 static const Solution SOLUTIONS[] = {
     { 1, "151001", g0_words, 52, g0_links, 43 },
     { 97, "851218", g1_words, 152, g1_links, 203 },
@@ -95,9 +119,17 @@ static const Solution SOLUTIONS[] = {
     { 17, "840727", g24_words, 65, g24_links, 65 },
 };
 
-// A purely a-z token can be inserted into the (alphabetic) trie; anything with a
-// digit or punctuation cannot (insert_trie skips non-letters, which would corrupt
-// a shorter word's node), so such tokens are left out.
+/*----------------------
+ | sol_word_is_alpha
+ | Description: True when a token is purely a-z, so it can be inserted into the
+ |   alphabetic trie. Tokens with a digit or punctuation cannot (insert_trie skips
+ |   non-letters, which would corrupt a shorter word's node) and are left out.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: s -- the token
+ | Returns: 1 if all-lowercase-letters and non-empty, 0 otherwise
+ ----------------------*/
 static int sol_word_is_alpha(const char* s) {
     if (!s || !*s) return 0;
     for (const char* p = s; *p; p++)
@@ -105,6 +137,21 @@ static int sol_word_is_alpha(const char* s) {
     return 1;
 }
 
+/*----------------------
+ | apply_solution_overlay
+ | Description: Applies the matching game's overlay onto the trie: boosts each
+ |   listed word's base weight (or inserts a-z-only walkthrough vocabulary the
+ |   parser dictionary lacks, e.g. the Lurking Horror password), then adds the
+ |   boosted transition links between words that exist. Matches by release +
+ |   6-byte serial, so it only touches the game it was built for.
+ | Author: suinevere
+ | Dependencies: typeahead.h (find_exact_word/insert_trie/create_word/
+ |   add_solution_link), string.h
+ | Globals: SOLUTIONS
+ | Params: root -- the trie to boost; story -- the loaded story bytes; len -- its
+ |   length
+ | Returns: 1 if a matching overlay was applied, 0 otherwise
+ ----------------------*/
 int apply_solution_overlay(TrieNode* root, const unsigned char* story, unsigned int len) {
     if (len < 0x1a) return 0;
     unsigned short release = (unsigned short)((story[2] << 8) | story[3]);

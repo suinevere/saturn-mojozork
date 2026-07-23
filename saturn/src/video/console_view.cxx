@@ -18,16 +18,31 @@
 
 // ---- rendering -------------------------------------------------------------
 
-// The debug layer gives us 28 text rows (0..27). When the on-screen keyboard is
-// shown it occupies the bottom rows; when hidden (the player is typing on a real
-// keyboard) those rows are handed back to the console for more text.
+/*----------------------
+ | SCREEN_ROWS
+ | Description: The 28 text rows (0..27) the debug layer provides. The on-screen
+ |   keyboard occupies the bottom rows when shown; when hidden (real keyboard in
+ |   hand) those rows go back to the console for more text.
+ | Author: suinevere
+ ----------------------*/
 static const int SCREEN_ROWS = 28;
 
-// TV overscan clips the very top text row on real hardware (the first line shows
-// only its bottom half), so we keep row 0 blank and start all console content on
-// row 1. Menus already draw from row 1+, so this only affects the console layout.
+/*----------------------
+ | TOP_MARGIN
+ | Description: One blank row kept at the top because TV overscan clips the first
+ |   text row on real hardware. Console content starts on row 1; menus already
+ |   draw from row 1+, so this only affects the console layout.
+ | Author: suinevere
+ ----------------------*/
 static const int TOP_MARGIN = 1;
 
+/*----------------------
+ | g_kbd_visible / g_caret_arrows
+ | Description: g_kbd_visible tracks whether the on-screen keyboard is showing
+ |   (gamepad in hand) vs hidden (real keyboard). g_caret_arrows swaps whether
+ |   plain or Ctrl arrows move the text caret vs cycle suggestions.
+ | Author: suinevere
+ ----------------------*/
 bool g_kbd_visible = true;
 bool g_caret_arrows = false;
 
@@ -81,15 +96,23 @@ void note_input_device(const SaturnKeyEvent &ke) {
 
 // ---- scrollback ------------------------------------------------------------
 
-// console_total_lines() mark taken before a turn's output (set to 0 for the
-// initial room) so console_scroll_to_output can land on the TOP of a long
-// response instead of its bottom.
+/*----------------------
+ | g_output_start
+ | Description: The console_total_lines() mark taken before a turn's output (0 for
+ |   the initial room), so console_scroll_to_output can land on the TOP of a long
+ |   response instead of its bottom.
+ | Author: suinevere
+ ----------------------*/
 long g_output_start = 0;
 
-// Set by render_console: true when the view has off-screen text below it (the
-// "more v" marker is showing). render_keyboard reads it to repaint the marker in
-// real-keyboard mode, where the input line is drawn over the console's last row
-// and would otherwise wipe it.
+/*----------------------
+ | g_more_below
+ | Description: Set by render_console: true when off-screen text remains below the
+ |   view (the "more v" marker is showing). render_keyboard reads it to repaint the
+ |   marker in real-keyboard mode, where the input line is drawn over the console's
+ |   last row and would otherwise wipe it.
+ | Author: suinevere
+ ----------------------*/
 static bool g_more_below = false;
 
 /*----------------------
@@ -155,15 +178,18 @@ void console_scroll_to_output(void) {
 }
 
 // ---- blinking block cursor -------------------------------------------------
-//
-// The SGL ASCII font has no solid-block glyph, so we carve one into the
-// otherwise-unused DEL (0x7F) slot and print that as the cursor. ASCII::Print
-// addresses font 0's char data at VDP2_VRAM_B1 + 0x18000 + charNum*0x20, where
-// charNum = char + 640 (see srl_ascii.hpp: fontBank=640, and LoadFontSG's dest
-// math). For 0x7F that lands at +0x1DFE0, the last tile LoadFontSG populated.
-// 0xFF fills every 4bpp pixel with color index 15. That is a different CRAM
-// entry than the glyphs use (they are index 1), so text_set_color writes both
-// to keep the block the same color as the text.
+
+/*----------------------
+ | CURSOR_BLOCK_STR
+ | Description: The one-character string printed as the text cursor. The SGL ASCII
+ |   font has no solid-block glyph, so one is carved into the otherwise-unused DEL
+ |   (0x7F) slot (see install_block_glyph). ASCII::Print addresses font 0's char
+ |   data at VDP2_VRAM_B1 + 0x18000 + (char+640)*0x20; for 0x7F that is +0x1DFE0,
+ |   the last tile LoadFontSG populated. The fill uses color index 15, a different
+ |   CRAM entry than the glyphs (index 1), so text_set_color writes both to keep
+ |   the block the same color as the text.
+ | Author: suinevere
+ ----------------------*/
 static const char CURSOR_BLOCK_STR[2] = { (char) 0x7f, '\0' };
 
 /*----------------------
@@ -227,7 +253,11 @@ static void draw_input_line(int row, const KeyboardState &k,
     else          SRL::Debug::Print(cursor_col, row, "%c", under);
 }
 
-// Half-period, in frames, of the cursor blink (~0.33s at 60fps -> ~1.5Hz).
+/*----------------------
+ | CURSOR_BLINK_FRAMES
+ | Description: Half-period of the cursor blink in frames (~0.33s at 60fps, ~1.5Hz).
+ | Author: suinevere
+ ----------------------*/
 #define CURSOR_BLINK_FRAMES 20
 
 /*----------------------

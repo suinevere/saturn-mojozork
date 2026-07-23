@@ -1,7 +1,22 @@
+/*----------------------
+ | music_data.c
+ | Description: The tunable data the music engine reads: room keyword -> category
+ |   table, event keyword -> category table, per-category CD-DA track pools, and
+ |   the (currently empty) per-game room->category override maps, plus the three
+ |   accessors the engine calls to reach them. All of it is data meant to be
+ |   edited freely; the engine logic lives in music.c.
+ | Author: suinevere
+ | Dependencies: music.h (MusicKeyword, MC_*, MUSIC_NUM_CATEGORIES), string.h
+ ----------------------*/
 #include "music.h"
 #include <string.h>
 
-/* Room keywords -> categories 1..11 (best-effort; edit freely). Lowercase. */
+/*----------------------
+ | KW
+ | Description: Room keywords mapped to mood categories (best-effort, lowercase).
+ |   music_classify_room counts hits per category to guess a room's mood.
+ | Author: suinevere
+ ----------------------*/
 static const MusicKeyword KW[] = {
     {"forest",MC_WILDERNESS},{"tree",MC_WILDERNESS},{"trees",MC_WILDERNESS},
     {"woods",MC_WILDERNESS},{"grove",MC_WILDERNESS},{"meadow",MC_WILDERNESS},
@@ -45,7 +60,12 @@ static const MusicKeyword KW[] = {
     {"study",MC_MYSTERY},{"library",MC_MYSTERY},{"detective",MC_MYSTERY},{"locked",MC_MYSTERY},
 };
 
-/* Event words -> categories 12..13 (fire on any turn's text). Lowercase. */
+/*----------------------
+ | EV
+ | Description: Event keywords (danger / triumph) mapped to categories, lowercase.
+ |   music_scan_event fires on any turn's text to override the room's base mood.
+ | Author: suinevere
+ ----------------------*/
 static const MusicKeyword EV[] = {
     {"monster",MC_DANGER},{"troll",MC_DANGER},{"grue",MC_DANGER},{"attack",MC_DANGER},
     {"fight",MC_DANGER},{"flames",MC_DANGER},{"fire",MC_DANGER},{"burning",MC_DANGER},
@@ -54,9 +74,14 @@ static const MusicKeyword EV[] = {
     {"reward",MC_TRIUMPH},{"gleaming",MC_TRIUMPH},{"victory",MC_TRIUMPH},
 };
 
-/* Category -> pool of CD-DA tracks (2..32). Dynamic mode picks one at random on a
-   category change. The NEUTRAL pool is merged into every other category (deduped),
-   so neutral ambience can surface anywhere. Numbers are CD-DA tracks. */
+/*----------------------
+ | P_* pools and CATEGORY_POOL
+ | Description: Per-category pools of CD-DA track numbers (2..32); Dynamic mode
+ |   picks one at random on a category change. The neutral pool is folded into
+ |   every category, so neutral ambience can surface anywhere. POOL() pairs each
+ |   array with its length into the CATEGORY_POOL table, indexed by MC_* id.
+ | Author: suinevere
+ ----------------------*/
 static const unsigned char P_NEUTRAL[]     = {4,5,6,10,11,12,16,22,24,28,30};
 static const unsigned char P_WILDERNESS[]  = {4,5,6,9,10,11,12,16,17,22,24,28,30,31};
 static const unsigned char P_UNDERGROUND[] = {2,3,4,5,6,7,10,11,12,16,18,19,20,22,23,24,28,29,30};
@@ -81,24 +106,57 @@ static const struct { const unsigned char* p; unsigned char n; } CATEGORY_POOL[M
 };
 #undef POOL
 
-/* Per-game room->category overrides, keyed by release+serial. Empty for v1;
-   add rows later as data only. */
+/*----------------------
+ | MusicGameMap / GAME_MAPS
+ | Description: Per-game room->category overrides keyed by release+serial
+ |   (room_cat[room] = cat+1, 0 = none). Empty for v1 -- just a sentinel row;
+ |   real maps are added later as data only.
+ | Author: suinevere
+ ----------------------*/
 typedef struct {
     unsigned short release; const char* serial;
-    const unsigned char* room_cat;   /* index = room object id, value = cat+1, 0 = none */
+    const unsigned char* room_cat;
     int nrooms;
 } MusicGameMap;
-static const MusicGameMap GAME_MAPS[] = { { 0, 0, 0, 0 } };  /* sentinel, unused */
+static const MusicGameMap GAME_MAPS[] = { { 0, 0, 0, 0 } };
 
+/*----------------------
+ | music_keywords / music_events
+ | Description: Hand back the room-keyword / event-keyword tables and their
+ |   lengths.
+ | Author: suinevere
+ ----------------------*/
 const MusicKeyword* music_keywords(int* n) { *n = (int)(sizeof KW / sizeof KW[0]); return KW; }
 const MusicKeyword* music_events(int* n)   { *n = (int)(sizeof EV / sizeof EV[0]); return EV; }
 
+/*----------------------
+ | music_category_pool
+ | Description: Returns a category's track pool and its length, or an empty result
+ |   for an out-of-range category.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: CATEGORY_POOL
+ | Params: category -- MC_* id; out -- receives the pool pointer (may be NULL)
+ | Returns: the pool length (0 when out of range)
+ ----------------------*/
 int music_category_pool(int category, const unsigned char** out) {
     if (category < 0 || category >= MUSIC_NUM_CATEGORIES) { if (out) *out = 0; return 0; }
     if (out) *out = CATEGORY_POOL[category].p;
     return CATEGORY_POOL[category].n;
 }
 
+/*----------------------
+ | music_game_room_category
+ | Description: Looks up a room's authored category for the loaded game, matching
+ |   a GAME_MAPS row by release and 6-char serial. With no map (the v1 default) or
+ |   a room past the map's end, returns -1 so the engine falls back to keyword
+ |   classification.
+ | Author: suinevere
+ | Dependencies: string.h (memcmp)
+ | Globals: GAME_MAPS
+ | Params: release -- Z-machine release; serial -- game serial; room -- room id
+ | Returns: the MC_* category, or -1 when unmapped
+ ----------------------*/
 int music_game_room_category(unsigned int release, const char* serial, unsigned int room) {
     for (int i = 0; i < (int)(sizeof GAME_MAPS / sizeof GAME_MAPS[0]); i++) {
         const MusicGameMap* g = &GAME_MAPS[i];

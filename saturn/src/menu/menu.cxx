@@ -60,35 +60,25 @@ void menu_clear(void) {
 }
 
 // ---- opaque backing for menus over an image --------------------------------
-// NBG3 (the text layer) treats palette entry 0 as transparent, so a menu frame
-// drawn over an image background shows the picture through its interior and the
-// text sits directly on the artwork.
-//
-// A VDP2 window fixes just the box: NBG0 (the image) is switched off inside the
-// menu rectangle, the back plane colour shows through there, and NBG3's text
-// draws over it as usual. Outside the box the picture is untouched.
-//
-// SGL exposes no constants for this, so the encoding was read out of the
-// library. slScrWindowMode(scrn, mode) is
-//
-//     mov.l IMM_VDP2_WCTLA, r0    ; 0x060ffd90
-//     mov.b r5, @(r0, r4)
-//
-// -- a byte store of `mode` at 0x060ffd90 + scrn, into SGL's work-RAM shadow of
-// WCTLA..WCTLD which it flushes at vblank. The scn constants confirm the
-// mapping: NBG1=0, NBG0=1, NBG3=2, NBG2=3, SPR=4, RBG0=5 is exactly those four
-// 16-bit registers in big-endian byte order, so `mode` is the raw per-screen
-// WCTL byte. slScrWindow0 takes plain pixel coordinates (it shifts X left
-// itself for the 320-dot mode's half-dot units) and clears the line-window
-// pointer, so a rectangle is all it is.
-#define WIN_W0_ENABLE  0x02   // WCTL bit 1: window 0 applies to this screen
-#define WIN_W0_INSIDE  0x00   // WCTL bit 0: the rect's inside is the window
-#define WIN_W0_OUTSIDE 0x01   // ...its outside is
 
-// The one bit that could not be settled from the library: whether the screen is
-// suppressed inside the window or outside it. If the image turns out to be
-// hidden *everywhere except* the menu box, swap INSIDE for OUTSIDE here and
-// nothing else changes.
+/*----------------------
+ | WIN_W0_* / WIN_NBG0_MENU
+ | Description: The VDP2 window-0 WCTL byte that suppresses the image behind a
+ |   menu box. NBG3 (text) treats palette entry 0 as transparent, so a menu frame
+ |   over an image would show the picture through its interior; a window switches
+ |   NBG0 (the image) off inside the menu rectangle so the back-plane colour shows
+ |   there while text still draws over it, leaving the picture untouched outside.
+ |   SGL exposes no constants, so the encoding was read from the library:
+ |   slScrWindowMode(scrn, mode) stores `mode` at 0x060ffd90 + scrn into SGL's
+ |   WCTLA..WCTLD shadow (flushed at vblank), so `mode` is the raw per-screen WCTL
+ |   byte. ENABLE = bit 1 (window 0 applies here), INSIDE/OUTSIDE = bit 0 (which
+ |   side of the rect is the window). WIN_NBG0_MENU is the combined value; if the
+ |   image ever hides everywhere except the box, swap INSIDE for OUTSIDE.
+ | Author: suinevere
+ ----------------------*/
+#define WIN_W0_ENABLE  0x02
+#define WIN_W0_INSIDE  0x00
+#define WIN_W0_OUTSIDE 0x01
 #define WIN_NBG0_MENU  (WIN_W0_ENABLE | WIN_W0_INSIDE)
 
 /*----------------------
@@ -115,8 +105,13 @@ static void menu_window_rect(int x0, int y0, int w, int h) {
     slScrWindow0((uint16_t) x1, (uint16_t) y1, (uint16_t) x2, (uint16_t) y2);
 }
 
-// Backs MenuBacking's refcount (declared extern in menu.h; also reset to 0 by
-// main()'s soft-reset recovery path -- see menu.h for why).
+/*----------------------
+ | g_menu_backing_depth
+ | Description: Backs MenuBacking's refcount (declared extern in menu.h). Also
+ |   reset to 0 by main()'s soft-reset recovery path, since the longjmp skips the
+ |   destructors that would otherwise balance it -- see menu.h.
+ | Author: suinevere
+ ----------------------*/
 int g_menu_backing_depth = 0;
 
 /*----------------------
@@ -236,10 +231,14 @@ void menu_message(const char *title, const char *line1, const char *line2) {
     if (l2) SRL::Debug::Print(x0 + 2, y0 + 4, "%s", line2);
 }
 
-// The hint line drawn at the bottom of the menu_select box, named once so its
-// width feeds both the sizing math and the draw call -- if the wording
-// changes, the box width follows automatically instead of drifting out of
-// sync with a hardcoded column count.
+/*----------------------
+ | MENU_SELECT_HINT_PAD / MENU_SELECT_HINT_KBD
+ | Description: The pad and keyboard hint lines at the bottom of the menu_select
+ |   box, named once so their width feeds both the sizing math and the draw call --
+ |   change the wording and the box width follows automatically instead of drifting
+ |   from a hardcoded column count.
+ | Author: suinevere
+ ----------------------*/
 static const char MENU_SELECT_HINT_PAD[] = "pad picks   C=ok   B=back";
 static const char MENU_SELECT_HINT_KBD[] = "num picks   Enter=ok   Esc=back";
 

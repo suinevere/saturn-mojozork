@@ -149,6 +149,12 @@ static void config_page(void) {
     }
 }
 
+/*----------------------
+ | FACE_LABEL / CHORD_LABEL
+ | Description: Display names for the remappable face actions (FA_*) and chord
+ |   actions (CA_*), shown as the row labels in the control-remap editor.
+ | Author: suinevere
+ ----------------------*/
 static const char *const FACE_LABEL[FA_N]  = { "Accept", "Backspace/Cancel", "Type Letter" };
 static const char *const CHORD_LABEL[CA_N] = { "Autocomplete", "Recall", "Home/End",
                                                "Line Up/Down", "Cursor Move", "Page Up/Down" };

@@ -1,47 +1,58 @@
+/*----------------------
+ | menu_layout.h
+ | Description: Pure layout arithmetic and digit-key mapping for the menu system,
+ |   deliberately free of any SRL/Saturn dependency so it unit-tests on the host.
+ |   menu.cxx / menu_pages.cxx own the drawing and input and call in here for the
+ |   geometry. Implemented in menu_layout.c.
+ | Author: suinevere
+ | Dependencies: none
+ ----------------------*/
 #ifndef MENU_LAYOUT_H
 #define MENU_LAYOUT_H
 
-/* Pure layout arithmetic for the menu system. Deliberately free of any SRL or
-   Saturn dependency so it can be unit-tested on the host; main.cxx owns all the
-   drawing and input handling and calls in here for the geometry. */
-
+/*----------------------
+ | MENU_SCREEN_COLS / MENU_SCREEN_ROWS / MENU_DIGIT_COLS / MENU_ROW_TEXT_MAX
+ | Description: The screen size in text cells; the columns reserved for a "N) "
+ |   row-number prefix (reserved unconditionally so a box does not resize when the
+ |   player switches pad<->keyboard mid-menu); and the longest text a single menu
+ |   row can draw without touching the box border (31 = 32 ceiling minus one margin
+ |   column, after 5 columns of chrome). Callers building rows from external data
+ |   clamp to MENU_ROW_TEXT_MAX, since a clamped box truncates silently.
+ | Author: suinevere
+ ----------------------*/
 #define MENU_SCREEN_COLS 40
 #define MENU_SCREEN_ROWS 28
-
-/* Columns reserved for a "N) " row-number prefix. Reserved unconditionally,
-   whether or not the digits are currently drawn, so a box does not resize when
-   the player switches between the pad and a real keyboard mid-menu. */
 #define MENU_DIGIT_COLS  3
-
-/* Longest text a single menu row can draw without touching the box border.
-   A row is a cursor mark, a space, the "N) " prefix, then the text -- 5
-   columns of chrome. A full-width box (40) puts its content origin at column 2
-   and its right border at 39, leaving 37 drawable columns, so the text ceiling
-   is 32. This is 31, one column of margin. Callers that build row text from
-   external data (disc filenames, story-file titles) clamp to it, since a
-   clamped box truncates silently rather than reporting an error. */
 #define MENU_ROW_TEXT_MAX 31
 
-/* Fit a centered box around `content_w` columns and `rows` rows of content.
-   Width is the wider of the content and the title, plus two border columns and
-   one pad column each side; height is the content plus a top border, a title
-   row, a blank row, and a bottom border. Both are clamped to the screen, and
-   the result is always fully on-screen. */
+/*----------------------
+ | menu_box_fit
+ | Description: Fits a centered box around `content_w` columns and `rows` rows:
+ |   width is the wider of content and title plus border+pad each side, height is
+ |   the content plus top border, title row, blank row, and bottom border; both
+ |   clamped so the result is always fully on-screen.
+ | Author: suinevere
+ ----------------------*/
 void menu_box_fit(const char *title, int content_w, int rows,
                   int *x0, int *y0, int *w, int *h);
 
-/* Map a printable character to a 0-based row index, or -1 if it selects no row.
-   A plain digit 1-9 sets *dir to +1; the matching shifted symbol (!@#$%^&*(, US
-   layout) sets it to -1. Callers use *dir to decide whether the row's value
-   cycles forward or backward; rows that are actions rather than value cyclers
-   ignore it and simply activate. SaturnKeyEvent carries no modifier flag, which
-   is why the shifted character is what gets matched. */
+/*----------------------
+ | menu_row_digit
+ | Description: Maps a character to a 0-based row index (or -1). A plain digit 1-9
+ |   sets *dir to +1; its shifted symbol (!@#$%^&*(, US layout) sets -1, so value
+ |   rows cycle forward/backward and action rows just activate. The shifted
+ |   character is matched because SaturnKeyEvent carries no modifier flag.
+ | Author: suinevere
+ ----------------------*/
 int menu_row_digit(char ch, int nrows, int *dir);
 
-/* Which absolute list index a digit selects, given a scroll window of `visible`
-   rows starting at `top` in a list of `count` items. Only plain digits select --
-   a list pick has no backward direction. Returns -1 if the digit names no
-   visible row. */
+/*----------------------
+ | menu_visible_digit
+ | Description: Which absolute list index a plain digit selects through a scroll
+ |   window of `visible` rows starting at `top` in a list of `count`; -1 if the
+ |   digit names no visible row.
+ | Author: suinevere
+ ----------------------*/
 int menu_visible_digit(char ch, int top, int visible, int count);
 
 #endif

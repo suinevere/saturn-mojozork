@@ -1,3 +1,11 @@
+/*----------------------
+ | saturn_keyboard.h
+ | Description: The Saturn keyboard interface: the decoded key-event types and the
+ |   per-frame poll (with edge detection and auto-repeat), plus presence and
+ |   any-key-down queries. Implemented in saturn_keyboard.cxx.
+ | Author: suinevere
+ | Dependencies: none
+ ----------------------*/
 #ifndef SATURN_KEYBOARD_H
 #define SATURN_KEYBOARD_H
 
@@ -5,6 +13,14 @@
 extern "C" {
 #endif
 
+/*----------------------
+ | SaturnKeyKind
+ | Description: The kind of a decoded key event: NONE, a printable CHAR (in .ch),
+ |   the editing/navigation keys, TAB (accept completion), CLEAR (Ctrl+C),
+ |   CTRL_LEFT/RIGHT (word caret), INSERT (toggle arrow roles), DELETE, and the
+ |   mapped function keys F2..F12 (F1/F4/F7/F8 have no role and stay unreported).
+ | Author: suinevere
+ ----------------------*/
 typedef enum {
     SATURN_KEY_NONE = 0,
     SATURN_KEY_CHAR,        /* a printable character is in .ch */
@@ -37,21 +53,27 @@ typedef enum {
     SATURN_KEY_F12
 } SaturnKeyKind;
 
+/*----------------------
+ | SaturnKeyEvent
+ | Description: One decoded key event: its kind, plus the character in .ch when
+ |   kind == SATURN_KEY_CHAR.
+ | Author: suinevere
+ ----------------------*/
 typedef struct {
     SaturnKeyKind kind;
     char ch;                /* valid when kind == SATURN_KEY_CHAR */
 } SaturnKeyEvent;
 
-/* 1 if a Saturn keyboard peripheral is currently detected on any port. */
+/*----------------------
+ | saturn_keyboard_present / saturn_keyboard_any_down / saturn_keyboard_poll
+ | Description: present is 1 if a keyboard is detected on any port; any_down is 1
+ |   while any key is physically held (raw MAKE flag, so callers can wait for
+ |   release); poll (once per frame) returns the next key event or NONE, with edge
+ |   detection and auto-repeat.
+ | Author: suinevere
+ ----------------------*/
 int saturn_keyboard_present(void);
-
-/* 1 if any keyboard key is physically held down right now (raw MAKE flag).
-   Lets callers wait for the player to release keys before reading input. */
 int saturn_keyboard_any_down(void);
-
-/* Call once per frame. Returns a key event (or NONE), with edge detection and
-   auto-repeat: a key emits immediately when pressed, pauses, then repeats while
-   held. */
 SaturnKeyEvent saturn_keyboard_poll(void);
 
 #ifdef __cplusplus

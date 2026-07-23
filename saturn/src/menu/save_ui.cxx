@@ -25,7 +25,12 @@ extern "C" {
 #include "console_view.h"
 #include "app_state.h"
 
-/* snprintf links from newlib; the SRL dummy <stdio.h> omits its declaration. */
+/*----------------------
+ | snprintf (extern)
+ | Description: Forward declaration for snprintf, which links from newlib but is
+ |   omitted by the SRL dummy <stdio.h>.
+ | Author: suinevere
+ ----------------------*/
 extern "C" int snprintf(char *str, size_t size, const char *fmt, ...);
 
 /*----------------------
