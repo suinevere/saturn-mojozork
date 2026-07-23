@@ -7,5 +7,5 @@ pre_build:
 ifeq ($(strip $(NETBIN)),1)
 	$(info ****** Regenerating embedded netbin payloads ******)
 	@python3 ../tools/gen_blob.py src/netbin_blobs.c \
-	    story=cd/data/Z3/ZORK1.Z3
+	    --pack story story=cd/data/Z3/ZORK1.Z3
 endif

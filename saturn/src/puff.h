@@ -1,0 +1,39 @@
+/* puff.h
+ * Copyright (C) 2002-2013 Mark Adler, all rights reserved
+ * version 2.3, 21 Jan 2013
+ *
+ * This software is provided 'as-is', without any express or implied warranty.
+ * In no event will the author be held liable for any damages arising from the
+ * use of this software.
+ *
+ * Permission is granted to anyone to use this software for any purpose,
+ * including commercial applications, and to alter it and redistribute it
+ * freely, subject to the following restrictions:
+ *
+ * 1. The origin of this software must not be misrepresented; you must not
+ *    claim that you wrote the original software. If you use this software in a
+ *    product, an acknowledgment in the product documentation would be
+ *    appreciated but is not required.
+ * 2. Altered source versions must be plainly marked as such, and must not be
+ *    misrepresented as being the original software.
+ * 3. This notice may not be removed or altered from any source distribution.
+ *
+ * Mark Adler    madler@alumni.caltech.edu
+ */
+
+#ifndef PUFF_H
+#define PUFF_H
+
+/*
+ * Decompress a raw DEFLATE stream (RFC 1951 -- no zlib or gzip wrapper) from
+ * source[0..*sourcelen-1] into dest[0..*destlen-1]. On entry *destlen is the
+ * size of the dest buffer and *sourcelen is the available source length; on a
+ * successful return they are updated to the bytes written and bytes consumed.
+ * Returns 0 on success, a negative value on a bad stream, or a positive value
+ * if the buffers are too small.  dest may be NULL to only compute the output
+ * length in *destlen.
+ */
+int puff(unsigned char *dest, unsigned long *destlen,
+         const unsigned char *source, unsigned long *sourcelen);
+
+#endif /* PUFF_H */
