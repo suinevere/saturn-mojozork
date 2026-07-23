@@ -45,7 +45,6 @@
 #define DISP_BG_GREEN        5
 #define DISP_BG_BRIGHT_WHITE 6
 
-/* Text color indices. */
 #define DISP_TEXT_BRIGHT_AMBER  0
 #define DISP_TEXT_BLACK         1
 #define DISP_TEXT_GREEN         2
