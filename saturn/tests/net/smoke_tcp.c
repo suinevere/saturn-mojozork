@@ -1,6 +1,6 @@
 #include "transport_tcp.h"
-#include "../../src/term.h"
-#include "../../src/console.h"
+#include "../../src/net/term.h"
+#include "../../src/video/console.h"
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>   /* Sleep() — simulate ~60Hz frame pacing */

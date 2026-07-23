@@ -1,4 +1,4 @@
-#include "../src/console.h"
+#include "../src/video/console.h"
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>

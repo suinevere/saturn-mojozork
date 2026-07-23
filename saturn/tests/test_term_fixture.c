@@ -1,5 +1,5 @@
-#include "../src/term.h"
-#include "../src/console.h"
+#include "../src/net/term.h"
+#include "../src/video/console.h"
 #include "net/mock_transport.h"
 #include <stdio.h>
 #include <stdlib.h>

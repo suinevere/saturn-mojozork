@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "typeahead.h"
+#include "input/typeahead.h"
 
 void* typeahead_malloc(unsigned int size) { return malloc(size); }
 void  typeahead_free(void* p) { free(p); }

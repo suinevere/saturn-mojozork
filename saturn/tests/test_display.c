@@ -1,4 +1,4 @@
-#include "../src/display.h"
+#include "../src/video/display.h"
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>

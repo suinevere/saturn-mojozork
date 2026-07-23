@@ -1,4 +1,4 @@
-#include "../src/keyboard.h"
+#include "../src/input/keyboard.h"
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>

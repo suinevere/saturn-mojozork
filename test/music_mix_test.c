@@ -1,8 +1,8 @@
 /* Host tests for mix modes, category-keyed debounce, and short-track re-pick.
    gcc -O2 -I saturn/src -o /tmp/mmt test/music_mix_test.c \
-       saturn/src/music.c saturn/src/music_data.c && /tmp/mmt */
+       saturn/src/sound/music.c saturn/src/sound/music_data.c && /tmp/mmt */
 #include <stdio.h>
-#include "music.h"
+#include "sound/music.h"
 
 #define CHECK(c) do{ if(!(c)){ printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } }while(0)
 

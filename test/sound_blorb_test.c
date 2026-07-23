@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "sound_blorb.h"
+#include "sound/sound_blorb.h"
 
 static FILE* g_f;
 static int reader(unsigned int off, unsigned int len, unsigned char* buf) {

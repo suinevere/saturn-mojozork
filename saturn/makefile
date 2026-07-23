@@ -30,8 +30,14 @@ BUILD_DROP = ./BuildDrop
 SRL_INSTALL_ROOT ?= ../SaturnRingLib
 
 # Find all .c and .cxx files
-SOURCES = $(patsubst ./%,%,$(shell find src/ -name '*.c')) 
+SOURCES = $(patsubst ./%,%,$(shell find src/ -name '*.c'))
 SOURCES += $(patsubst ./%,%,$(shell find src/ -name '*.cxx'))
+
+# src/ is split into per-concern subfolders (engine, video, sound, net, input,
+# menu, system). Put src/ and every subfolder on the include path so the existing
+# bare "#include \"foo.h\"" resolve across folders without per-file path edits.
+# SRL_CUSTOM_CCFLAGS is appended to CCFLAGS by shared.mk for both C and C++ TUs.
+SRL_CUSTOM_CCFLAGS += $(patsubst %,-I%,$(shell find src -type d))
 
 # Include shared makefile
 SDK_ROOT = $(SRL_INSTALL_ROOT)/saturnringlib

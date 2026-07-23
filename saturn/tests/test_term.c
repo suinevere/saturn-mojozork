@@ -1,6 +1,6 @@
-#include "../src/term.h"
-#include "../src/console.h"
-#include "../src/keyboard.h"
+#include "../src/net/term.h"
+#include "../src/video/console.h"
+#include "../src/input/keyboard.h"
 #include "net/mock_transport.h"
 #include <string.h>
 #include <stdio.h>

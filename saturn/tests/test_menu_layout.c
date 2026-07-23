@@ -1,4 +1,4 @@
-#include "../src/menu_layout.h"
+#include "../src/menu/menu_layout.h"
 #include <limits.h>
 #include <stdio.h>
 #include <assert.h>

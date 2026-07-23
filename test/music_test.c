@@ -1,9 +1,9 @@
 /* Host unit tests for the pure-C music engine (data tables, classifiers, and the
    per-turn state machine). Build:
      gcc -O2 -I saturn/src -o /tmp/mt test/music_test.c \
-         saturn/src/music.c saturn/src/music_data.c && /tmp/mt */
+         saturn/src/sound/music.c saturn/src/sound/music_data.c && /tmp/mt */
 #include <stdio.h>
-#include "music.h"
+#include "sound/music.h"
 
 #define CHECK(c) do{ if(!(c)){ printf("FAIL: %s\n", #c); fails++; } }while(0)
 

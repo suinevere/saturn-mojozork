@@ -441,11 +441,11 @@ git commit -m "Extract network play into online module"
 **Files:** Modify `saturn/src/main.cxx`.
 **Remaining functions:** `main`, `submit_command`, `is_reboot_command`, `is_alnum_ch`, `is_quit_command`, `soft_reset_to_title`, `soft_reset_chord_held`, `check_soft_reset`, `ensure_typeahead`, `typeahead_scan_screen` (+ their statics `g_typeahead_root`, `g_ta_story`, `g_ta_diff`).
 
-- [ ] **Step 1: Add the file-level box** to `main.cxx` describing it as the entry point + game loop + soft-reset + typeahead glue, listing its module dependencies.
-- [ ] **Step 2: Apply the Box-Writing Recipe** to the ten remaining functions (`.cxx` *how*-boxes; `main` and the `is_*` helpers included), stripping their inline comments and folding the soft-reset/overscan/refcount rationale into the boxes.
-- [ ] **Step 3: Verify main.cxx now includes** every module header it calls into and defines nothing that a module owns. `grep -cE '^\s*(static\s+)?[A-Za-z].*\)\s*\{' main.cxx` should be ~10.
-- [ ] **Step 4: Dead-code check** over the remaining names.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Add the file-level box** to `main.cxx` describing it as the entry point + game loop + soft-reset + typeahead glue, listing its module dependencies.
+- [x] **Step 2: Apply the Box-Writing Recipe** to the ten remaining functions (`.cxx` *how*-boxes; `main` and the `is_*` helpers included), stripping their inline comments and folding the soft-reset/overscan/refcount rationale into the boxes.
+- [x] **Step 3: Verify main.cxx now includes** every module header it calls into and defines nothing that a module owns. `grep -cE '^\s*(static\s+)?[A-Za-z].*\)\s*\{' main.cxx` should be ~10.
+- [x] **Step 4: Dead-code check** over the remaining names.
+- [x] **Step 5: Commit**
 ```bash
 git add saturn/src/main.cxx
 git commit -m "Trim main.cxx to orchestrator; box remaining functions"
