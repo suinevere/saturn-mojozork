@@ -892,6 +892,14 @@ git commit -m "Retry the CD TOC read until it comes back sane"
 
 ### Task 5: Sound driver initialization from RAM
 
+> **REMOVED (2026-07-22):** the netbin no longer embeds or initializes the SGL
+> sound driver. The `.netbin` exceeded the PlanetWeb loader's real (sub-400 KB)
+> download ceiling, so the sound driver was cut to reclaim space: the embedded
+> `SDDRVS.TSK` (26,610 B) + `BOOTSND.MAP` (82 B) blobs and `netbin_sound.{h,cxx}`
+> were deleted, and the `netbin_sound_init()` call dropped from `main.cxx`. The
+> netbin now embeds only the Zork I story; the CD build's sound path is
+> unchanged. The section below is kept for history.
+
 `SRL::Core::Initialize()` calls `Sound::Hardware::Initialize()`
 (`srl_core.hpp:107-108`), which reads `SDDRVS.TSK` and `BOOTSND.MAP` from CD
 and — because its whole body sits inside `if (program.Exists() &&
